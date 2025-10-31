@@ -133,14 +133,21 @@
 
                 // Default to rear camera on mobile, front camera on desktop
                 const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
                 if (isMobile && availableCameras.length > 1) {
-                    // Try to find rear camera (usually has "back" or "environment" in label)
-                    const rearCamera = availableCameras.find(camera =>
-                        camera.label.toLowerCase().includes('back') ||
-                        camera.label.toLowerCase().includes('environment') ||
-                        camera.label.toLowerCase().includes('rear')
-                    );
-                    currentDeviceId = rearCamera ? rearCamera.deviceId : availableCameras[0].deviceId;
+                    // On iOS, prefer facingMode over deviceId for reliability
+                    if (isIOS) {
+                        currentDeviceId = null; // Will use facingMode instead
+                    } else {
+                        // Try to find rear camera (usually has "back" or "environment" in label)
+                        const rearCamera = availableCameras.find(camera =>
+                            camera.label.toLowerCase().includes('back') ||
+                            camera.label.toLowerCase().includes('environment') ||
+                            camera.label.toLowerCase().includes('rear')
+                        );
+                        currentDeviceId = rearCamera ? rearCamera.deviceId : availableCameras[0].deviceId;
+                    }
                 } else {
                     currentDeviceId = availableCameras[0]?.deviceId;
                 }
@@ -185,19 +192,37 @@
 
         async function startCamera() {
             try {
-                const constraints = {
-                    video: {
-                        width: 640,
-                        height: 480,
-                        deviceId: currentDeviceId ? { exact: currentDeviceId } : undefined
-                    }
-                };
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+                const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+                let constraints;
+
+                if (isIOS && isMobile) {
+                    // Use facingMode for iOS - more reliable than deviceId
+                    constraints = {
+                        video: {
+                            width: 640,
+                            height: 480,
+                            facingMode: 'environment' // Start with rear camera on iOS
+                        }
+                    };
+                    isFrontCamera = false;
+                } else {
+                    // Use deviceId for other platforms
+                    constraints = {
+                        video: {
+                            width: 640,
+                            height: 480,
+                            deviceId: currentDeviceId ? { exact: currentDeviceId } : undefined
+                        }
+                    };
+                    // Detect if this is a front camera
+                    isFrontCamera = detectFrontCamera();
+                }
 
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
 
-                // Detect if this is a front camera
-                isFrontCamera = detectFrontCamera();
                 console.log(`Camera is ${isFrontCamera ? 'front' : 'back'} facing`);
 
                 // Apply mirroring to video element for front camera
@@ -582,26 +607,59 @@
         }
 
         async function toggleCamera() {
-            if (availableCameras.length <= 1) {
-                console.log('Only one camera available');
-                return;
-            }
-
             try {
-                // Stop current stream
+                // Stop current stream first
                 if (video.srcObject) {
                     video.srcObject.getTracks().forEach(track => track.stop());
+                    video.srcObject = null;
+                    await new Promise(resolve => setTimeout(resolve, 100)); // Small delay for iOS
                 }
 
-                // Cycle to next camera
-                const currentIndex = availableCameras.findIndex(camera => camera.deviceId === currentDeviceId);
-                const nextIndex = (currentIndex + 1) % availableCameras.length;
-                currentDeviceId = availableCameras[nextIndex].deviceId;
+                // Re-enumerate devices (iOS deviceIds can change)
+                await getCameraDevices();
 
-                console.log(`Switching to camera: ${availableCameras[nextIndex].label}`);
+                if (availableCameras.length <= 1) {
+                    console.log('Only one camera available');
+                    // Restart the same camera
+                    await startCamera();
+                    return;
+                }
 
-                // Restart with new camera
-                await startCamera();
+                // Use facingMode approach for iOS compatibility
+                const isCurrentlyFront = isFrontCamera;
+
+                if (isCurrentlyFront) {
+                    // Switch to back camera using facingMode
+                    console.log('Switching to back camera');
+                    currentDeviceId = null; // Let iOS choose the best back camera
+                } else {
+                    // Switch to front camera using facingMode
+                    console.log('Switching to front camera');
+                    currentDeviceId = null; // Let iOS choose the best front camera
+                }
+
+                // Use facingMode constraint for iOS compatibility
+                const constraints = {
+                    video: {
+                        width: 640,
+                        height: 480,
+                        facingMode: isCurrentlyFront ? 'environment' : 'user'
+                    }
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+
+                // Update front camera detection based on what we requested
+                isFrontCamera = !isCurrentlyFront;
+                console.log(`Camera switched to ${isFrontCamera ? 'front' : 'back'} facing`);
+
+                // Apply mirroring
+                if (isFrontCamera) {
+                    video.style.transform = 'scaleX(-1)';
+                } else {
+                    video.style.transform = 'scaleX(1)';
+                }
 
                 // Wait for video to be ready
                 await new Promise(resolve => {
