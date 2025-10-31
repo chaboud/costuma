@@ -9,6 +9,10 @@ screenshots/
 !site/**/*.jpg
 !site/**/*.jpeg
 !site/**/*.gif
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.jpeg
+!docs/**/*.gif
 
 # System files
 .DS_Store

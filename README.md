@@ -7,6 +7,9 @@ A last-minute Halloween costume solution built entirely with AI collaboration - 
 ## The Halloween Dilemma 🎭
 
 Every year, my son and I make costumes together. Past years have featured some... *memorable* creations:
+
+![Toilet Costume](docs/20201031_151511.jpg)
+
 - A toilet (yes, really)
 - A toilet paper mummy
 - There's definitely a theme here 🚽
