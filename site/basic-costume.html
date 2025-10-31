@@ -99,6 +99,7 @@
             <button class="costume-btn" onclick="setCostume('grumpy')">Grumpy Cat</button>
             <button class="costume-btn" onclick="setCostume('disaster')">Disaster Girl</button>
             <button class="costume-btn" onclick="setCostume('scream')">Candy</button>
+            <button class="costume-btn" onclick="setCostume('derpy')">Derpy</button>
             <button class="costume-btn" onclick="setCostume('debug')">Debug Mode</button>
         </div>
     </div>
@@ -432,7 +433,8 @@
                 scream: './assets/Scream.png',
                 rick: './assets/RickAstley.gif',
                 grumpy: './assets/GrumpyCat.png',
-                disaster: './assets/DisasterGirl.png'
+                disaster: './assets/DisasterGirl.png',
+                derpy: './assets/Derpy.png'
             };
 
             for (const [name, url] of Object.entries(assets)) {
@@ -619,7 +621,7 @@
             let size = { width: 100, height: 100 };
 
             // Find the best available keypoint for face detection
-            if (costumeType === 'scream' || costumeType === 'grumpy' || costumeType === 'disaster') {
+            if (costumeType === 'scream' || costumeType === 'grumpy' || costumeType === 'disaster' || costumeType === 'derpy') {
                 // Try multiple face keypoints in order of preference
                 targetKeypoint = keypoints.find(kp => kp.part === 'nose' && kp.score > 0.3) ||
                                 keypoints.find(kp => kp.part === 'leftEye' && kp.score > 0.3) ||
@@ -666,6 +668,9 @@
                 } else if (costumeType === 'disaster') {
                     baseWidth = 384;  // 0.8x of original 480
                     baseHeight = 384;
+                } else if (costumeType === 'derpy') {
+                    baseWidth = 640;
+                    baseHeight = 640;
                 }
 
                 size = {
