@@ -53,7 +53,34 @@
                 gap: 8px;
             }
         }
-        #debug { position: absolute; top: 20px; right: 20px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; font-size: 12px; max-width: 200px; display: none; }
+        #camera-toggle {
+            position: absolute;
+            top: 6vh;
+            right: 20px;
+            background: rgba(255,255,255,0.2);
+            border: 2px solid #fff;
+            color: #fff;
+            padding: 10px 15px;
+            border-radius: 20px;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            font-size: 14px;
+            z-index: 10;
+        }
+        #camera-toggle:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        #debug {
+            position: absolute;
+            top: calc(6vh + 60px);
+            right: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            max-width: 200px;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -64,13 +91,15 @@
         <div id="status">Starting...</div>
         <div id="debug">Debug info...</div>
 
+        <!-- Camera toggle button in top right -->
+        <button id="camera-toggle" onclick="toggleCamera()">Camera</button>
+
         <div id="controls">
             <button class="costume-btn active" onclick="setCostume('rick')">Hello!</button>
             <button class="costume-btn" onclick="setCostume('grumpy')">Grumpy Cat</button>
             <button class="costume-btn" onclick="setCostume('disaster')">Disaster Girl</button>
             <button class="costume-btn" onclick="setCostume('scream')">Candy</button>
             <button class="costume-btn" onclick="setCostume('debug')">Debug Mode</button>
-            <button class="costume-btn" onclick="toggleCamera()">Camera</button>
         </div>
     </div>
 
