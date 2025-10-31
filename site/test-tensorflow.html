@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TensorFlow.js Pose Test</title>
+    <style>
+        body { margin: 0; padding: 20px; font-family: Arial; }
+        #video { width: 320px; height: 240px; }
+        #status { margin: 10px 0; }
+        .error { color: red; }
+        .success { color: green; }
+        canvas { border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>TensorFlow.js PoseNet Test</h1>
+    <div id="status">Starting...</div>
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas" width="320" height="240"></canvas>
+
+    <!-- TensorFlow.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.2"></script>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+
+        let net;
+
+        async function init() {
+            try {
+                status.innerHTML = "Loading TensorFlow.js...";
+                console.log('TensorFlow version:', tf.version.tfjs);
+
+                status.innerHTML = "Requesting camera...";
+
+                // Get camera
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 320, height: 240 }
+                });
+                video.srcObject = stream;
+
+                await new Promise(resolve => {
+                    video.onloadeddata = resolve;
+                });
+
+                status.innerHTML = "Camera ready! Loading PoseNet model...";
+
+                // Load PoseNet model
+                net = await posenet.load({
+                    architecture: 'MobileNetV1',
+                    outputStride: 16,
+                    inputResolution: { width: 320, height: 240 },
+                    multiplier: 0.5
+                });
+
+                status.innerHTML = "PoseNet loaded! Starting pose detection...";
+
+                // Start detection loop
+                detectPose();
+
+            } catch (error) {
+                console.error('Error:', error);
+                status.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+            }
+        }
+
+        async function detectPose() {
+            if (!net || !video.videoWidth) {
+                requestAnimationFrame(detectPose);
+                return;
+            }
+
+            try {
+                // Estimate pose
+                const pose = await net.estimateSinglePose(video, {
+                    flipHorizontal: false
+                });
+
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Draw video frame
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // Draw pose
+                if (pose.score > 0.3) {
+                    drawKeypoints(pose.keypoints);
+                    drawSkeleton(pose.keypoints);
+                    status.innerHTML = `<span class="success">✅ Pose detected! Score: ${pose.score.toFixed(2)}</span>`;
+                } else {
+                    status.innerHTML = "Looking for pose...";
+                }
+
+            } catch (error) {
+                console.error('Detection error:', error);
+                status.innerHTML = `<span class="error">Detection error: ${error.message}</span>`;
+            }
+
+            requestAnimationFrame(detectPose);
+        }
+
+        function drawKeypoints(keypoints) {
+            keypoints.forEach(keypoint => {
+                if (keypoint.score > 0.5) {
+                    const { y, x } = keypoint.position;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                    ctx.fillStyle = 'red';
+                    ctx.fill();
+                }
+            });
+        }
+
+        function drawSkeleton(keypoints) {
+            const adjacentKeyPoints = posenet.getAdjacentKeyPoints(keypoints, 0.5);
+
+            adjacentKeyPoints.forEach((keypoints) => {
+                const { y: y1, x: x1 } = keypoints[0].position;
+                const { y: y2, x: x2 } = keypoints[1].position;
+
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = 'blue';
+                ctx.stroke();
+            });
+        }
+
+        // Start when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

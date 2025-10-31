@@ -1,0 +1,11 @@
+# Assets Directory
+
+This directory is for storing costume assets:
+
+- rick_astley.png - Rick Astley sprite with alpha channel
+- simple_robot.glb - 3D robot model
+- face_mask.png - Face mask overlay
+- skeleton.png - Skeleton costume overlay
+
+Currently using placeholder emoji textures generated in JavaScript.
+Upload real assets here and update main.js to load them.

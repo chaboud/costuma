@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Costuma - AR Costume Overlay</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Privacy Banner -->
+        <div id="privacy-banner" class="privacy-banner">
+            <p>🔒 All processing happens on your device. No data is uploaded or stored.</p>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="start-screen" class="start-screen">
+            <h1>Costuma</h1>
+            <p>AR Costume Overlay Experience</p>
+            <button id="start-btn" class="start-button">Start Camera</button>
+            <div class="info">
+                <p>• Works best in good lighting</p>
+                <p>• Face the camera directly</p>
+                <p>• Allow camera permissions</p>
+            </div>
+        </div>
+
+        <!-- Main AR Interface -->
+        <div id="ar-interface" class="ar-interface hidden">
+            <!-- Video element (hidden, used for MediaPipe) -->
+            <video id="video" autoplay muted playsinline style="display: none;"></video>
+
+            <!-- Three.js canvas for rendering -->
+            <canvas id="canvas"></canvas>
+
+            <!-- Loading indicator -->
+            <div id="loading" class="loading">
+                <div class="loading-spinner"></div>
+                <p>Loading pose detection...</p>
+            </div>
+
+            <!-- UI Controls -->
+            <div id="ui-container" class="ui-container">
+                <!-- Top Controls -->
+                <div class="top-controls">
+                    <button id="debug-btn" class="control-btn" title="Debug Mode">🎯</button>
+                    <button id="smoothing-btn" class="control-btn" title="Smoothing">🎛️</button>
+                    <button id="flip-camera-btn" class="control-btn" title="Flip Camera">📷</button>
+                    <button id="quality-btn" class="control-btn" title="Quality">⚙️</button>
+                    <div id="fps-counter" class="fps-counter">FPS: --</div>
+                </div>
+
+                <!-- Costume Selection -->
+                <div class="costume-controls">
+                    <button id="randomize-btn" class="randomize-btn">🎲 Random Costume</button>
+
+                    <div class="costume-carousel">
+                        <button class="costume-item" data-costume="none">
+                            <div class="costume-preview">👤</div>
+                            <span>None</span>
+                        </button>
+                        <button class="costume-item active" data-costume="rick_astley">
+                            <div class="costume-preview">🕺</div>
+                            <span>Rick Roll</span>
+                        </button>
+                        <button class="costume-item" data-costume="3d_robot">
+                            <div class="costume-preview">🤖</div>
+                            <span>Robot</span>
+                        </button>
+                        <button class="costume-item" data-costume="face_mask">
+                            <div class="costume-preview">🎭</div>
+                            <span>Face Mask</span>
+                        </button>
+                        <button class="costume-item" data-costume="skeleton">
+                            <div class="costume-preview">💀</div>
+                            <span>Skeleton</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Quality Settings Modal -->
+                <div id="quality-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <h3>Quality Settings</h3>
+                        <div class="setting-group">
+                            <label>Performance Mode:</label>
+                            <select id="quality-select">
+                                <option value="low">Low (Best Performance)</option>
+                                <option value="medium" selected>Medium (Balanced)</option>
+                                <option value="high">High (Best Quality)</option>
+                            </select>
+                        </div>
+                        <div class="setting-group">
+                            <label>Max People:</label>
+                            <select id="max-people-select">
+                                <option value="1">1 Person</option>
+                                <option value="3" selected>3 People</option>
+                                <option value="5">5 People</option>
+                                <option value="10">10 People</option>
+                            </select>
+                        </div>
+                        <button id="close-quality-modal" class="close-btn">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://unpkg.com/three@0.157.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.157.0/examples/js/loaders/GLTFLoader.js"></script>
+    <!-- TensorFlow.js for pose detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.2"></script>
+
+    <!-- Main Application -->
+    <script src="main.js"></script>
+</body>
+</html>

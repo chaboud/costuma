@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Minimal AR Costumes</title>
+    <style>
+        body { margin: 0; font-family: Arial; background: #000; color: #fff; }
+        #container { position: relative; width: 100vw; height: 100vh; }
+        #video { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #controls { position: absolute; bottom: 20px; left: 20px; right: 20px; z-index: 10; }
+        .costume-btn {
+            background: rgba(255,255,255,0.2);
+            border: 2px solid #fff;
+            color: #fff;
+            padding: 10px 15px;
+            margin: 5px;
+            border-radius: 20px;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+        }
+        .costume-btn.active { background: #ff6b6b; }
+        #status { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay" width="640" height="480"></canvas>
+
+        <div id="status">Starting...</div>
+
+        <div id="controls">
+            <button class="costume-btn" onclick="setCostume('none')">None</button>
+            <button class="costume-btn active" onclick="setCostume('rick')">🕺 Rick Roll</button>
+            <button class="costume-btn" onclick="setCostume('robot')">🤖 Robot</button>
+            <button class="costume-btn" onclick="setCostume('mask')">🎭 Face Mask</button>
+            <button class="costume-btn" onclick="setCostume('skeleton')">💀 Skeleton</button>
+        </div>
+    </div>
+
+    <!-- TensorFlow.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet@2.2.2"></script>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('overlay');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+
+        let net;
+        let currentCostume = 'rick';
+        let costumeImages = {};
+
+        // Create a hidden canvas for PoseNet input
+        const inputCanvas = document.createElement('canvas');
+        const inputCtx = inputCanvas.getContext('2d');
+
+        async function init() {
+            try {
+                status.textContent = "Requesting camera...";
+
+                // Get camera
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 }
+                });
+                video.srcObject = stream;
+
+                await new Promise(resolve => {
+                    video.onloadeddata = resolve;
+                });
+
+                // Wait for video to be ready
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                // Wait for video dimensions to be available
+                while (video.videoWidth === 0 || video.videoHeight === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                // Set canvas size to match video internal dimensions
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                // Set up input canvas for PoseNet
+                inputCanvas.width = video.videoWidth;
+                inputCanvas.height = video.videoHeight;
+
+                // Scale canvas display to fit container
+                const rect = video.getBoundingClientRect();
+                canvas.style.width = rect.width + 'px';
+                canvas.style.height = rect.height + 'px';
+
+                console.log(`Video: ${video.videoWidth}x${video.videoHeight}, Canvas: ${canvas.width}x${canvas.height}, Display: ${rect.width}x${rect.height}`);
+
+                status.textContent = "Loading pose detection...";
+
+                // Load PoseNet with video-compatible settings
+                net = await posenet.load({
+                    architecture: 'MobileNetV1',
+                    outputStride: 16,
+                    inputResolution: { width: 257, height: 257 },
+                    multiplier: 0.75
+                });
+
+                status.textContent = "Loading costume assets...";
+
+                // Load costume images
+                await loadCostumeAssets();
+
+                status.textContent = "Ready! Select a costume below.";
+
+                // Start detection
+                detectLoop();
+
+            } catch (error) {
+                console.error('Error:', error);
+                status.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function loadCostumeAssets() {
+            const assets = {
+                rick: './assets/rick_astley.png',
+                robot: './assets/skeleton.png', // Using skeleton as robot fallback
+                mask: './assets/face_mask.png',
+                skeleton: './assets/skeleton.png'
+            };
+
+            for (const [name, url] of Object.entries(assets)) {
+                try {
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    await new Promise((resolve, reject) => {
+                        img.onload = resolve;
+                        img.onerror = () => {
+                            console.log(`Failed to load ${name}, using emoji fallback`);
+                            resolve(); // Continue even if image fails
+                        };
+                        img.src = url;
+                    });
+                    costumeImages[name] = img;
+                } catch (error) {
+                    console.log(`Asset ${name} failed, using fallback`);
+                }
+            }
+        }
+
+        async function detectLoop() {
+            if (!net || video.videoWidth === 0 || video.videoHeight === 0) {
+                requestAnimationFrame(detectLoop);
+                return;
+            }
+
+            try {
+                // Draw video frame to input canvas
+                inputCtx.drawImage(video, 0, 0, inputCanvas.width, inputCanvas.height);
+
+                // Get pose
+                const pose = await net.estimateSinglePose(inputCanvas, {
+                    flipHorizontal: false
+                });
+
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Draw costume overlay
+                if (pose.score > 0.3 && currentCostume !== 'none') {
+                    drawCostume(pose.keypoints, currentCostume);
+                }
+
+            } catch (error) {
+                console.error('Detection error:', error);
+            }
+
+            requestAnimationFrame(detectLoop);
+        }
+
+        function drawCostume(keypoints, costumeType) {
+            let targetKeypoint;
+            let size = { width: 100, height: 100 };
+
+            // Since canvas matches video dimensions, scale should be 1:1
+            const scaleX = 1;
+            const scaleY = 1;
+
+            switch (costumeType) {
+                case 'mask':
+                    targetKeypoint = keypoints.find(kp => kp.part === 'nose');
+                    size = { width: 80 * scaleX, height: 60 * scaleY };
+                    break;
+                case 'rick':
+                case 'skeleton':
+                    // Use shoulder center
+                    const leftShoulder = keypoints.find(kp => kp.part === 'leftShoulder');
+                    const rightShoulder = keypoints.find(kp => kp.part === 'rightShoulder');
+                    if (leftShoulder && rightShoulder && leftShoulder.score > 0.5 && rightShoulder.score > 0.5) {
+                        targetKeypoint = {
+                            position: {
+                                x: (leftShoulder.position.x + rightShoulder.position.x) / 2,
+                                y: (leftShoulder.position.y + rightShoulder.position.y) / 2
+                            },
+                            score: Math.min(leftShoulder.score, rightShoulder.score)
+                        };
+                        size = { width: 120 * scaleX, height: 160 * scaleY };
+                    }
+                    break;
+                case 'robot':
+                    // Use hip center
+                    const leftHip = keypoints.find(kp => kp.part === 'leftHip');
+                    const rightHip = keypoints.find(kp => kp.part === 'rightHip');
+                    if (leftHip && rightHip && leftHip.score > 0.5 && rightHip.score > 0.5) {
+                        targetKeypoint = {
+                            position: {
+                                x: (leftHip.position.x + rightHip.position.x) / 2,
+                                y: (leftHip.position.y + rightHip.position.y) / 2
+                            },
+                            score: Math.min(leftHip.score, rightHip.score)
+                        };
+                        size = { width: 100 * scaleX, height: 120 * scaleY };
+                    }
+                    break;
+            }
+
+            if (targetKeypoint && targetKeypoint.score > 0.5) {
+                // No scaling needed since canvas matches video dimensions
+                const x = targetKeypoint.position.x - size.width / 2;
+                const y = targetKeypoint.position.y - size.height / 2;
+
+                // Draw costume
+                if (costumeImages[costumeType] && costumeImages[costumeType].complete) {
+                    // Enable transparency
+                    ctx.globalCompositeOperation = 'source-over';
+                    ctx.drawImage(costumeImages[costumeType], x, y, size.width, size.height);
+                } else {
+                    // Fallback: draw emoji
+                    ctx.font = '48px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = 'white';
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 2;
+                    const emojis = { rick: '🕺', robot: '🤖', mask: '🎭', skeleton: '💀' };
+                    const emoji = emojis[costumeType] || '❓';
+                    ctx.strokeText(emoji, targetKeypoint.position.x, targetKeypoint.position.y);
+                    ctx.fillText(emoji, targetKeypoint.position.x, targetKeypoint.position.y);
+                }
+            }
+        }
+
+        function setCostume(costume) {
+            currentCostume = costume;
+
+            // Update button states
+            document.querySelectorAll('.costume-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+
+        // Start when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

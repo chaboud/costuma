@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Pose Test</title>
+    <style>
+        body { margin: 0; padding: 20px; font-family: Arial; }
+        #video { width: 320px; height: 240px; }
+        #status { margin: 10px 0; }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <h1>Simple Pose Detection Test</h1>
+    <div id="status">Starting...</div>
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas" width="320" height="240"></canvas>
+    <button id="testBtn" onclick="testFrame()" style="margin: 10px;">Test Single Frame</button>
+    <div id="debug"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+
+        let pose;
+
+        async function init() {
+            try {
+                status.innerHTML = "Requesting camera...";
+
+                // Get camera
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 320, height: 240 }
+                });
+                video.srcObject = stream;
+
+                status.innerHTML = "Camera OK! Waiting for MediaPipe...";
+
+                // Wait for MediaPipe
+                let attempts = 0;
+                while (typeof Pose === 'undefined' && attempts < 50) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    attempts++;
+                }
+
+                if (typeof Pose === 'undefined') {
+                    throw new Error('MediaPipe failed to load');
+                }
+
+                status.innerHTML = "MediaPipe loaded! Creating pose detector...";
+
+                // Create pose detector
+                pose = new Pose({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+                });
+
+                pose.setOptions({
+                    modelComplexity: 0,
+                    smoothLandmarks: true,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+
+                pose.onResults((results) => {
+                    // Clear canvas
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                    // Draw video frame
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                    // Draw pose landmarks
+                    if (results.poseLandmarks) {
+                        drawLandmarks(results.poseLandmarks);
+                        status.innerHTML = `<span class="success">✅ Pose detected! ${results.poseLandmarks.length} landmarks</span>`;
+                    } else {
+                        status.innerHTML = "No pose detected";
+                    }
+                });
+
+                status.innerHTML = "Ready! Look at the camera...";
+
+                // Start processing
+                processFrame();
+
+            } catch (error) {
+                console.error('Error:', error);
+                status.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+            }
+        }
+
+        function drawLandmarks(landmarks) {
+            ctx.fillStyle = 'red';
+            landmarks.forEach(landmark => {
+                const x = landmark.x * canvas.width;
+                const y = landmark.y * canvas.height;
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+
+        let frameCount = 0;
+        function processFrame() {
+            frameCount++;
+
+            if (frameCount % 60 === 0) { // Debug every 60 frames
+                console.log(`Frame ${frameCount}: video.videoWidth=${video.videoWidth}, pose=${!!pose}`);
+            }
+
+            if (pose && video.videoWidth > 0) {
+                try {
+                    pose.send({ image: video });
+                    if (frameCount % 60 === 0) {
+                        console.log('Sent frame to MediaPipe');
+                    }
+                } catch (error) {
+                    console.error('Error sending frame:', error);
+                    status.innerHTML = `<span class="error">❌ Frame processing error: ${error.message}</span>`;
+                }
+            } else if (frameCount % 60 === 0) {
+                console.log('Not ready yet - waiting for video/pose');
+            }
+
+            requestAnimationFrame(processFrame);
+        }
+
+        function testFrame() {
+            const debug = document.getElementById('debug');
+            debug.innerHTML = `Testing: video.videoWidth=${video.videoWidth}, pose=${!!pose}`;
+
+            if (pose && video.videoWidth > 0) {
+                console.log('Manual test frame');
+                pose.send({ image: video });
+                debug.innerHTML += '<br>Frame sent manually!';
+            } else {
+                debug.innerHTML += '<br>Not ready for manual test';
+            }
+        }
+
+        // Start when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
