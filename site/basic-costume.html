@@ -291,11 +291,11 @@
 
                 status.textContent = "Loading pose detection...";
 
-                // Load PoseNet with video-compatible settings
+                // Load PoseNet with higher resolution
                 net = await posenet.load({
                     architecture: 'MobileNetV1',
                     outputStride: 16,
-                    inputResolution: { width: 257, height: 257 },
+                    inputResolution: { width: 513, height: 513 },
                     multiplier: 0.75
                 });
 
