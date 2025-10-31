@@ -5,10 +5,10 @@ screenshots/
 *.jpg
 *.jpeg
 *.gif
-!site/assets/*.png
-!site/assets/*.jpg
-!site/assets/*.jpeg
-!site/assets/*.gif
+!site/**/*.png
+!site/**/*.jpg
+!site/**/*.jpeg
+!site/**/*.gif
 
 # System files
 .DS_Store
