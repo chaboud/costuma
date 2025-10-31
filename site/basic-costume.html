@@ -650,12 +650,15 @@
 
                 // Set base sizes for different face costumes (doubled for triangle distance)
                 let baseWidth, baseHeight;
-                if (costumeType === 'scream' || costumeType === 'grumpy') {
-                    baseWidth = 400;
-                    baseHeight = 400;
+                if (costumeType === 'scream') {
+                    baseWidth = 280;  // 0.7x of original 400
+                    baseHeight = 280;
+                } else if (costumeType === 'grumpy') {
+                    baseWidth = 320;  // 0.8x of original 400
+                    baseHeight = 320;
                 } else if (costumeType === 'disaster') {
-                    baseWidth = 480;  // 1.2x larger
-                    baseHeight = 480;
+                    baseWidth = 384;  // 0.8x of original 480
+                    baseHeight = 384;
                 }
 
                 size = {
@@ -674,8 +677,8 @@
                     const personKeyRick = `rick_${Math.round(nose.position.x / 50)}_${Math.round(nose.position.y / 50)}`;
                     const scaleFactor = smoothScale(rawScaleFactor, personKeyRick);
 
-                    const baseWidth = 800;  // 2x for triangle distance
-                    const baseHeight = 500;
+                    const baseWidth = 720;  // 0.9x of original 800
+                    const baseHeight = 450; // 0.9x of original 500
 
                     targetKeypoint = {
                         position: {
