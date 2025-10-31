@@ -397,15 +397,36 @@
                 // Clear canvas
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                // Process each detected person
-                poses.forEach((pose, index) => {
-                    if (pose.score > 0.3) {
-                        console.log(`Processing person ${index + 1} with score ${pose.score.toFixed(2)}`);
-                        if (currentCostume === 'debug') {
-                            drawDebugInfo(pose);
-                        } else if (currentCostume !== 'none') {
-                            drawCostume(pose.keypoints, currentCostume);
-                        }
+                // Sort poses by scale (distance) - smallest (furthest) to largest (closest)
+                const validPoses = poses.filter(pose => pose.score > 0.3);
+
+                // Calculate scale for each pose for sorting
+                const posesWithScale = validPoses.map(pose => {
+                    const leftShoulder = pose.keypoints.find(kp => kp.part === 'leftShoulder');
+                    const rightShoulder = pose.keypoints.find(kp => kp.part === 'rightShoulder');
+
+                    let scale = 1.0; // Default scale if shoulders not detected
+                    if (leftShoulder && rightShoulder && leftShoulder.score > 0.3 && rightShoulder.score > 0.3) {
+                        const shoulderDistance = Math.sqrt(
+                            Math.pow(rightShoulder.position.x - leftShoulder.position.x, 2) +
+                            Math.pow(rightShoulder.position.y - leftShoulder.position.y, 2)
+                        );
+                        scale = Math.max(0.5, Math.min(3.0, shoulderDistance / 100));
+                    }
+
+                    return { pose, scale };
+                });
+
+                // Sort by scale: smallest (furthest) first, largest (closest) last
+                posesWithScale.sort((a, b) => a.scale - b.scale);
+
+                // Draw in order: back to front
+                posesWithScale.forEach(({ pose, scale }, index) => {
+                    console.log(`Drawing person ${index + 1} with scale ${scale.toFixed(2)} (${scale < 1 ? 'far' : scale > 1.5 ? 'close' : 'medium'})`);
+                    if (currentCostume === 'debug') {
+                        drawDebugInfo(pose);
+                    } else if (currentCostume !== 'none') {
+                        drawCostume(pose.keypoints, currentCostume);
                     }
                 });
 
