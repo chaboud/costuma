@@ -55,7 +55,7 @@ Then I fired up **Claude Code** on my personal machine and we built this entire 
 - **Real-time costume changes** with a simple button interface
 
 ### Available Costumes
-- **Hello!** - Rick Roll surprise
+- **Hello!** - REDACTED surprise
 - **Grumpy Cat** - Classic meme face
 - **Disaster Girl** - Another internet classic
 - **Candy** - Scream for spooky vibes
