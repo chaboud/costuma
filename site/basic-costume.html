@@ -70,6 +70,7 @@
             <button class="costume-btn" onclick="setCostume('disaster')">Disaster Girl</button>
             <button class="costume-btn" onclick="setCostume('scream')">Candy</button>
             <button class="costume-btn" onclick="setCostume('debug')">Debug Mode</button>
+            <button class="costume-btn" onclick="toggleCamera()">Camera</button>
         </div>
     </div>
 
@@ -87,20 +88,112 @@
         let net;
         let currentCostume = 'rick';
         let costumeImages = {};
+        let currentDeviceId = null;
+        let availableCameras = [];
+        let isFrontCamera = false;
 
         // Create a hidden canvas for PoseNet input
         const inputCanvas = document.createElement('canvas');
         const inputCtx = inputCanvas.getContext('2d');
 
+        async function getCameraDevices() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                availableCameras = devices.filter(device => device.kind === 'videoinput');
+                console.log('Available cameras:', availableCameras.length);
+
+                // Default to rear camera on mobile, front camera on desktop
+                const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                if (isMobile && availableCameras.length > 1) {
+                    // Try to find rear camera (usually has "back" or "environment" in label)
+                    const rearCamera = availableCameras.find(camera =>
+                        camera.label.toLowerCase().includes('back') ||
+                        camera.label.toLowerCase().includes('environment') ||
+                        camera.label.toLowerCase().includes('rear')
+                    );
+                    currentDeviceId = rearCamera ? rearCamera.deviceId : availableCameras[0].deviceId;
+                } else {
+                    currentDeviceId = availableCameras[0]?.deviceId;
+                }
+            } catch (error) {
+                console.log('Error getting camera devices:', error);
+            }
+        }
+
+        function detectFrontCamera() {
+            if (!currentDeviceId || availableCameras.length === 0) {
+                return false;
+            }
+
+            const currentCamera = availableCameras.find(camera => camera.deviceId === currentDeviceId);
+            if (!currentCamera) return false;
+
+            const label = currentCamera.label.toLowerCase();
+
+            // Check for front camera indicators
+            const frontIndicators = ['front', 'user', 'selfie', 'facetime'];
+            const backIndicators = ['back', 'rear', 'environment'];
+
+            // If it explicitly says it's a back camera, it's not front
+            if (backIndicators.some(indicator => label.includes(indicator))) {
+                return false;
+            }
+
+            // If it explicitly says it's a front camera, it is front
+            if (frontIndicators.some(indicator => label.includes(indicator))) {
+                return true;
+            }
+
+            // On mobile, if there are multiple cameras and this is the first one, it's usually front
+            const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            if (isMobile && availableCameras.length > 1) {
+                return currentDeviceId === availableCameras[0].deviceId;
+            }
+
+            // Default assumption for desktop/laptop built-in cameras
+            return true;
+        }
+
+        async function startCamera() {
+            try {
+                const constraints = {
+                    video: {
+                        width: 640,
+                        height: 480,
+                        deviceId: currentDeviceId ? { exact: currentDeviceId } : undefined
+                    }
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+
+                // Detect if this is a front camera
+                isFrontCamera = detectFrontCamera();
+                console.log(`Camera is ${isFrontCamera ? 'front' : 'back'} facing`);
+
+                // Apply mirroring to video element for front camera
+                if (isFrontCamera) {
+                    video.style.transform = 'scaleX(-1)';
+                } else {
+                    video.style.transform = 'scaleX(1)';
+                }
+
+                return stream;
+            } catch (error) {
+                console.error('Camera start failed:', error);
+                throw error;
+            }
+        }
+
         async function init() {
             try {
                 status.textContent = "Requesting camera...";
 
-                // Get camera
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: 640, height: 480 }
-                });
-                video.srcObject = stream;
+                // Get available cameras first
+                await getCameraDevices();
+
+                // Start camera
+                await startCamera();
 
                 await new Promise(resolve => {
                     video.onloadeddata = resolve;
@@ -134,6 +227,9 @@
 
                 resizeCanvas();
                 window.addEventListener('resize', resizeCanvas);
+
+                // Mirror canvas overlay to match video mirroring
+                updateCanvasMirroring();
 
                 // Set up input canvas for PoseNet
                 inputCanvas.width = video.videoWidth;
@@ -231,27 +327,37 @@
                     console.log('Input canvas size:', inputCanvas.width, 'x', inputCanvas.height);
                 }
 
-                const pose = await net.estimateSinglePose(inputCanvas, {
-                    flipHorizontal: false
+                const poses = await net.estimateMultiplePoses(inputCanvas, {
+                    flipHorizontal: false,
+                    maxDetections: 5,
+                    scoreThreshold: 0.3,
+                    nmsRadius: 20
                 });
 
-                // Debug: Log the full pose object every 60 frames
-                if (Math.floor(Date.now() / 1000) % 3 === 0) {
-                    console.log('Full pose object:', pose);
-                    console.log('First few keypoints:', pose.keypoints.slice(0, 3));
+                // Debug: Log pose information
+                if (Math.floor(Date.now() / 1000) % 3 === 0 && poses.length > 0) {
+                    console.log(`Found ${poses.length} people`);
+                    console.log('First pose:', poses[0]);
                 }
 
                 // Clear canvas
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                if (pose.score > 0.3) {
-                    if (currentCostume === 'debug') {
-                        drawDebugInfo(pose);
-                    } else if (currentCostume !== 'none') {
-                        drawCostume(pose.keypoints, currentCostume);
+                // Process each detected person
+                poses.forEach((pose, index) => {
+                    if (pose.score > 0.3) {
+                        console.log(`Processing person ${index + 1} with score ${pose.score.toFixed(2)}`);
+                        if (currentCostume === 'debug') {
+                            drawDebugInfo(pose);
+                        } else if (currentCostume !== 'none') {
+                            drawCostume(pose.keypoints, currentCostume);
+                        }
                     }
+                });
 
-                    updateDebugText(pose);
+                // Update debug text with first person's info
+                if (poses.length > 0) {
+                    updateDebugText(poses[0], poses.length);
                 }
 
             } catch (error) {
@@ -414,7 +520,7 @@
             }
         }
 
-        function updateDebugText(pose) {
+        function updateDebugText(pose, totalPeople = 1) {
             const scaleX = canvas.width / video.videoWidth;
             const scaleY = canvas.height / video.videoHeight;
 
@@ -435,6 +541,7 @@
             }
 
             debug.innerHTML = `
+                People: ${totalPeople}<br>
                 Score: ${pose.score.toFixed(2)}<br>
                 Canvas: ${canvas.width}x${canvas.height}<br>
                 Video: ${video.videoWidth}x${video.videoHeight}<br>
@@ -443,6 +550,60 @@
                 <br>
                 ${keypointInfo}
             `;
+        }
+
+        async function toggleCamera() {
+            if (availableCameras.length <= 1) {
+                console.log('Only one camera available');
+                return;
+            }
+
+            try {
+                // Stop current stream
+                if (video.srcObject) {
+                    video.srcObject.getTracks().forEach(track => track.stop());
+                }
+
+                // Cycle to next camera
+                const currentIndex = availableCameras.findIndex(camera => camera.deviceId === currentDeviceId);
+                const nextIndex = (currentIndex + 1) % availableCameras.length;
+                currentDeviceId = availableCameras[nextIndex].deviceId;
+
+                console.log(`Switching to camera: ${availableCameras[nextIndex].label}`);
+
+                // Restart with new camera
+                await startCamera();
+
+                // Wait for video to be ready
+                await new Promise(resolve => {
+                    video.onloadeddata = resolve;
+                });
+
+                // Wait for dimensions
+                while (video.videoWidth === 0 || video.videoHeight === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                // Update canvas
+                inputCanvas.width = video.videoWidth;
+                inputCanvas.height = video.videoHeight;
+
+                // Update mirroring for new camera
+                updateCanvasMirroring();
+
+            } catch (error) {
+                console.error('Camera toggle failed:', error);
+                status.textContent = "Camera switch failed. Using previous camera.";
+            }
+        }
+
+        function updateCanvasMirroring() {
+            // Mirror canvas overlay to match video mirroring for front camera
+            if (isFrontCamera) {
+                canvas.style.transform = 'scaleX(-1)';
+            } else {
+                canvas.style.transform = 'scaleX(1)';
+            }
         }
 
         function setCostume(costume) {
