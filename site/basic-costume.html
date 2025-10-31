@@ -121,6 +121,15 @@
         let availableCameras = [];
         let isFrontCamera = false;
 
+        // EMA smoothing with nearest neighbor matching
+        let previousPoses = [];  // Store previous frame poses for matching
+        let previousScales = new Map();  // Store scale per person
+        let observedScales = [];  // Track all observed scales for rolling average
+        const EMA_ALPHA_POSITION = 0.3;  // Position smoothing (20% new, 80% old)
+        const EMA_ALPHA_SCALE = 0.15;    // Scale smoothing (5% new, 95% old)
+        const MATCH_THRESHOLD = 200;     // Max distance (px) for matching across frames
+        const MAX_OBSERVED_SCALES = 30;  // Keep last 30 scale observations
+
         // Create a hidden canvas for PoseNet input
         const inputCanvas = document.createElement('canvas');
         const inputCtx = inputCanvas.getContext('2d');
@@ -154,6 +163,110 @@
             } catch (error) {
                 console.log('Error getting camera devices:', error);
             }
+        }
+
+        // Match current poses to previous poses using nearest neighbor by nose position
+        function matchPoses(currentPoses) {
+            if (previousPoses.length === 0) {
+                previousPoses = JSON.parse(JSON.stringify(currentPoses));
+                return currentPoses.map(p => ({ pose: p, matched: null }));
+            }
+
+            const matched = currentPoses.map(currentPose => {
+                const currentNose = currentPose.keypoints.find(kp => kp.part === 'nose');
+                if (!currentNose) return { pose: currentPose, matched: null };
+
+                let closestPrev = null;
+                let minDist = Infinity;
+
+                previousPoses.forEach(prevPose => {
+                    const prevNose = prevPose.keypoints.find(kp => kp.part === 'nose');
+                    if (prevNose) {
+                        const dist = Math.sqrt(
+                            Math.pow(currentNose.position.x - prevNose.position.x, 2) +
+                            Math.pow(currentNose.position.y - prevNose.position.y, 2)
+                        );
+                        if (dist < minDist && dist < MATCH_THRESHOLD) {
+                            minDist = dist;
+                            closestPrev = prevPose;
+                        }
+                    }
+                });
+
+                return { pose: currentPose, matched: closestPrev };
+            });
+
+            return matched;
+        }
+
+        // Apply EMA smoothing to positions
+        function smoothPositions(pose, prevPose) {
+            if (!prevPose) return pose;
+
+            const smoothedPose = JSON.parse(JSON.stringify(pose));
+            smoothedPose.keypoints = pose.keypoints.map(kp => {
+                const prevKp = prevPose.keypoints.find(prev => prev.part === kp.part);
+                if (prevKp) {
+                    return {
+                        ...kp,
+                        position: {
+                            x: EMA_ALPHA_POSITION * kp.position.x + (1 - EMA_ALPHA_POSITION) * prevKp.position.x,
+                            y: EMA_ALPHA_POSITION * kp.position.y + (1 - EMA_ALPHA_POSITION) * prevKp.position.y
+                        }
+                    };
+                }
+                return kp;
+            });
+            return smoothedPose;
+        }
+
+        // Calculate max distance in eye-nose-eye triangle
+        function getMaxTriangleDistance(keypoints) {
+            const leftEye = keypoints.find(kp => kp.part === 'leftEye');
+            const rightEye = keypoints.find(kp => kp.part === 'rightEye');
+            const nose = keypoints.find(kp => kp.part === 'nose');
+
+            if (!leftEye || !rightEye || !nose ||
+                leftEye.score < 0.3 || rightEye.score < 0.3 || nose.score < 0.3) {
+                return null;
+            }
+
+            const dist = (p1, p2) => Math.sqrt(
+                Math.pow(p2.position.x - p1.position.x, 2) +
+                Math.pow(p2.position.y - p1.position.y, 2)
+            );
+
+            const d1 = dist(leftEye, rightEye);
+            const d2 = dist(leftEye, nose);
+            const d3 = dist(rightEye, nose);
+
+            return Math.max(d1, d2, d3);
+        }
+
+        // Apply EMA smoothing to scale with rolling average default
+        function smoothScale(rawScale, personKey) {
+            // Add to observed scales
+            observedScales.push(rawScale);
+            if (observedScales.length > MAX_OBSERVED_SCALES) {
+                observedScales.shift();
+            }
+
+            const prevScale = previousScales.get(personKey);
+            if (prevScale === undefined) {
+                // Use rolling average as prior for new/re-detected faces
+                const avgScale = observedScales.length > 0
+                    ? observedScales.reduce((a, b) => a + b, 0) / observedScales.length
+                    : rawScale;
+
+                // Blend with rolling average on first detection
+                const initialScale = EMA_ALPHA_SCALE * rawScale + (1 - EMA_ALPHA_SCALE) * avgScale;
+                previousScales.set(personKey, initialScale);
+                return initialScale;
+            }
+
+            const smoothedScale = EMA_ALPHA_SCALE * rawScale + (1 - EMA_ALPHA_SCALE) * prevScale;
+            previousScales.set(personKey, smoothedScale);
+            return smoothedScale;
         }
 
         function detectFrontCamera() {
@@ -381,16 +494,23 @@
                     console.log('Input canvas size:', inputCanvas.width, 'x', inputCanvas.height);
                 }
 
-                const poses = await net.estimateMultiplePoses(inputCanvas, {
+                const rawPoses = await net.estimateMultiplePoses(inputCanvas, {
                     flipHorizontal: false,
                     maxDetections: 5,
                     scoreThreshold: 0.3,
                     nmsRadius: 20
                 });
 
+                // Apply EMA smoothing with nearest neighbor matching
+                const matchedPoses = matchPoses(rawPoses);
+                const poses = matchedPoses.map(({ pose, matched }) => smoothPositions(pose, matched));
+
+                // Store smoothed poses for next frame
+                previousPoses = JSON.parse(JSON.stringify(poses));
+
                 // Debug: Log pose information
                 if (Math.floor(Date.now() / 1000) % 3 === 0 && poses.length > 0) {
-                    console.log(`Found ${poses.length} people`);
+                    console.log(`Found ${poses.length} people (smoothed)`);
                     console.log('First pose:', poses[0]);
                 }
 
@@ -400,19 +520,20 @@
                 // Sort poses by scale (distance) - smallest (furthest) to largest (closest)
                 const validPoses = poses.filter(pose => pose.score > 0.3);
 
-                // Calculate scale for each pose for sorting
+                // Calculate scale for each pose for sorting using triangle distance
                 const posesWithScale = validPoses.map(pose => {
-                    const leftShoulder = pose.keypoints.find(kp => kp.part === 'leftShoulder');
-                    const rightShoulder = pose.keypoints.find(kp => kp.part === 'rightShoulder');
+                    const nose = pose.keypoints.find(kp => kp.part === 'nose');
+                    const maxDist = getMaxTriangleDistance(pose.keypoints);
 
-                    let scale = 1.0; // Default scale if shoulders not detected
-                    if (leftShoulder && rightShoulder && leftShoulder.score > 0.3 && rightShoulder.score > 0.3) {
-                        const shoulderDistance = Math.sqrt(
-                            Math.pow(rightShoulder.position.x - leftShoulder.position.x, 2) +
-                            Math.pow(rightShoulder.position.y - leftShoulder.position.y, 2)
-                        );
-                        scale = Math.max(0.5, Math.min(3.0, shoulderDistance / 100));
+                    let rawScale = 1.0; // Default scale
+                    if (maxDist !== null) {
+                        // Triangle max distance is roughly 1.2-1.5x IOD, adjust divisor
+                        rawScale = Math.max(0.5, Math.min(3.0, maxDist / 50));
                     }
+
+                    // Apply scale smoothing
+                    const personKey = nose ? `sort_${Math.round(nose.position.x / 50)}_${Math.round(nose.position.y / 50)}` : `sort_${Date.now()}`;
+                    const scale = smoothScale(rawScale, personKey);
 
                     return { pose, scale };
                 });
@@ -514,24 +635,27 @@
                     }
                 }
 
-                // Get shoulder distance for scaling
-                const leftShoulder = keypoints.find(kp => kp.part === 'leftShoulder');
-                const rightShoulder = keypoints.find(kp => kp.part === 'rightShoulder');
-                let scaleFactor = 1.0;
+                // Get triangle distance for scaling
+                const nose = keypoints.find(kp => kp.part === 'nose');
+                const maxDist = getMaxTriangleDistance(keypoints);
+                let rawScaleFactor = 1.0;
 
-                if (leftShoulder && rightShoulder && leftShoulder.score > 0.3 && rightShoulder.score > 0.3) {
-                    const shoulderDistance = Math.sqrt(
-                        Math.pow(rightShoulder.position.x - leftShoulder.position.x, 2) +
-                        Math.pow(rightShoulder.position.y - leftShoulder.position.y, 2)
-                    );
-                    scaleFactor = Math.max(0.5, Math.min(3.0, shoulderDistance / 100));
+                if (maxDist !== null) {
+                    rawScaleFactor = Math.max(0.5, Math.min(3.0, maxDist / 50));
                 }
 
-                // Set base sizes for different face costumes
+                // Apply scale smoothing
+                const personKeyFace = nose ? `face_${Math.round(nose.position.x / 50)}_${Math.round(nose.position.y / 50)}` : `face_${Date.now()}`;
+                let scaleFactor = smoothScale(rawScaleFactor, personKeyFace);
+
+                // Set base sizes for different face costumes (doubled for triangle distance)
                 let baseWidth, baseHeight;
-                if (costumeType === 'scream' || costumeType === 'grumpy' || costumeType === 'disaster') {
-                    baseWidth = 200;
-                    baseHeight = 200;
+                if (costumeType === 'scream' || costumeType === 'grumpy') {
+                    baseWidth = 400;
+                    baseHeight = 400;
+                } else if (costumeType === 'disaster') {
+                    baseWidth = 480;  // 1.2x larger
+                    baseHeight = 480;
                 }
 
                 size = {
@@ -539,35 +663,34 @@
                     height: baseHeight * scaleFactor
                 };
             } else if (costumeType === 'rick') {
-                const leftShoulder = keypoints.find(kp => kp.part === 'leftShoulder');
-                const rightShoulder = keypoints.find(kp => kp.part === 'rightShoulder');
-                if (leftShoulder && rightShoulder && leftShoulder.score > 0.3 && rightShoulder.score > 0.3) {
-                    // Calculate shoulder distance
-                    const shoulderDistance = Math.sqrt(
-                        Math.pow(rightShoulder.position.x - leftShoulder.position.x, 2) +
-                        Math.pow(rightShoulder.position.y - leftShoulder.position.y, 2)
-                    );
+                const nose = keypoints.find(kp => kp.part === 'nose');
+                const maxDist = getMaxTriangleDistance(keypoints);
 
-                    // Scale costume based on shoulder distance
-                    // Base size at shoulder distance of 100 pixels - make Rick Roll 2x wider
-                    const scaleFactor = Math.max(0.5, Math.min(3.0, shoulderDistance / 100));
-                    const baseWidth = 400;  // Doubled from 200
-                    const baseHeight = 250;
+                if (maxDist !== null && nose) {
+                    // Scale costume based on triangle distance
+                    const rawScaleFactor = Math.max(0.5, Math.min(3.0, maxDist / 50));
+
+                    // Apply scale smoothing
+                    const personKeyRick = `rick_${Math.round(nose.position.x / 50)}_${Math.round(nose.position.y / 50)}`;
+                    const scaleFactor = smoothScale(rawScaleFactor, personKeyRick);
+
+                    const baseWidth = 800;  // 2x for triangle distance
+                    const baseHeight = 500;
 
                     targetKeypoint = {
                         position: {
-                            x: (leftShoulder.position.x + rightShoulder.position.x) / 2,
-                            y: (leftShoulder.position.y + rightShoulder.position.y) / 2
+                            x: nose.position.x,
+                            y: nose.position.y + maxDist  // Offset down based on face size
                         },
-                        score: Math.min(leftShoulder.score, rightShoulder.score),
-                        part: 'shoulders'
+                        score: nose.score,
+                        part: 'noseOffset'
                     };
                     size = {
                         width: baseWidth * scaleFactor,
                         height: baseHeight * scaleFactor
                     };
 
-                    console.log(`Shoulder distance: ${shoulderDistance.toFixed(1)}, Scale factor: ${scaleFactor.toFixed(2)}, Size: ${size.width.toFixed(0)}x${size.height.toFixed(0)}`);
+                    console.log(`Triangle dist: ${maxDist.toFixed(1)}, Scale factor: ${scaleFactor.toFixed(2)}, Size: ${size.width.toFixed(0)}x${size.height.toFixed(0)}`);
                 }
             }
 
