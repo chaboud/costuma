@@ -121,12 +121,15 @@
         let availableCameras = [];
         let isFrontCamera = false;
 
+        let defaultScale = 1.0;
+        const EMA_ALPHA_DEFAULT_SCALE = 0.01;
+
         // EMA smoothing with nearest neighbor matching
         let previousPoses = [];  // Store previous frame poses for matching
         let previousScales = new Map();  // Store scale per person
         let observedScales = [];  // Track all observed scales for rolling average
         const EMA_ALPHA_POSITION = 0.25;  // Position smoothing (25% new, 75% old)
-        const EMA_ALPHA_SCALE = 0.1;    // Scale smoothing (10% new, 90% old)
+        const EMA_ALPHA_SCALE = 0.9;    // Scale smoothing (10% new, 90% old)
         const MATCH_THRESHOLD = 300;     // Max distance (px) for matching across frames
         const MAX_OBSERVED_SCALES = 30;  // Keep last 30 scale observations
 
@@ -526,9 +529,12 @@
                     const maxDist = getMaxTriangleDistance(pose.keypoints);
 
                     let rawScale = 1.0; // Default scale
+                    rawScale = defaultScale;
                     if (maxDist !== null) {
                         // Triangle max distance is roughly 1.2-1.5x IOD, adjust divisor
-                        rawScale = Math.max(0.5, Math.min(3.0, maxDist / 50));
+                        rawScale = Math.max(0.1, Math.min(3.0, maxDist / 50));
+                        defaultScale = (defaultScale * (1.0 - EMA_ALPHA_DEFAULT_SCALE)) + (rawScale * EMA_ALPHA_DEFAULT_SCALE);
+                        console.log(`defaultScale is ${defaultScale}`); 
                     }
 
                     // Apply scale smoothing
@@ -639,9 +645,10 @@
                 const nose = keypoints.find(kp => kp.part === 'nose');
                 const maxDist = getMaxTriangleDistance(keypoints);
                 let rawScaleFactor = 1.0;
+                rawScaleFactor = defaultScale;
 
                 if (maxDist !== null) {
-                    rawScaleFactor = Math.max(0.5, Math.min(3.0, maxDist / 50));
+                    rawScaleFactor = Math.max(0.1, Math.min(3.0, maxDist / 50));
                 }
 
                 // Apply scale smoothing
@@ -671,7 +678,7 @@
 
                 if (maxDist !== null && nose) {
                     // Scale costume based on triangle distance
-                    const rawScaleFactor = Math.max(0.5, Math.min(3.0, maxDist / 50));
+                    const rawScaleFactor = Math.max(0.1, Math.min(3.0, maxDist / 50));
 
                     // Apply scale smoothing
                     const personKeyRick = `rick_${Math.round(nose.position.x / 50)}_${Math.round(nose.position.y / 50)}`;
