@@ -125,9 +125,9 @@
         let previousPoses = [];  // Store previous frame poses for matching
         let previousScales = new Map();  // Store scale per person
         let observedScales = [];  // Track all observed scales for rolling average
-        const EMA_ALPHA_POSITION = 0.3;  // Position smoothing (20% new, 80% old)
-        const EMA_ALPHA_SCALE = 0.15;    // Scale smoothing (5% new, 95% old)
-        const MATCH_THRESHOLD = 200;     // Max distance (px) for matching across frames
+        const EMA_ALPHA_POSITION = 0.25;  // Position smoothing (25% new, 75% old)
+        const EMA_ALPHA_SCALE = 0.1;    // Scale smoothing (10% new, 90% old)
+        const MATCH_THRESHOLD = 300;     // Max distance (px) for matching across frames
         const MAX_OBSERVED_SCALES = 30;  // Keep last 30 scale observations
 
         // Create a hidden canvas for PoseNet input
