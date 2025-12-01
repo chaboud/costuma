@@ -239,3 +239,163 @@ A fully functional AR costume experience that:
 ---
 
 *Built with AI collaboration, debugged with persistence, and deployed with Halloween spirit.* 🎃🤖✨
+
+## Post-Halloween Session: Refinements & New Features
+
+### Phase 8: The Fade-In/Fade-Out Saga (Attempt #1)
+
+**Goal**: Add smooth opacity transitions to handle detection dropouts gracefully
+
+**Initial Implementation**:
+- Added per-person opacity tracking with fade-in/fade-out
+- Fade in at 0.15/frame when detected
+- Fade out at 0.05/frame when lost
+- 20-frame "dwell period" to keep showing people briefly after dropout
+- Applied via `ctx.globalAlpha`
+
+**The Flickering Bug** 🐛:
+User reported: "I'm getting lots of fade outs/ins for things that are adjacent.. Seems wrong."
+
+**Root Cause**: Position-based identity keys!
+```javascript
+// The bug:
+const key = `${Math.round(nose.position.x / 100)}_${Math.round(nose.position.y / 100)}`;
+```
+When a person moved from x=145 to x=155, their key changed from `"1_y"` to `"2_y"`, causing:
+- Old position treated as "lost" → fade out
+- New position treated as "new person" → fade in
+- Result: Constant flickering as you moved
+
+**The Fix**: Stable person IDs
+- Implemented `nextPersonId` counter and `previousPeopleById` Map
+- Each person gets permanent ID (`person_0`, `person_1`, etc.) on first detection
+- IDs preserved through proximity matching (200px threshold)
+- Opacity/tracking data tied to stable ID, not position
+
+**The Popping Bug** 🐛:
+Even after the ID fix, people were "popping out of existence" instead of fading.
+
+**Root Cause**: Two issues:
+1. **Score filter**: `poses.filter(p => p.pose.score > 0.3)` was removing fading people with old/low detection scores
+2. **No scale lower bound**: Scales could drop too low
+
+**The Fix**:
+```javascript
+// Keep poses with good detection OR that are fading out
+const validPoses = posesWithOpacity.filter(p => p.pose.score > 0.3 || p.opacity > 0);
+// Add hard lower bound on scale
+const scale = Math.max(0.3, smoothedScale);
+```
+
+**User Reaction**: "Okay.. this has all been hilarious." 🤦‍♂️
+
+**Outcome**: Git reset. Fade-in/fade-out abandoned (for now).
+
+### Phase 9: Scale Pumping Issues
+
+**Problem**: User noticed "pumping" - rhythmic growing/shrinking of costumes
+
+**Investigation**: The `seenScale` experiment
+User tried implementing a global rolling average:
+```javascript
+let seenScale = 1.0;
+const EMA_SEEN_SCALE = 0.1;
+
+let rawScale = seenScale; // Default to rolling average
+if (maxDist !== null) {
+    rawScale = Math.max(0.2, Math.min(4.0, maxDist / 50));
+    seenScale = (seenScale * (1 - EMA_SEEN_SCALE)) + (rawScale * EMA_SEEN_SCALE);
+}
+```
+
+**Issues Identified**:
+1. **Global, not per-person**: Multiple people at different distances fight over the same average
+2. **Never resets**: Accumulates forever from session start
+3. **Updated mid-loop**: Changes while processing current frame
+
+**Better Alternative Suggested**: Use existing `observedScales` array (last 30 observations) for a windowed average instead of forever-accumulating global.
+
+**Outcome**: Left as experiment, pumping reduced but not eliminated.
+
+### Phase 10: Costume Sizing Refinements
+
+**User Request**: Scale down costumes for better proportions
+
+**Changes Made**:
+- **Grumpy Cat**: 400x400 → 320x320 (0.8x) - `basic-costume.html:657-658`
+- **Disaster Girl**: 480x480 → 384x384 (0.8x) - `basic-costume.html:669-670`
+- **Candy/Scream**: 400x400 → 280x280 (0.7x) - `basic-costume.html:663-664`
+- **Rick Roll**: 800x500 → 720x450 (0.9x) - `basic-costume.html:680-681`
+
+### Phase 11: Adding Derpy
+
+**User**: "Let's add the 'Derpy' character that's in the assets now... Name is actually 'Derpy'"
+
+**Implementation Steps**:
+1. **Added button** (`basic-costume.html:102`):
+   ```html
+   <button class="costume-btn" onclick="setCostume('derpy')">Derpy</button>
+   ```
+
+2. **Added asset loading** (`basic-costume.html:437`):
+   ```javascript
+   derpy: './assets/Derpy.png'
+   ```
+
+3. **Added to face costume check** (`basic-costume.html:624`):
+   ```javascript
+   if (costumeType === 'scream' || costumeType === 'grumpy' || costumeType === 'disaster' || costumeType === 'derpy')
+   ```
+
+4. **Initial sizing**: 320x320 (same as Grumpy Cat)
+
+**Sizing Iterations**:
+- "Let's make Derpy about 1.8x size" → 576x576
+- "Let's actually go for 640..." → **640x640** (final)
+
+### Technical Observations
+
+**What Worked**:
+- Stable person IDs solved the flickering problem elegantly
+- Position-based keys were fundamentally flawed for tracking moving people
+- Simple costume additions (Derpy) were straightforward once plumbing understood
+
+**What Was Challenging**:
+- Opacity/fade systems added significant complexity
+- Multi-person tracking with ephemeral data is hard
+- Scale "pumping" remains partially unsolved
+- Git resets were necessary when complexity spiraled
+
+**Lessons Learned**:
+1. **Identity is hard**: Position-based keys seem logical but fail with movement
+2. **Test edge cases**: Filtering by score can accidentally remove valid data
+3. **Complexity accumulates**: Each feature (smoothing, opacity, multi-person) interacts in unexpected ways
+4. **Sometimes reset and simplify**: Git reset was the right call when things got "fucked"
+5. **Iterate on sizing**: Physical testing revealed costume sizes needed refinement
+
+### Code Quality Notes
+
+From the user's perspective:
+- The fade-in/fade-out attempt was "hilarious" (complexity got out of hand)
+- Scale pumping with global `seenScale` "seems like there is still some pumping, but maaaaybe less?"
+- Final state: Simpler than fade attempt, but scale smoothing could be better
+
+### Session Statistics
+
+**Duration**: ~2 hours of refinement work
+
+**Features Attempted**: 2 (fade-in/fade-out, scale improvements)
+
+**Features Completed**: 1 (new Derpy costume)
+
+**Git Resets**: 1 (after fade-in/fade-out complexity)
+
+**Costume Size Adjustments**: 6 total
+
+**Bugs Fixed**: 2 major (position-based key flickering, fade-out popping)
+
+**Current Status**: Stable but with known scale pumping issue
+
+---
+
+*"Okay.. this has all been hilarious."* - User reflection on the fade-in/fade-out debugging experience
