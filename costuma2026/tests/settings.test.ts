@@ -21,6 +21,10 @@ describe('settings', () => {
     store({ model: 'lite', v: 3 });
     expect(loadSettings().model).toBe('lite');
   });
+  it('whoever wore the Valkyrie wears Violet', () => {
+    store({ costume: 'valkyrie', partyCast: 'valkyrie', v: 3 });
+    expect([loadSettings().costume, loadSettings().partyCast]).toEqual(['violet', 'violet']);
+  });
   it('a first visit gets In Situ with skeletons behind', () => {
     store({}); const s = loadSettings();
     expect([s.effect, s.partyCostumes, s.partyCast]).toEqual(['insitu', 'behind', 'skeleton']);

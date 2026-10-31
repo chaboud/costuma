@@ -48,6 +48,9 @@ export function loadSettings(): Settings {
     if (v < 2) { s.effect = 'insitu'; s.partyCostumes = 'behind'; s.partyCast = 'skeleton'; }
     // v3 (2026-10-31): the full pose model by default (founder: "default to the higher quality tracker")
     if (v < 3) s.model = 'full';
+    // Violet took the Valkyrie's place: whoever wore the Valkyrie wears Violet
+    if (s.costume === 'valkyrie') s.costume = 'violet';
+    if (s.partyCast === 'valkyrie') s.partyCast = 'violet';
     s.v = DEFAULTS.v;
     return s;
   } catch { return { ...DEFAULTS }; }
