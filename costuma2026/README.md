@@ -93,6 +93,18 @@ in `src/main.ts`.
   costumes, then the grade again with the subjects' mask as alpha
   (`party.foreground`, drawn last). The microphone (`audio/beat.ts`, off by default) turns
   bass onsets into `uBeat`. A tap cycles the preset.
+- **Faces** (`src/pose/face.ts`): MediaPipe FaceLandmarker (478 points, 52
+  blendshapes) beside the pose model, loaded in the background after Start,
+  run on the full frame; each face joins the person whose pose nose is
+  nearest; expressions and eye/mouth places EMA-smoothed (the jaw quickly).
+  A face the model cannot read keeps eyes and a mouth from the pose model's
+  own face points. An open mouth opens the costume's jaw (`CharacterDef.face.jaw`,
+  `rig.setJaw`), reaches each costume's `tick` (Skelly's jaw, Jack's lantern),
+  and breathes sparks (`render/breath.ts`). **Googly eyes** (`render/googly.ts`)
+  go on the person's eyes, or over the costume's (`face.eyes` anchors on the
+  head bone); their pupils are physics in eye-radius units — gravity from the
+  floor's up, the eye's own acceleration (smoothed, with a dead zone so a still
+  head does not buzz), rim bounces.
 - **Floor** (`src/pose/ground.ts`): the pyramids stand on a ground plane
   estimated the way phone AR does without depth hardware. Up is the phone's
   gravity (`platform/motion.ts`, iOS asks at Start) when it agrees with the
@@ -169,6 +181,20 @@ MediaPipe infers from the image. Real depth would need a native app or App
 Clip (ARKit's `sceneDepth` and `ARBodyTrackingConfiguration`), or Chrome on
 Android with WebXR depth sensing — both outside "static page, computed on the
 phone" as this app means it.
+
+## More things that bit
+
+- **The picker did not scroll**, three ways at once: the thumbnails were
+  natively draggable, so a drag became an image drag and the browser
+  cancelled the pointer after one move (found by logging the pointer events:
+  `pointercancel` after the first `pointermove`); a mouse wheel never scrolls
+  sideways; and the scroller sat under a `pointer-events: none` parent, which
+  iOS Safari's panning may not see through. `scripts/picker-check.mjs` drags and
+  wheels it. A synthesized touch swipe cannot be judged headless here: it
+  scrolls nothing, not even a plain scrolling div.
+- **A pipe hides the exit code** (Strollzilla learned it too): a check piped
+  through `grep` reported a failing test and the commit and deploy went ahead.
+  Write checks to a log and read `$?`.
 
 ## Open questions
 
