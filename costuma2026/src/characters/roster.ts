@@ -5,7 +5,8 @@ import { JIMOTHY } from './jimothy';
 import { BUILDER } from './builder';
 import { SKELETON } from './skeleton';
 import { PUMPKIN } from './pumpkin';
+import { VIOLET } from './violet';
 import { BASTION, CRIMSON, HOWLER, KESTREL, PLUME, UNISON, VALKYRIE } from './species';
 
-export const ROSTER: CharacterDef[] = [JIMOTHY, BUILDER, SKELETON, PUMPKIN, HOWLER, CRIMSON, VALKYRIE, PLUME, BASTION, KESTREL, UNISON];
+export const ROSTER: CharacterDef[] = [JIMOTHY, BUILDER, SKELETON, PUMPKIN, HOWLER, CRIMSON, VALKYRIE, VIOLET, PLUME, BASTION, KESTREL, UNISON];
 export const byId = (id: string): CharacterDef => ROSTER.find((d) => d.id === id) ?? ROSTER[0]!;

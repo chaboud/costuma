@@ -10,6 +10,9 @@ import type { Track } from '../pose/tracker';
 import type { Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
 import { Ground } from '../pose/ground';
+import { Googly, type EyePlace } from './googly';
+import { Breath, type Mouth } from './breath';
+import { L } from '../pose/landmarks';
 
 interface Wearer {
   trackId: number;
@@ -79,6 +82,11 @@ export class Stage {
   hideWearers = false;
   /** the floor (pose/ground.ts): the pyramid stands on it */
   ground = new Ground();
+  /** face fun: googly eyes, and sparks breathed from open mouths */
+  readonly googly = new Googly();
+  readonly breath = new Breath();
+  googlyOn = false;
+  breathOn = true;
   /** drawn after everything: the cut-out people over the costumes (party.ts foreground) */
   private readonly fg: THREE.Mesh<THREE.PlaneGeometry, THREE.Material>;
   /** party mode's stage lights on the costumes: two coloured rims from behind, pulsing with the beat */
@@ -109,6 +117,7 @@ export class Stage {
     this.scene.add(this.bg);
     this.scene.add(this.fg);
     this.scene.add(this.world);
+    this.world.add(this.googly.group, this.breath.points);
     this.scene.add(this.camera);
     this.light = new CameraLight(this.renderer, this.scene, this.world);
     // behind the people, either side and above: they edge the costumes in colour (no shadows: a rim, not a key)
@@ -297,13 +306,15 @@ export class Stage {
     const kn = rig.neckFit(tr.len.neck / s);
     rig.setNeck(1 + (Math.min(1.25, Math.max(0.45, kn)) - 1) * (def.fit?.head ?? 0.85));
     rig.apply(p, t, def.idle?.tail ?? 0);
+    // the wearer's mouth opens the costume's (face tracking)
+    if (def.face?.jaw) rig.setJaw((tr.face?.jaw ?? 0) * def.face.jaw);
     w.root.position.set(tr.T.x, tr.T.y, tr.T.z);
     w.root.scale.setScalar(s);
     const f0 = tr.presence * Math.max(0, Math.min(1, w.life));
     const fade = f0 * f0 * (3 - 2 * f0);
     if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade; w.fade = fade; }
     w.root.visible = fade > 0.01 && !this.hideWearers;
-    def.tick?.(w.root, t);
+    def.tick?.(w.root, t, tr.face ?? null);
     // the pose into the ring
     w.histHead = (w.histHead + 1) % POSE_HIST;
     const h = w.hist[w.histHead]!;
@@ -352,8 +363,64 @@ export class Stage {
       c.shadow.quaternion.copy(flat);
       c.shadow.scale.set(height * 0.42, height * 0.26, 1);
       c.shadow.visible = c.root.visible;
-      w.def.tick?.(c.root, t - delay / 30);
+      w.def.tick?.(c.root, t - delay / 30, null);
     }
+  }
+
+  /**
+   * Each person's eyes and mouth this frame, for the googly eyes and the sparks: on their costume when it is worn and
+   * says where (CharacterDef.face), else on their own face — the image point pushed out to their head's depth, turned
+   * with their head. Camera space (the world group's frame).
+   */
+  faces(tracks: Track[], K: Intrinsics, dt: number): void {
+    this.world.updateMatrixWorld();
+    const inv = this.world.matrixWorld.clone().invert();
+    const people: { id: number; eyes: EyePlace[] | null; show: number }[] = [];
+    const mouths: Mouth[] = [];
+    for (const tr of tracks) {
+      if (tr.lost && tr.presence <= 0) continue;
+      const f = tr.face;
+      const w = this.wearers.get(tr.id);
+      const worn = w && w.root.visible && !this.hideWearers ? w : null;
+      const head = poseFromLandmarks(tr.world).head;
+      const ax = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).applyQuaternion(head);
+      const nose = new THREE.Vector3(tr.T.x + tr.world[L.nose]!.x, tr.T.y + tr.world[L.nose]!.y, tr.T.z + tr.world[L.nose]!.z);
+      const d = Math.max(0.3, -nose.z);
+      const at = (x: number, y: number, out: number) => new THREE.Vector3(((x * K.w - K.cx) / K.f) * d, ((K.cy - y * K.h) / K.f) * d, -d).addScaledVector(ax(0, 0, 1), out);
+      let eyes: EyePlace[] | null = null;
+      let mouth: { p: THREE.Vector3; dir: THREE.Vector3; scale: number } | null = null;
+      if (worn) {
+        worn.root.updateMatrixWorld(true);
+        const hb = worn.rig.bones.get('head'), hs = worn.def.segs.find((q) => q.name === 'head');
+        const M = hb ? inv.clone().multiply(hb.matrixWorld) : null;
+        const s = worn.root.scale.x;
+        if (M && hs && worn.def.face?.eyes) {
+          const u = new THREE.Vector3(1, 0, 0).transformDirection(M), v = new THREE.Vector3(0, 1, 0).transformDirection(M), n = new THREE.Vector3(0, 0, 1).transformDirection(M);
+          eyes = worn.def.face.eyes.map(([x, y, z, r]) => ({ p: new THREE.Vector3(x - hs.a[0], y - hs.a[1], z - hs.a[2]).applyMatrix4(M), u, v, n, r: r * s * 1.15 }));
+        }
+        const jb = worn.rig.bones.get('jaw'), js = worn.def.segs.find((q) => q.name === 'jaw');
+        if (jb && js && worn.def.face?.jaw) {
+          const J = inv.clone().multiply(jb.matrixWorld);
+          mouth = { p: new THREE.Vector3(js.b[0] - js.a[0], js.b[1] - js.a[1], js.b[2] - js.a[2]).applyMatrix4(J), dir: new THREE.Vector3(0, -0.2, 1).transformDirection(M ?? J), scale: s * 10 };
+        } else if (M && hs) {
+          // no jaw to open: the sparks come from the front of the costume's face, where the wearer's mouth is
+          const n = new THREE.Vector3(0, 0, 1).transformDirection(M);
+          const real = f ? at(f.mouth.x, f.mouth.y, 0) : nose.clone();
+          mouth = { p: real.addScaledVector(n, 0.12 * s * 10), dir: n.clone().add(new THREE.Vector3(0, -0.2, 0)).normalize(), scale: s * 10 };
+        }
+      }
+      if (!eyes && f) {
+        const u = ax(1, 0, 0), v = ax(0, 1, 0), n = ax(0, 0, 1);
+        // the face mesh's eyes are the person's left then right; the googly eye is a third again bigger than the eye
+        eyes = f.eyes.map((e) => ({ p: at(e.x, e.y, 0.02), u, v, n, r: Math.max(0.012, (e.r * K.w / K.f) * d * 1.35) }));
+      }
+      if (!mouth && f) mouth = { p: at(f.mouth.x, f.mouth.y, 0.03), dir: ax(0, -0.2, 1).normalize(), scale: 1 };
+      people.push({ id: tr.id, eyes, show: tr.presence });
+      if (mouth && f) mouths.push({ id: tr.id, ...mouth, open: f.jaw * tr.presence, colors: undefined });
+    }
+    this.googly.update(people, this.ground.n, dt, this.googlyOn);
+    const h = this.renderer.getDrawingBufferSize(new THREE.Vector2()).y;
+    this.breath.update(mouths, dt, h / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)), this.breathOn);
   }
 
   /** the party's rim lights: `on`, their colours along the show's palette, a kick on the beat */

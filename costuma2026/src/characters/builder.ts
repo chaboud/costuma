@@ -368,4 +368,6 @@ export const BUILDER: CharacterDef = {
   tick,
   // rigid boughs: stretched, their frills part at the elbow, so they keep near their own lengths (already a person's)
   fit: { size: 1.0, limb: 0.2 },
+  // googly eyes over his dot eyes, on the face's dome (dress's faceZ, a little proud of it)
+  face: { eyes: (() => { const ft = TIERS.find((t) => t.hole)!, z = tierR(ft, tierF(ft, FACE.y)) - 0.6 + 0.55 * Math.sqrt(Math.max(0, 1 - (0.5 / 1.5) ** 2 - ((17.5 - FACE.y) / 1.32) ** 2)) + 0.12; return [[0.5, 17.5, z, 0.3], [-0.5, 17.5, z, 0.3]] as [number, number, number, number][]; })() },
 };

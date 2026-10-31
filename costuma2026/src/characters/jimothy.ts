@@ -310,6 +310,8 @@ export const JIMOTHY: CharacterDef = {
   // the head floats off the face. limb: halfway, so his short arms reach the wearer's forearms and his feet hover a
   // little above theirs, short and thick still
   fit: { size: 1.05, limb: 0.5 },
+  // googly eyes over his own, in the mask
+  face: { eyes: [[JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36], [-JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36]] },
   idle: { tail: 0.15 },
   // 84 and eight layers keep body and coat under 150k triangles (88 was 156k)
   res: 84,

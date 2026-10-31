@@ -20,8 +20,14 @@ export interface Settings {
   partyCostumes: 'off' | 'behind' | 'on';
   /** listen to the music (the microphone) for the beat; never on by default — it asks for the mic */
   music: boolean;
+  /** face tracking (mouths, eyes): a second model, ~4 MB, a few ms a frame */
+  faces: boolean;
+  /** googly eyes on everyone (or their costumes) */
+  googly: boolean;
+  /** open mouths breathe sparks */
+  breath: boolean;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'pop', partyCostumes: 'off', music: false };
+export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'pop', partyCostumes: 'off', music: false, faces: true, googly: false, breath: true };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {

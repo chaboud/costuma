@@ -39,6 +39,7 @@ export const CRIMSON: CharacterDef = {
     }
   },
   fit: { size: 1.08, limb: 0.7 },
+  face: { eyes: [[0.46, 17.12, 1.35, 0.32], [-0.46, 17.12, 1.35, 0.32]] },
 };
 
 export const VALKYRIE: CharacterDef = {
@@ -80,6 +81,7 @@ export const HOWLER: CharacterDef = {
   },
   fit: { size: 1.1, limb: 0.6 },
   idle: { tail: 0.25 },
+  face: { jaw: 0.45, eyes: [[WOLF_EYES[0], WOLF_EYES[1], WOLF_EYES[2] + 0.12, 0.3], [-WOLF_EYES[0], WOLF_EYES[1], WOLF_EYES[2] + 0.12, 0.3]] },
 };
 
 export const PLUME: CharacterDef = {
@@ -98,6 +100,7 @@ export const PLUME: CharacterDef = {
   },
   fit: { size: 1.12, limb: 0.5 },
   idle: { tail: 0.15 },
+  face: { jaw: 0.4, eyes: [[PLUME_EYES[0], PLUME_EYES[1], PLUME_EYES[2] + 0.45, 0.5], [-PLUME_EYES[0], PLUME_EYES[1], PLUME_EYES[2] + 0.45, 0.5]] },
 };
 
 function mechDress(kind: 'bastion' | 'kestrel' | 'unison', glow: number) {
@@ -136,6 +139,7 @@ export const BASTION: CharacterDef = {
     surface: 'armour', weights: 'rigid', capture: capture({ mech: true }) },
   dress: mechDress('bastion', 0x8fe8ff),
   fit: { size: 1.0, limb: 0.6 },
+  face: { eyes: [[0.4, 17.12, 1.5, 0.28], [-0.4, 17.12, 1.5, 0.28]] },
 };
 
 export const KESTREL: CharacterDef = {
@@ -145,6 +149,7 @@ export const KESTREL: CharacterDef = {
     surface: 'armour', weights: 'rigid', capture: capture({ mech: true }) },
   dress: mechDress('kestrel', 0xffb040),
   fit: { size: 1.0, limb: 0.6 },
+  face: { eyes: [[0.36, 17.12, 1.56, 0.26], [-0.36, 17.12, 1.56, 0.26]] },
 };
 
 export const UNISON: CharacterDef = {
@@ -154,4 +159,5 @@ export const UNISON: CharacterDef = {
     surface: 'armour', weights: 'rigid', capture: capture({ mech: true }) },
   dress: mechDress('unison', 0x7fe8ff),
   fit: { size: 1.0, limb: 0.6 },
+  face: { eyes: [[0.34, 16.9, 1.72, 0.25], [-0.34, 16.9, 1.72, 0.25]] },
 };

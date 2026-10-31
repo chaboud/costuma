@@ -196,6 +196,11 @@ export class Rig {
     }
   }
 
+  /** open the jaw by `angle` radians about its own x (positive: its tip goes down); call after apply() */
+  setJaw(angle: number): void {
+    this.bones.get('jaw')?.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), angle);
+  }
+
   /** a bone's model-space direction after the last apply (tests) */
   dirOf(name: string): THREE.Vector3 {
     return this.rest.get(name)!.dir.clone().applyQuaternion(this.qm.get(name)!);

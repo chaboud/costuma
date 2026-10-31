@@ -424,7 +424,8 @@ export const SKELETON: CharacterDef = {
   // the skull is drawn a head-and-a-bit wide; the torso fit at 1.04 lets the ribcage cover a chest in a coat. Rigid
   // limbs only stretch a little toward the wearer: further, and every joint opens a visible gap.
   fit: { size: 1.04, limb: 0.3 },
-  tick(root, t) {
+  face: { eyes: [[0.43, 17.02, 1.3, 0.36], [-0.43, 17.02, 1.3, 0.36]] },
+  tick(root, t, face) {
     let e = ECHO.get(root);
     if (!e) {
       // the wearer's own material copies (stage.ts clones them per wearer), found once; a WeakMap, not userData,
@@ -440,7 +441,8 @@ export const SKELETON: CharacterDef = {
     // a clack of the jaw every few seconds: a short chatter, then shut
     if (e.jaw) {
       const ph = t % 4.6;
-      e.jaw.rotation.x = ph < 0.75 ? 0.05 + 0.07 * Math.abs(Math.sin(ph * 25)) : 0.02;
+      // the wearer's mouth when it is read (face tracking); its own clack every few seconds when it is not
+      e.jaw.rotation.x = face && face.jaw > 0.05 ? 0.02 + 0.55 * face.jaw : ph < 0.75 ? 0.05 + 0.07 * Math.abs(Math.sin(ph * 25)) : 0.02;
     }
   },
 };

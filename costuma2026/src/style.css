@@ -23,6 +23,7 @@ button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 .icon { width: 44px; height: 44px; border-radius: 50%; background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: grid; place-items: center; }
 .icon svg { width: 22px; height: 22px; }
 .icon:active, .round:active { transform: scale(0.94); }
+.icon[aria-pressed="true"] { background: var(--pumpkin); color: #1b0d02; }
 
 .modes { position: fixed; left: 50%; top: calc(var(--safe-t) + 64px); transform: translateX(-50%); display: flex; gap: 3px; padding: 3px; border-radius: 999px; background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .modes button { padding: 7px 16px; border-radius: 999px; background: transparent; font-weight: 700; font-size: 14px; color: var(--dim); }
@@ -34,7 +35,8 @@ button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 .toast.on { opacity: 1; }
 
 .bottom { position: fixed; left: 0; right: 0; bottom: 0; padding: 0 0 calc(var(--safe-b) + 10px); pointer-events: none; }
-.bottom > * { pointer-events: auto; }
+/* the picker takes its own touches: a scroller under a pointer-events:none parent may not scroll on iOS Safari */
+.bottom .picker { pointer-events: auto; }
 .shutter { display: flex; justify-content: center; gap: 22px; margin-bottom: 10px; pointer-events: none; }
 .shutter > * { pointer-events: auto; }
 .round { width: 58px; height: 58px; border-radius: 50%; background: rgba(255, 255, 255, 0.92); box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.35); display: grid; place-items: center; color: #222; }
@@ -42,7 +44,14 @@ button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 .round.rec { background: rgba(255, 255, 255, 0.92); color: #e0233a; }
 .round.rec.on { background: #e0233a; color: #fff; animation: pulse 1s infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 9px rgba(224, 35, 58, 0.35); } }
-.picker { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 4px 14px 6px; scrollbar-width: none; }
+.picker { display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; padding: 4px 14px 6px; scrollbar-width: none;
+  touch-action: pan-x; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; cursor: grab;
+  /* the ends fade: there is more to either side */
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%); }
+.picker.dragging { scroll-snap-type: none; cursor: grabbing; }
+/* a thumbnail is not something to drag out: a native image drag cancelled the picker's own drag after one move */
+.picker, .picker * { -webkit-user-select: none; user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; }
 .picker::-webkit-scrollbar { display: none; }
 .card { flex: 0 0 auto; width: 76px; scroll-snap-align: center; background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-radius: 18px; padding: 6px 4px 6px; text-align: center; border: 2px solid transparent; transition: border-color 0.15s, transform 0.15s; }
 .card .thumb { width: 64px; height: 64px; border-radius: 14px; margin: 0 auto 4px; background: radial-gradient(circle at 50% 35%, rgba(255,255,255,0.18), rgba(255,255,255,0.03)); display: grid; place-items: center; overflow: hidden; font-weight: 800; font-size: 22px; color: var(--accent); }

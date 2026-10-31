@@ -6,6 +6,7 @@
 import type { LM } from './landmarks';
 import { L, N_LANDMARKS } from './landmarks';
 import { bodyLengths, solveTranslation, type Intrinsics } from './solve';
+import type { FaceTrack } from './face';
 
 /** `mask`: the person's cut-out (0..1 per pixel, the detection input's size), when asked for */
 export interface Detection { image: LM[]; world: LM[]; mask?: { data: Float32Array; w: number; h: number } }
@@ -24,6 +25,8 @@ export interface Track {
   lost: boolean;
   /** the detection this track took this frame, if any (its mask, in party mode) */
   det: Detection | null;
+  /** the face (pose/face.ts attachFaces): eyes, mouth, expressions */
+  face?: FaceTrack;
 }
 
 export const TUNE = {

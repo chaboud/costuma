@@ -40,7 +40,10 @@ const built = buildCharacter(def, res);
 const rig = new Rig(def.segs, built.bones);
 const pose = demoPose(q.get('pose') ?? 'rest');
 rig.apply(pose, 0.6, def.idle?.tail ?? 0);
-def.tick?.(built.root, Number(q.get("t") ?? 0.6));
+// ?jaw=0..1: the mouth opened that far (face tracking's jawOpen), at the character's own full angle
+const jaw = Number(q.get('jaw') ?? 0);
+if (jaw > 0) rig.setJaw(jaw * (def.face?.jaw ?? 0.4));
+def.tick?.(built.root, Number(q.get("t") ?? 0.6), jaw > 0 ? { jaw, blinkL: 0, blinkR: 0, smile: 0, pucker: 0, browUp: 0 } : null);
 // standing: the root at the rest hip height, so the feet are near the floor in the rest pose
 const s = 0.1;
 built.root.scale.setScalar(s);

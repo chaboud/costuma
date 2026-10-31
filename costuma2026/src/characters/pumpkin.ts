@@ -490,9 +490,11 @@ export const PUMPKIN: CharacterDef = {
   dress,
   // the stuffed clothes run a little larger than the wearer; the skinned body stretches, so limbs follow the wearer's
   fit: { size: 1.08, limb: 0.6 },
+  // googly eyes over the carved triangles, on the pumpkin's front
+  face: { eyes: [[0.66, 17.75, 2.02, 0.38], [-0.66, 17.75, 2.02, 0.38]] },
   // the box is shorter than the hero's (the head is a mesh), so 76 gives the hero's 88 cells up the body
   res: 76,
-  tick(root, t) {
+  tick(root, t, face) {
     let e = LIT.get(root);
     if (!e) {
       // the wearer's own material copies (stage.ts clones them per wearer); a WeakMap, not userData, which is cloned
@@ -508,7 +510,8 @@ export const PUMPKIN: CharacterDef = {
     const f = 0.5 * Math.sin(t * 1.7) + 0.3 * Math.sin(t * 7.9 + 1.3) + 0.22 * Math.sin(t * 13.3 + 0.4) + 0.15 * Math.sin(t * 23.7 + 2.2);
     const gutter = Math.max(0, Math.sin(t * 0.83 + 0.5) - 0.92) * 6;
     // the shell's glow peaks near 1 so the tone mapper's shoulder does not flatten the flicker away
-    const k = Math.max(0.35, 1 + 0.36 * f - gutter);
+    // an open mouth fans the flame: the whole lantern flares
+    const k = Math.max(0.35, 1 + 0.36 * f - gutter) * (1 + 1.3 * (face?.jaw ?? 0));
     for (const m of e.shell) m.emissiveIntensity = k;
     for (const m of e.core) m.emissiveIntensity = 2.4 * k;
     if (e.flame) { e.flame.scale.set(1 - 0.08 * f, k * (1 + 0.12 * Math.sin(t * 17.0)), 1 - 0.08 * f); e.flame.rotation.z = 0.12 * Math.sin(t * 5.3); }

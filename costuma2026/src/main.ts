@@ -12,6 +12,7 @@ import { BG_VERT, Stage } from './render/stage';
 import { PRESETS, Party } from './render/party';
 import { Beat } from './audio/beat';
 import { Motion } from './platform/motion';
+import { FaceTracker, attachFaces, type FaceDet } from './pose/face';
 import { LIGHT_TUNE } from './render/envlight';
 import { ROSTER, byId } from './characters/roster';
 import { loadSettings, saveSettings, type Settings } from './settings';
@@ -40,8 +41,11 @@ stage.opts.size = settings.size; stage.opts.shadows = settings.shadows; stage.op
 const party = new Party(stage.bgUniforms, BG_VERT);
 const beat = new Beat();
 const motion = new Motion();
+let faceTracker: FaceTracker | null = null;
+let lastFaceNow = -1;
 if (q.get('scene') === 'party' || q.get('scene') === 'costume') settings.scene = q.get('scene') as Settings['scene'];
 if (q.get('fx')) settings.effect = q.get('fx')!;
+if (q.get('googly')) settings.googly = q.get('googly') === '1';
 if (q.get('pc')) settings.partyCostumes = q.get('pc') === 'behind' ? 'behind' : q.get('pc') === '1' || q.get('pc') === 'on' ? 'on' : 'off';
 party.preset = PRESETS.find((p) => p.id === settings.effect) ?? PRESETS[0]!;
 const camera = new Camera(video, (q.get('facing') as 'user' | 'environment' | null) ?? undefined);
@@ -120,6 +124,7 @@ function buildPicker(): void {
     else {
       const img = new Image();
       img.alt = '';
+      img.draggable = false;
       img.onerror = () => { img.remove(); th.textContent = name.slice(0, 1); };
       img.src = thumbUrl(id);
       th.appendChild(img);
@@ -131,12 +136,38 @@ function buildPicker(): void {
   for (const d of ROSTER) card(d.id, d.name);
   markPicker();
 }
+/**
+ * The picker scrolls three ways: the browser's own pan (touch), a drag (a finger where the browser's pan does not take,
+ * or a mouse), and a mouse wheel turned into sideways. A drag that moved is not a tap: the card under it is not chosen.
+ */
+function scrollablePicker(el: HTMLElement): void {
+  let down: { x: number; left: number; id: number } | null = null, moved = false;
+  el.addEventListener('pointerdown', (e) => { down = { x: e.clientX, left: el.scrollLeft, id: e.pointerId }; moved = false; });
+  el.addEventListener('dragstart', (e) => e.preventDefault());
+  el.addEventListener('pointermove', (e) => {
+    if (!down || e.pointerId !== down.id) return;
+    const dx = e.clientX - down.x;
+    if (!moved && Math.abs(dx) > 6) { moved = true; el.classList.add('dragging'); }
+    if (moved) el.scrollLeft = down.left - dx;
+  });
+  const up = () => { down = null; el.classList.remove('dragging'); };
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up); // the browser's own pan took over: it scrolls, we stop
+  el.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+  el.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    el.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
+}
+
 function markPicker(): void {
   for (const b of $('picker').querySelectorAll<HTMLButtonElement>('.card')) {
     const on = settings.scene === 'party' ? b.dataset.id === settings.effect : settings.mode === 'mix' ? b.dataset.id === 'mix' : b.dataset.id === settings.costume;
     b.classList.toggle('on', on);
     b.setAttribute('aria-selected', String(on));
-    if (on) b.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    // centre the chosen card by scrolling the picker alone (scrollIntoView can move the page and its ancestors too)
+    if (on) { const p = $('picker'); p.scrollTo({ left: b.offsetLeft - (p.clientWidth - b.offsetWidth) / 2, behavior: 'smooth' }); }
   }
 }
 function choose(id: string): void {
@@ -242,7 +273,7 @@ function buildSettings(): void {
     i.oninput = () => { set(Number(i.value)); persist(); };
     return i;
   };
-  row(settings.scene === 'party' ? 'Subjects' : 'People', settings.scene === 'party' ? 'How many people to cut out (the nearest)' : 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); }));
+  row(settings.scene === 'party' ? 'Subjects' : 'People', settings.scene === 'party' ? 'How many people to cut out (the nearest)' : 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); void faceTracker?.setFaces(v); }));
   row('Costume size', 'Bigger hides more of the person', range(0.8, 1.5, 0.01, () => settings.size, (v) => { settings.size = v; stage.opts.size = v; }));
   row('Pose model', 'Accurate is steadier, slower to load and run', seg<'lite' | 'full'>([['lite', 'Fast'], ['full', 'Accurate']], () => settings.model, (v) => { settings.model = v; void reloadDetector(); }));
   row('Light from the camera', 'The costume is lit by the room it stands in', sw(() => settings.envLight, (v) => { settings.envLight = v; stage.opts.envLight = v; }));
@@ -254,6 +285,8 @@ function buildSettings(): void {
     else beat.stop();
   }));
   row('Costumes in party mode', 'Behind you: you stay yourself, a pyramid of your costume dances behind you', seg<Settings['partyCostumes']>([['off', 'Off'], ['behind', 'Behind'], ['on', 'On you']], () => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
+  row('Face tracking', 'Mouths open costumes and breathe sparks; googly eyes find your eyes', sw(() => settings.faces, (v) => { settings.faces = v; if (v) void loadFaces(); }));
+  row('Mouth magic', 'Open your mouth: sparks', sw(() => settings.breath, (v) => { settings.breath = v; }));
   row('Show the skeleton', 'What the pose tracker sees', sw(() => settings.debug, (v) => { settings.debug = v; }));
 }
 
@@ -369,6 +402,15 @@ function loop(now: number): void {
     try { dets = detector.detect(detectionInput(), now); } catch (e) { console.error(e); }
   }
   if (dets) tracker.update(dets.slice(0, settings.people), now, K);
+  // faces on the frame the bodies came from (the full frame: a face is small); joined to the people just tracked
+  if (dets) {
+    let faces: FaceDet[] | null = null;
+    if (faceTracker && settings.faces && !SYNTH) { try { faces = faceTracker.detect(video, now); } catch (e) { console.error(e); } }
+    attachFaces(tracker.tracks, faces, K.w / K.h, now, lastFaceNow < 0 ? 1 / 30 : Math.min(0.25, (now - lastFaceNow) / 1000));
+    lastFaceNow = now;
+    // headless runs open the mouths by hand (?jaw=0..1)
+    if (SYNTH && q.get('jaw')) for (const t of tracker.tracks) if (t.face) t.face.jaw = Number(q.get('jaw'));
+  }
   stage.ground.update(tracker.tracks, SYNTH ? null : motion.upInCamera(camera.facing), Math.min(0.25, (now - lastNow) / 1000));
   const costumed = settings.scene === 'costume' || settings.partyCostumes !== 'off';
   if (costumed) for (const t of tracker.tracks) ensureBuilt(castOf(t.id), true);
@@ -384,6 +426,9 @@ function loop(now: number): void {
   party.clones = !stage.pyramid;
   stage.stageLights(settings.scene === 'party', tSec, beat.env);
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
+  stage.googlyOn = settings.googly && settings.faces;
+  stage.breathOn = settings.breath && settings.faces;
+  stage.faces(tracker.tracks, K, dt);
   beat.update(dt, now);
   if (settings.scene === 'party') {
     party.subjects = settings.people;
@@ -466,7 +511,7 @@ function readout(): void {
   const K = intrinsics();
   el.textContent = [
     `build ${__BUILD__}`,
-    `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model})`,
+    `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'}`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `people ${tracker.tracks.filter((t) => !t.lost).length} · dressed ${stage.count}`,
     `pixels ×${stage.opts.pixelRatio.toFixed(2)} · shadows ${stage.opts.shadows ? 'on' : 'off'}`,
@@ -484,6 +529,13 @@ async function reloadDetector(): Promise<void> {
   detector = d;
   old?.close();
   toast(settings.model === 'full' ? 'Accurate pose model' : 'Fast pose model', 1000);
+}
+
+/** the face model, in the background after Start: faces join in when it is ready, the start waits for nothing */
+async function loadFaces(): Promise<void> {
+  if (faceTracker || SYNTH || !settings.faces) return;
+  const f = new FaceTracker();
+  try { await f.load(settings.people); faceTracker = f; } catch (e) { console.warn('face model failed', e); }
 }
 
 /** a stand-in room for camera-free test runs: a dim wall, a bright window to the left, a floor */
@@ -529,8 +581,9 @@ async function start(): Promise<void> {
     await new Promise((r) => setTimeout(r, 30));
     const first = settings.mode === 'one' ? settings.costume : ROSTER[0]!.id;
     await stage.prepare(first, true);
-    // the rest in the background, in picker order
+    // the rest in the background, in picker order; the face model too
     for (const d of ROSTER) void stage.prepare(d.id);
+    void loadFaces();
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
     setScene(settings.scene);
@@ -547,6 +600,15 @@ async function start(): Promise<void> {
 }
 
 function boot(): void {
+  $('btn-googly').innerHTML = ICONS.googly;
+  const markGoogly = () => $('btn-googly').setAttribute('aria-pressed', String(settings.googly));
+  markGoogly();
+  $('btn-googly').onclick = () => {
+    settings.googly = !settings.googly;
+    if (settings.googly && !settings.faces) { settings.faces = true; void loadFaces(); }
+    persist(); markGoogly();
+    toast(settings.googly ? 'Googly eyes' : 'No googly eyes', 800);
+  };
   $('btn-qr').innerHTML = ICONS.qr; $('btn-flip').innerHTML = ICONS.flip; $('btn-gear').innerHTML = ICONS.gear;
   $('btn-snap').innerHTML = ICONS.camera; $('btn-rec').innerHTML = ICONS.rec;
   $('btn-start').onclick = () => void start();
@@ -563,6 +625,7 @@ function boot(): void {
   const cast = $('start-cast');
   for (const d of ROSTER.slice(0, 6)) { const i = new Image(); i.src = thumbUrl(d.id); i.alt = d.name; i.onerror = () => i.remove(); cast.appendChild(i); }
   buildPicker();
+  scrollablePicker($('picker'));
   requestAnimationFrame(loop);
   const w = window as unknown as { __costuma: unknown };
   w.__costuma = { stage, tracker, settings, start, choose, party, beat, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, LIGHT_TUNE };

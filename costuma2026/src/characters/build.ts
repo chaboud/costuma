@@ -66,8 +66,17 @@ export interface CharacterDef {
    * per-frame motion of the costume's own (lights twinkling, a flame flickering): called on each worn instance with the
    * instance's root (find parts by name) and seconds since start. Cheap, and never allocate in it.
    */
-  tick?: (root: THREE.Object3D, t: number) => void;
+  tick?: (root: THREE.Object3D, t: number, face?: FaceState | null) => void;
+  /**
+   * How the wearer's face moves the costume (face tracking): `jaw` the angle in radians its `jaw` bone opens about its
+   * own x at a fully open mouth (positive opens: the bone's tip goes down); `eyes` where googly eyes are glued on, as
+   * [x, y, z, radius] in model coordinates on the head bone (its two eyes, the character's left first).
+   */
+  face?: { jaw?: number; eyes?: [number, number, number, number][] };
 }
+
+/** the wearer's face this frame, 0..1 each (MediaPipe's blendshapes, smoothed): for jaws, eyelids, mouths in ticks */
+export interface FaceState { jaw: number; blinkL: number; blinkR: number; smile: number; pucker: number; browUp: number }
 
 export interface Built {
   def: CharacterDef;
