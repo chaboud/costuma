@@ -61,6 +61,8 @@ let mixNext = 0;
 function castOf(trackId: number): string {
   const o = overrides.get(trackId);
   if (o) return o;
+  // the party has its own dancers (Skelly unless chosen), whoever you are in costume mode
+  if (settings.scene === 'party') return ROSTER.some((d) => d.id === settings.partyCast) ? settings.partyCast : 'skeleton';
   if (settings.mode === 'one') return settings.costume;
   let m = mixed.get(trackId);
   if (!m) {
@@ -284,6 +286,14 @@ function buildSettings(): void {
     if (v) beat.start().then(() => toast('Listening for the beat', 1200)).catch(() => { settings.music = false; persist(); toast('No microphone'); });
     else beat.stop();
   }));
+  {
+    const sel = document.createElement('select');
+    sel.className = 'pick';
+    for (const d of ROSTER) { const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; sel.appendChild(o); }
+    sel.value = settings.partyCast;
+    sel.onchange = () => { settings.partyCast = sel.value; overrides.clear(); persist(); ensureBuilt(sel.value); };
+    row('Party dancers', 'Who dances behind (or as) you in party mode', sel);
+  }
   row('Costumes in party mode', 'Behind you: you stay yourself, a pyramid of your costume dances behind you', seg<Settings['partyCostumes']>([['off', 'Off'], ['behind', 'Behind'], ['on', 'On you']], () => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
   row('Face tracking', 'Mouths open costumes and breathe sparks; googly eyes find your eyes', sw(() => settings.faces, (v) => { settings.faces = v; if (v) void loadFaces(); }));
   row('Mouth magic', 'Open your mouth: sparks', sw(() => settings.breath, (v) => { settings.breath = v; }));
@@ -424,7 +434,16 @@ function loop(now: number): void {
   stage.hideWearers = behind;
   stage.setForeground(behind ? party.foreground : null);
   party.clones = !stage.pyramid;
-  stage.stageLights(settings.scene === 'party', tSec, beat.env);
+  stage.stageLights(settings.scene === 'party' && party.preset.id !== 'insitu', tSec, beat.env);
+  // In Situ's club lights: laid out on the floor round the nearest person, real over the costumes, projected for the plate
+  {
+    const near = tracker.tracks.filter((t) => !t.lost).sort((a, b) => b.T.z - a.T.z)[0];
+    const situ = settings.scene === 'party' && party.preset.id === 'insitu';
+    const spots = stage.stageSpots(situ, tSec, beat.env, K, near ? new THREE.Vector3(near.T.x, near.T.y, near.T.z) : null);
+    party.setSpots(spots, situ ? 1 : 0);
+    stage.light.realism = situ;
+  }
+  stage.setGrain(true, tSec);
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
   stage.googlyOn = settings.googly && settings.faces;
   stage.breathOn = settings.breath && settings.faces;

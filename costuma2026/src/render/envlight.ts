@@ -57,6 +57,8 @@ export class CameraLight {
   mean = 0;
   share = 0;
   gain = 1;
+  /** In Situ: light the costumes as the room is lit (no lifting a dark room; the club's spots give the punch) */
+  realism = false;
   dir = new THREE.Vector3(0, 1, 1).normalize();
   private target = new THREE.Vector3(0, 0, -2);
 
@@ -101,7 +103,7 @@ export class CameraLight {
       mean += 0.2126 * r + 0.7152 * g + 0.0722 * b;
     }
     this.mean = mean / (SW * SH);
-    this.gain = Math.min(LIGHT_TUNE.maxGain, Math.max(1, LIGHT_TUNE.targetMean / Math.max(this.mean, 1e-3)));
+    this.gain = Math.min(this.realism ? 1.25 : LIGHT_TUNE.maxGain, Math.max(1, LIGHT_TUNE.targetMean / Math.max(this.mean, 1e-3)));
     const gain = this.gain;
     // the blurred copy: box means
     this.blur.fill(0);
@@ -164,7 +166,8 @@ export class CameraLight {
     const ki = LIGHT_TUNE.key * this.share * (tot / (EW * EH)) * 2;
     this.keyI += (ki - this.keyI) * (this.keyI === 0 ? 1 : 0.25);
     this.key.intensity = this.keyI;
-    this.fill.intensity = LIGHT_TUNE.fill;
+    // the neutral fill is for dark streets only: in a bright room it lifts the costumes to milk
+    this.fill.intensity = LIGHT_TUNE.fill * (this.realism ? 0.25 : 1) * Math.min(1, Math.max(0, 1 - this.mean / 0.22));
     this.key.position.copy(this.target).addScaledVector(this.dir, 4);
   }
 

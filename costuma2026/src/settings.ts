@@ -26,17 +26,27 @@ export interface Settings {
   googly: boolean;
   /** open mouths breathe sparks */
   breath: boolean;
+  /** who dances in party mode (behind you, or on you): Skelly unless chosen otherwise */
+  partyCast: string;
+  /** the settings' own version: a new default that must reach people who already have settings bumps it */
+  v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'pop', partyCostumes: 'off', music: false, faces: true, googly: false, breath: true };
+export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', v: 2 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
   try {
-    const s = { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Settings>) };
+    const stored = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Settings>;
+    // the version is the stored one: merged over the defaults, old settings would read as current and never migrate
+    const v = stored.v ?? (Object.keys(stored).length ? 1 : DEFAULTS.v);
+    const s = { ...DEFAULTS, ...stored };
     // it was a yes/no before it had a third answer
     const pc = s.partyCostumes as unknown;
     if (pc === true) s.partyCostumes = 'on';
     else if (pc !== 'behind' && pc !== 'on') s.partyCostumes = 'off';
+    // v2 (2026-10-31): party mode's default is In Situ, with skeletons dancing behind you — for everyone, once
+    if (v < 2) { s.effect = 'insitu'; s.partyCostumes = 'behind'; s.partyCast = 'skeleton'; }
+    s.v = DEFAULTS.v;
     return s;
   } catch { return { ...DEFAULTS }; }
 }

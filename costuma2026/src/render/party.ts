@@ -29,6 +29,7 @@ export interface Preset {
 }
 
 export const PRESETS: Preset[] = [
+  { id: 'insitu', name: 'In Situ', code: 12, swatch: 'radial-gradient(ellipse at 30% 85%, rgba(255,80,190,0.9), transparent 35%), radial-gradient(ellipse at 72% 80%, rgba(80,220,255,0.9), transparent 35%), linear-gradient(160deg, transparent 40%, rgba(255,240,220,0.35) 50%, transparent 60%), #2a2430' },
   { id: 'pyramid', name: 'Pyramid', code: 8, swatch: 'conic-gradient(from 150deg at 50% 18%, transparent 0 60deg, #ff2d95 60deg 64deg, #b6ff2e 64deg 68deg, transparent 68deg), linear-gradient(#2a0f3d, #08050f)' },
   { id: 'tunnel', name: 'Tunnel', code: 9, swatch: 'repeating-radial-gradient(circle, #ff2d95 0 3px, #12071f 3px 8px, #2ee6ff 8px 11px, #12071f 11px 16px)' },
   { id: 'lasers', name: 'Lasers', code: 10, swatch: 'linear-gradient(115deg, transparent 46%, #b6ff2e 48%, transparent 50%), linear-gradient(65deg, transparent 46%, #ff2d95 48%, transparent 50%), linear-gradient(90deg, transparent 47%, #2ee6ff 49%, transparent 51%), #07040d' },
@@ -92,6 +93,10 @@ const SCENE_FRAG = /* glsl */ `
   uniform vec4 uOn, uBox;
   // the pyramid, laid out on the floor (pose/ground.ts) and projected: each clone's feet in uv, its scale against the
   // subject, its delay in frames; back to front. uFoot: the subject's own feet in uv; uFootW: their width in uv
+  // In Situ's spotlights, projected: the source, the floor pool's centre (uv), the pool's radii (uv), the colour
+  uniform vec2 uSpotL[3], uSpotP[3], uSpotR[3];
+  uniform vec3 uSpotC[3];
+  uniform float uSpotK;
   uniform vec4 uClone[9];
   uniform int uCloneN;
   uniform vec2 uFoot;
@@ -247,7 +252,32 @@ const SCENE_FRAG = /* glsl */ `
       bg = clamp(k, 0.0, 1.5) * 0.8 * mix(vec3(1.0), neon(r * 0.8 - t * 0.1) * 1.4, 0.45);
       fg = vid + hue * rim * 1.3;
     }
-    if (uPreset != 1 && uPreset != 2 && uPreset != 0) bg += halo * (uPreset == 4 ? 0.0 : 1.0);
+    if (uPreset == 12) {
+      // in situ: the room as the camera saw it, a club's lights added — beams through haze down to pools on the floor
+      // (the same lights stand in 3D over the costumes: render/stage.ts stageSpots); the people in the pools are lit
+      vec3 add = vec3(0.0), pools = vec3(0.0);
+      float haze = 0.55 + 0.45 * noise(sp * 4.0 + vec2(t * 0.12, -t * 0.07));
+      for (int i = 0; i < 3; i++) {
+        vec2 Ls = uSpotL[i], Ps = uSpotP[i], R = max(uSpotR[i], vec2(0.004));
+        vec2 e = (uv - Ps) / R;
+        float pool = exp(-dot(e, e) * 1.6);
+        // the beam: a cone from the source to the pool, widening, brightest near the floor, soft-edged
+        vec2 ax = Ps - Ls; float L2 = max(dot(ax, ax), 1e-5);
+        float k = clamp(dot(uv - Ls, ax) / L2, 0.0, 1.15);
+        vec2 q = Ls + ax * k;
+        float wdt = mix(0.006, R.x * 0.95, k);
+        float across = length((uv - q) * vec2(uAspect, 1.0)) / (wdt * uAspect);
+        float beam = exp(-across * across * 2.2) * smoothstep(0.0, 0.25, k) * (k < 1.0 ? 1.0 : exp(-(k - 1.0) * 12.0));
+        add += uSpotC[i] * beam * haze * 0.4;
+        pools += uSpotC[i] * pool;
+      }
+      add *= uSpotK; pools *= uSpotK;
+      // the room a touch darker, so the lights read; floating motes catch the beams
+      float mote = step(0.996, hash(floor(sp * 220.0) + floor(t * 3.0))) * 0.8;
+      bg = vid * 0.8 * (1.0 + pools * 1.4) + add * (1.0 + mote * 3.0) + pools * 0.07;
+      fg = vid * (1.0 + pools * 0.9) + add * 0.15;
+    }
+    if (uPreset != 1 && uPreset != 2 && uPreset != 0 && uPreset != 12) bg += halo * (uPreset == 4 ? 0.0 : 1.0);
     gl_FragColor = vec4(mix(bg, fg, subj), 1.0);
   }`;
 
@@ -283,22 +313,18 @@ const FINAL_FRAG = /* glsl */ `
   uniform sampler2D uMask;
   uniform vec4 uOn;
   #endif
-  uniform float uTime, uBeat, uFlash;
+  uniform float uTime, uBeat, uFlash, uCA, uBloomK;
   uniform vec2 uRes;
-  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   void main() {
     vec2 d = vUv - 0.5;
-    float ca = 0.006 + 0.012 * uBeat;
+    float ca = (0.006 + 0.012 * uBeat) * uCA;
     vec3 c = vec3(texture2D(uScene, vUv + d * ca).r, texture2D(uScene, vUv).g, texture2D(uScene, vUv - d * ca).b);
     if (uMix < 1.0) c = mix(texture2D(uOld, vUv).rgb, c, uMix);
-    c += texture2D(uBloom1, vUv).rgb * 0.75 + texture2D(uBloom2, vUv).rgb * 0.9;
-    vec2 v = d * vec2(1.0, 1.15);
-    c *= 1.0 - 0.55 * dot(v, v);
+    c += (texture2D(uBloom1, vUv).rgb * 0.75 + texture2D(uBloom2, vUv).rgb * 0.9) * uBloomK;
     c += uBeat * uFlash * 0.07;
     // the highlights roll off instead of clipping: neon stays a colour
     vec3 hi = max(c - 0.8, 0.0);
     c = min(c, 0.8) + 0.2 * (1.0 - exp(-hi * 3.0)) + hi * 0.05;
-    c += (hash(vUv * uRes + fract(uTime * 7.31) * 100.0) - 0.5) * 0.04;
     #ifdef FG
     // the subjects again, over whatever the 3D scene drew: the same grade, only where they stand
     vec4 m = smoothstep(0.3, 0.7, texture2D(uMask, vec2(vUv.x, 1.0 - vUv.y))) * uOn;
@@ -333,6 +359,15 @@ export class Party {
   subjects = 2;
   /** the bass's envelope, 0..1 (audio/beat.ts); 0 without the microphone */
   beat = 0;
+  /** In Situ's lights as the stage laid them out (render/stage.ts stageSpots), projected */
+  setSpots(spots: { L: THREE.Vector2; P: THREE.Vector2; R: THREE.Vector2; C: THREE.Color }[], k: number): void {
+    const u = this.scene.uniforms;
+    spots.forEach((s, i) => {
+      (u.uSpotL!.value as THREE.Vector2[])[i]!.copy(s.L); (u.uSpotP!.value as THREE.Vector2[])[i]!.copy(s.P);
+      (u.uSpotR!.value as THREE.Vector2[])[i]!.copy(s.R); (u.uSpotC!.value as THREE.Color[])[i]!.copy(s.C);
+    });
+    u.uSpotK!.value = k;
+  }
   /** the pyramid clones the people (off when the costumes make their own pyramid in 3D) */
   clones = true;
   private maskTex: THREE.DataTexture;
@@ -379,7 +414,9 @@ export class Party {
       ...common, vertexShader: QUAD_VERT, fragmentShader: SCENE_FRAG,
       uniforms: {
         uTex: shared.uTex, uMask: { value: this.maskTex }, uFx: { value: this.fxTex }, uPrev: { value: null }, uHist: { value: null },
-        uHead: { value: 0 }, uClones: { value: 1 }, uClone: { value: Array.from({ length: 9 }, () => new THREE.Vector4()) }, uCloneN: { value: 0 },
+        uHead: { value: 0 }, uClones: { value: 1 },
+        uSpotL: { value: [0, 1, 2].map(() => new THREE.Vector2(0.5, 1.2)) }, uSpotP: { value: [0, 1, 2].map(() => new THREE.Vector2(0.5, 0.1)) },
+        uSpotR: { value: [0, 1, 2].map(() => new THREE.Vector2(0.1, 0.04)) }, uSpotC: { value: [0, 1, 2].map(() => new THREE.Color(0, 0, 0)) }, uSpotK: { value: 0 }, uClone: { value: Array.from({ length: 9 }, () => new THREE.Vector4()) }, uCloneN: { value: 0 },
         uFoot: { value: new THREE.Vector2(0.5, 0.1) }, uFootW: { value: 0.2 }, uTime: { value: 0 }, uAspect: { value: 1 }, uBeat: { value: 0 }, uLevel: { value: 0 }, uPreset: { value: 0 },
         uOn: { value: this.uOn }, uBox: { value: this.box }, uPal: { value: PALETTES.flat().map((h) => new THREE.Color(h)) },
       },
@@ -392,7 +429,7 @@ export class Party {
         uCrop: shared.uCrop, uMirror: shared.uMirror,
         uScene: { value: null }, uBloom1: { value: null }, uBloom2: { value: null },
         uTime: { value: 0 }, uBeat: { value: 0 }, uFlash: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) },
-        uOld: { value: null }, uMix: { value: 1 },
+        uOld: { value: null }, uMix: { value: 1 }, uCA: { value: 1 }, uBloomK: { value: 1 },
       },
     });
     this.foreground = new THREE.ShaderMaterial({
@@ -423,6 +460,9 @@ export class Party {
     const u = this.scene.uniforms;
     u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code; u.uBeat!.value = this.beat; u.uClones!.value = this.clones ? 1 : 0;
     this.material.uniforms.uTime!.value = t; this.material.uniforms.uBeat!.value = this.beat;
+    // in situ looks like the camera's own picture: barely any fringing, the room's bright parts do not bloom much
+    const situ = this.preset.code === 12;
+    this.material.uniforms.uCA!.value = situ ? 0.25 : 1; this.material.uniforms.uBloomK!.value = situ ? 0.45 : 1;
     const fw = aspect >= 1 ? 160 : Math.max(48, Math.round(160 * aspect)), fh = aspect >= 1 ? Math.max(48, Math.round(160 / aspect)) : 160;
     if (fw !== this.fw || fh !== this.fh) this.resizeFx(fw, fh);
     const live = tracks.filter((k) => k.presence > 0).sort((a, b) => b.len.torso / -b.T.z - a.len.torso / -a.T.z).slice(0, this.subjects);

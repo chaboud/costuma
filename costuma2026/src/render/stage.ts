@@ -7,7 +7,7 @@ import { buildCharacter, type Built, type CharacterDef, type SurfaceArrays } fro
 import { byId } from '../characters/roster';
 import { Rig, poseFromLandmarks } from '../pose/rig';
 import type { Track } from '../pose/tracker';
-import type { Intrinsics } from '../pose/solve';
+import { project, type Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
 import { Ground } from '../pose/ground';
 import { Googly, type EyePlace } from './googly';
@@ -87,6 +87,11 @@ export class Stage {
   readonly breath = new Breath();
   googlyOn = false;
   breathOn = true;
+  /** In Situ's club lights, real lights in the scene (they light the costumes); always present, dark when unused */
+  readonly spots = [0, 1, 2].map(() => new THREE.SpotLight(0xffffff, 0, 0, 0.24, 0.65, 2));
+  /** the last layer: grain and a vignette over the plate, the costumes and the people alike, so the 3D is not cleaner
+   *  than the footage (multiplied in: a framebuffer cannot take a negative) */
+  private readonly grain: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   /** drawn after everything: the cut-out people over the costumes (party.ts foreground) */
   private readonly fg: THREE.Mesh<THREE.PlaneGeometry, THREE.Material>;
   /** party mode's stage lights on the costumes: two coloured rims from behind, pulsing with the beat */
@@ -118,6 +123,25 @@ export class Stage {
     this.scene.add(this.fg);
     this.scene.add(this.world);
     this.world.add(this.googly.group, this.breath.points);
+    for (const sp of this.spots) this.world.add(sp, sp.target);
+    this.grain = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+      vertexShader: 'varying vec2 vUv; void main() { vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: `varying vec2 vUv; uniform float uTime; uniform vec2 uRes;
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        void main() {
+          vec2 d = vUv - 0.5; d.y *= 1.15;
+          float vig = 1.0 - 0.35 * dot(d, d);
+          float n = hash(floor(vUv * uRes) + fract(uTime * 7.31) * 97.0);
+          gl_FragColor = vec4(vec3(vig * (0.965 + 0.035 * n)), 1.0);
+        }`,
+      uniforms: { uTime: { value: 0 }, uRes: { value: new THREE.Vector2(1, 1) } },
+      depthTest: false, depthWrite: false, toneMapped: false, transparent: true,
+      blending: THREE.CustomBlending, blendSrc: THREE.ZeroFactor, blendDst: THREE.SrcColorFactor,
+    }));
+    this.grain.frustumCulled = false;
+    this.grain.renderOrder = 1200;
+    this.grain.visible = false;
+    this.scene.add(this.grain);
     this.scene.add(this.camera);
     this.light = new CameraLight(this.renderer, this.scene, this.world);
     // behind the people, either side and above: they edge the costumes in colour (no shadows: a rim, not a key)
@@ -421,6 +445,43 @@ export class Stage {
     this.googly.update(people, this.ground.n, dt, this.googlyOn);
     const h = this.renderer.getDrawingBufferSize(new THREE.Vector2()).y;
     this.breath.update(mouths, dt, h / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)), this.breathOn);
+  }
+
+  /** the grain-and-vignette layer over everything (party mode) */
+  setGrain(on: boolean, t: number): void {
+    this.grain.visible = on;
+    const u = this.grain.material.uniforms;
+    u.uTime!.value = t;
+    const sz = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    (u.uRes!.value as THREE.Vector2).set(sz.x / 1.5, sz.y / 1.5);
+  }
+
+  /**
+   * In Situ's club lights: three spots hung above and behind the dancers, swinging their pools over the floor between
+   * the subject and the pyramid behind them; colours walk a club's palette, a kick on the beat. Real lights here (they
+   * light the costumes), projected for the scene shader (beams and pools on the plate), so both agree.
+   */
+  stageSpots(on: boolean, t: number, beat: number, K: Intrinsics, anchor: THREE.Vector3 | null): { L: THREE.Vector2; P: THREE.Vector2; R: THREE.Vector2; C: THREE.Color }[] {
+    const g = this.ground, { back, side } = g.axes();
+    const F = g.foot(anchor ?? new THREE.Vector3(0, -0.3, -3));
+    const C = F.clone().addScaledVector(back, 1.1);
+    const pal = [0xffe2c0, 0xff3aa8, 0x3ad8ff];
+    const uv = (p: THREE.Vector3) => { const q = project(p, K); return new THREE.Vector2(q.x, 1 - q.y); };
+    return this.spots.map((sp, i) => {
+      const L = F.clone().addScaledVector(side, (i - 1) * 2.4).addScaledVector(back, 0.6).addScaledVector(g.n, 3.6);
+      const P = C.clone().addScaledVector(side, (i - 1) * 0.9 + 1.2 * Math.sin(t * 0.33 + i * 2.1)).addScaledVector(back, 0.8 * Math.cos(t * 0.27 + i * 1.3));
+      const col = new THREE.Color(pal[i]!);
+      sp.color.copy(col);
+      sp.position.copy(L);
+      sp.target.position.copy(P);
+      sp.target.updateMatrixWorld();
+      // intensity always set, never added or removed (a light that comes and goes recompiles every lit shader)
+      sp.intensity = on ? 38 * (1 + 0.8 * beat) : 0;
+      const r = L.distanceTo(P) * Math.tan(sp.angle) * 0.9;
+      const Pu = uv(P), Lu = L.z < -0.15 ? uv(L) : new THREE.Vector2(Pu.x, 1.4);
+      const R = new THREE.Vector2(Math.abs(uv(P.clone().addScaledVector(side, r)).x - Pu.x), Math.abs(uv(P.clone().addScaledVector(back, r)).y - Pu.y));
+      return { L: Lu, P: Pu, R, C: col.clone().multiplyScalar(1 + 0.8 * beat) };
+    });
   }
 
   /** the party's rim lights: `on`, their colours along the show's palette, a kick on the beat */
