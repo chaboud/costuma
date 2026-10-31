@@ -5,11 +5,12 @@
 //
 // How it is made (the parts that are not the usual SDF body):
 // - **The head is rigid meshes**, polygonised from its own field at a finer grid than the body's (a face at the body's
-//   ~0.2-unit cells is a blob): the skull and upper face on the head bone, the lower jaw on the jaw bone, split along the
-//   mouth line back to the hinge. The cut faces are the mouth's inside (dark, a row of teeth at the front), so an open
+//   ~0.2-unit cells is a blob): the skull and face on the head bone, the chin between the mouth's corners on the jaw
+//   bone, split along the mouth line back to the hinge (`splitHead`). The cut faces are the mouth's inside (dark, a row
+//   of teeth at the front; near the skin they keep its colour and normal, so the shut mouth shows no seam), so an open
 //   mouth (`face.jaw`) opens a dark mouth, and the two fangs hanging from the upper jaw, hidden in the lower lip while it
-//   is shut, show.
-// - **The cape and its collar are parametric sheets**, skinned with weights written per vertex (`skinSheet`), not by
+//   is shut, show. The hairline (a widow's peak) is drawn per fragment, so its V is crisp. Lids blink with the wearer.
+// - **The cape and its collar are parametric sheets**, skinned with weights written per vertex (`setSkin`), not by
 //   distance: its middle hangs from the shoulders on the tail bones (the idle sway), its sides follow the arms — the
 //   upper arm over the shoulder and down to the elbow, the forearm to the hand, fading below the hand to nothing at the
 //   hem — so raised arms spread it as a bat's wings, lining out. One double-sided material: black outside, red inside.
@@ -735,7 +736,9 @@ export const VAMPIRE: CharacterDef = {
   dress,
   fit: { size: 1.06, limb: 0.7 },
   idle: { tail: 0.04 },
-  face: { jaw: 0.42, eyes: [[EYE[0], EYE[1], EYE[2] + 0.12, 0.17], [-EYE[0], EYE[1], EYE[2] + 0.12, 0.17]] },
+  // an open mouth bares the fangs and breathes a blood-red mist; googly eyes over his own
+  face: { jaw: 0.42, eyes: [[EYE[0], EYE[1], EYE[2] + 0.12, 0.17], [-EYE[0], EYE[1], EYE[2] + 0.12, 0.17]],
+    breath: { colors: [0xb00018, 0x6a0010, 0xff2a3a, 0x2a0008], rate: 0.8, speed: 0.6, size: 1.2 } },
   res: 84,
   tick(root, t, face) {
     let e = FOUND.get(root);

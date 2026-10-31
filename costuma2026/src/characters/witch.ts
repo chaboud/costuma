@@ -70,12 +70,11 @@ function witchSDF(x: number, y: number, z: number): number {
 
 /** regions: 0 the dress, 1 green skin, 2 black stockings */
 const DRESS = 0, SKIN = 1, LEG = 2;
-function witchRegion(x: number, y: number, z: number): number {
+function witchRegion(x: number, y: number): number {
   const ax = Math.abs(x);
   if (ax > 2.5 && y < 10.35) return SKIN;
   if (y > 15.3 && ax < 0.6) return SKIN;
   if (y < 10.2 && ax < 2.2) return LEG;
-  void z;
   return DRESS;
 }
 
@@ -208,10 +207,9 @@ function shawlAt(u: number, v: number, o: THREE.Vector3): void {
   const fr = sstep(0.62, 1.0, Math.abs(u)) * sstep(0, 0.55, s);
   o.set(rx * Math.sin(th) * lerp(1, 0.12, fr), y, zc - rz * c + 0.12 * fr);
 }
-function shawlWeights(x: number, y: number, _z: number, u: number, v: number): Influence[] {
+function shawlWeights(x: number, _y: number, _z: number, u: number, v: number): Influence[] {
   const au = Math.abs(u);
   const w = sstep(0.28, 0.5, au) * (1 - sstep(0.72, 0.9, au)) * (v <= SHAWL_V1 ? sstep(0.4, 1, v / SHAWL_V1) : 1) * 0.85;
-  void y;
   return [['spine2', 1 - w], [x >= 0 ? 'armL' : 'armR', w]];
 }
 
@@ -511,7 +509,9 @@ export const WITCH: CharacterDef = {
   },
   dress,
   fit: { size: 1.06, limb: 0.7 },
-  face: { jaw: 0.45, eyes: [[EYE[0], EYE[1], EYE[2] + 0.12, 0.16], [-EYE[0], EYE[1], EYE[2] + 0.12, 0.16]] },
+  // a cackle: the gap-toothed mouth opens and breathes green and violet sparkles
+  face: { jaw: 0.45, eyes: [[EYE[0], EYE[1], EYE[2] + 0.12, 0.16], [-EYE[0], EYE[1], EYE[2] + 0.12, 0.16]],
+    breath: { colors: [0x7cff4a, 0xb060ff, 0xd8ff8a, 0x8a2cff], rate: 1.2, speed: 0.8 } },
   res: 84,
   tick(root, t, face) {
     let e = FOUND.get(root);
