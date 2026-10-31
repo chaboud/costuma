@@ -87,7 +87,11 @@ in `src/main.ts`.
   grade as the background quad (chromatic split, vignette, grain, a highlight
   roll-off). With costumes on, Pyramid clones the costumes in 3D from a ring of
   past poses instead (`stage.ts posePyramid`), and two rim lights edge them in
-  the show's colours. The microphone (`audio/beat.ts`, off by default) turns
+  the show's colours. **Behind you** (settings → Costumes in party mode) keeps
+  the person themselves: the costume pyramid dances behind them and the room
+  behind that — insertion by draw order, no depth: the background quad, the 3D
+  costumes, then the grade again with the subjects' mask as alpha
+  (`party.foreground`, drawn last). The microphone (`audio/beat.ts`, off by default) turns
   bass onsets into `uBeat`. A tap cycles the preset.
 - **Stage** (`src/render/stage.ts`): the video is a full-screen background,
   cover-fitted; a selfie mirrors the whole world group (`scale.x = −1`), not
