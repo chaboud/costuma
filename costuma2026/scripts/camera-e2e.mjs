@@ -20,7 +20,7 @@ const page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('pageerror', e.message));
 page.on('console', (m) => { const t = m.text(); if (m.type() === 'error' || m.type() === 'warning' || /GPU|delegate/i.test(t)) console.log('console', m.type(), t.slice(0, 240)); });
 const C = process.env.C ?? 'crimson';
-await ctx.addInitScript((m) => localStorage.setItem('costuma26.settings', JSON.stringify({ model: m, debug: false, mode: 'one', people: 2 })), process.env.MODEL ?? 'lite');
+await ctx.addInitScript((m) => localStorage.setItem('costuma26.settings', JSON.stringify({ model: m[0], debug: !!m[1], mode: 'one', people: 2 })), [process.env.MODEL ?? 'lite', process.env.DEBUG ?? '']);
 await page.goto(`${server.url}index.html?c=${C}&facing=${process.env.FACING ?? 'environment'}${process.env.EXTRA ?? ''}`);
 await page.click('#btn-start');
 await page.waitForFunction(() => window.__costuma?.started, null, { timeout: 240000 });

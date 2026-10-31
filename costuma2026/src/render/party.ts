@@ -17,6 +17,8 @@
 // With the microphone on (audio/beat.ts) the bass drives `uBeat`: kicks in the feedback, the lasers, the split.
 import * as THREE from 'three';
 import type { Track } from '../pose/tracker';
+import type { Ground } from '../pose/ground';
+import { project, type Intrinsics } from '../pose/solve';
 
 export interface Preset {
   id: string;
@@ -88,6 +90,12 @@ const SCENE_FRAG = /* glsl */ `
   uniform float uHead, uTime, uAspect, uBeat, uLevel, uClones;
   uniform int uPreset;
   uniform vec4 uOn, uBox;
+  // the pyramid, laid out on the floor (pose/ground.ts) and projected: each clone's feet in uv, its scale against the
+  // subject, its delay in frames; back to front. uFoot: the subject's own feet in uv; uFootW: their width in uv
+  uniform vec4 uClone[9];
+  uniform int uCloneN;
+  uniform vec2 uFoot;
+  uniform float uFootW;
   uniform vec3 uPal[16];
   ${COMMON}
 
@@ -181,29 +189,24 @@ const SCENE_FRAG = /* glsl */ `
       bg = vid * 0.1 + L * (0.9 + beat) + fleck * hsv(hash(fc), 0.5, 1.0);
       fg = vid * (0.75 + 0.7 * L);
     } else if (uPreset == 8) {
-      // the dance pyramid: the subjects cloned behind and above themselves, each row smaller and later — a canon
+      // the dance pyramid: the subjects cloned on the floor behind them, row after row, each later — a canon
       float y = uv.y;
       float scan = pow(0.5 + 0.5 * sin(y * 90.0 - t * 5.0), 10.0);
       bg = neon(y * 0.5 - t * 0.07) * (0.06 + 0.22 * scan + 0.05 * beat) + vid * 0.04;
-      vec2 base = vec2((uBox.x + uBox.z) * 0.5, uBox.y);
-      float W = max(uBox.z - uBox.x, 0.08), H = max(uBox.w - uBox.y, 0.12);
       vec3 col = bg;
-      for (int r = 3; r >= 1; r--) {
-        if (uClones < 0.5) break;
-        float fr = float(r), s = pow(0.74, fr);
-        for (int j = 0; j <= 3; j++) {
-          if (j > r) break;
-          float fj = float(j) - fr * 0.5;
-          vec2 off = vec2(fj * W * 1.05 * s * 1.25, fr * H * 0.27);
-          vec2 q = base + (uv - base - off) / s;
-          vec4 c = past(q, fr * 3.0 + abs(fj) * 1.5);
-          vec3 tint = neon(fr * 0.27 + float(j) * 0.11 + t * 0.05);
-          vec3 cc = mix(c.rgb, tint * (0.25 + 1.6 * luma(c.rgb)), 0.65) + tint * clamp(1.0 - abs(c.a - 0.5) * 2.0, 0.0, 1.0) * 1.8;
-          col = mix(col, cc * (1.0 - 0.12 * fr), c.a);
-        }
+      for (int i = 0; i < 9; i++) {
+        if (i >= uCloneN || uClones < 0.5) break;
+        vec4 cl = uClone[i];
+        // the floor under it darkens first: a contact shadow, as wide as the clone, flattened by the floor's tilt
+        vec2 e = (uv - cl.xy) / vec2(uFootW * cl.z * 0.6, uFootW * cl.z * 0.13);
+        col *= 1.0 - 0.6 * exp(-dot(e, e));
+        vec2 q = uFoot + (uv - cl.xy) / cl.z;
+        vec4 c = past(q, cl.w);
+        vec3 tint = neon(float(i) * 0.13 + t * 0.05);
+        vec3 cc = mix(c.rgb, tint * (0.25 + 1.6 * luma(c.rgb)), 0.65) + tint * clamp(1.0 - abs(c.a - 0.5) * 2.0, 0.0, 1.0) * 1.8;
+        col = mix(col, cc, c.a);
       }
-      // a floor of light under the front row
-      col += neon(t * 0.05) * exp(-pow((uv.y - uBox.y) * 18.0, 2.0)) * exp(-pow((uv.x - base.x) / (W * 2.5), 2.0)) * 0.5;
+      col += neon(t * 0.05) * exp(-pow((uv.y - uFoot.y) * 18.0, 2.0)) * exp(-pow((uv.x - uFoot.x) / (uFootW * 2.5 + 0.01), 2.0)) * 0.5;
       bg = col;
       fg = vid + hue * rim * 1.6;
     } else if (uPreset == 9) {
@@ -362,7 +365,8 @@ export class Party {
       ...common, vertexShader: QUAD_VERT, fragmentShader: SCENE_FRAG,
       uniforms: {
         uTex: shared.uTex, uMask: { value: this.maskTex }, uFx: { value: this.fxTex }, uPrev: { value: null }, uHist: { value: null },
-        uHead: { value: 0 }, uClones: { value: 1 }, uTime: { value: 0 }, uAspect: { value: 1 }, uBeat: { value: 0 }, uLevel: { value: 0 }, uPreset: { value: 0 },
+        uHead: { value: 0 }, uClones: { value: 1 }, uClone: { value: Array.from({ length: 9 }, () => new THREE.Vector4()) }, uCloneN: { value: 0 },
+        uFoot: { value: new THREE.Vector2(0.5, 0.1) }, uFootW: { value: 0.2 }, uTime: { value: 0 }, uAspect: { value: 1 }, uBeat: { value: 0 }, uLevel: { value: 0 }, uPreset: { value: 0 },
         uOn: { value: this.uOn }, uBox: { value: this.box }, uPal: { value: PALETTES.flat().map((h) => new THREE.Color(h)) },
       },
     });
@@ -398,7 +402,7 @@ export class Party {
   }
 
   /** the subjects this frame, their masks into the textures, the distance field, the trails, the box (step 1) */
-  update(tracks: Track[], dt: number, t: number, aspect: number): void {
+  update(tracks: Track[], dt: number, t: number, aspect: number, ground?: Ground, K?: Intrinsics): void {
     const u = this.scene.uniforms;
     u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code; u.uBeat!.value = this.beat; u.uClones!.value = this.clones ? 1 : 0;
     this.material.uniforms.uTime!.value = t; this.material.uniforms.uBeat!.value = this.beat;
@@ -422,6 +426,7 @@ export class Party {
     for (let c = 0; c < 4; c++) { const id = this.chans[c]; if (id !== null && this.chanMask[c]) on[c] = tracks.find((k) => k.id === id)?.presence ?? 0; }
     this.uOn.set(on[0]!, on[1]!, on[2]!, on[3]!);
     this.fx(dt, t, on);
+    this.layPyramid(live[0], ground, K);
     if (!this.mw) return;
     const n = this.mw * this.mh, md = this.maskData;
     for (let c = 0; c < 4; c++) {
@@ -430,6 +435,34 @@ export class Party {
       for (let i = 0; i < n; i++) md[i * 4 + c] = src[i]! * 255;
     }
     this.maskTex.needsUpdate = true;
+  }
+
+  /**
+   * The pyramid on the floor: the nearest subject's hips dropped to the floor, rows back along it and across it, each
+   * clone's feet projected through the camera, its scale the ratio of depths (so the floor's perspective decides how
+   * small and how high the back rows are), sorted back to front.
+   */
+  private layPyramid(subject: Track | undefined, ground?: Ground, K?: Intrinsics): void {
+    const u = this.scene.uniforms;
+    if (!subject || !ground || !K) { u.uCloneN!.value = 0; return; }
+    const hip = new THREE.Vector3(subject.T.x, subject.T.y, subject.T.z);
+    const foot = ground.foot(hip), H = Math.max(1.2, Math.min(2.2, ground.height(hip) * 1.9));
+    const { back, side } = ground.axes();
+    const fp = project(foot, K);
+    (u.uFoot!.value as THREE.Vector2).set(fp.x, 1 - fp.y);
+    u.uFootW!.value = Math.max(0.05, this.box.z - this.box.x);
+    const list: { v: THREE.Vector4; depth: number }[] = [];
+    for (let r = 1; r <= 3; r++) for (let j = 0; j <= r; j++) {
+      const fj = j - r / 2;
+      const at = foot.clone().addScaledVector(back, r * H * 0.5).addScaledVector(side, fj * H * 0.55);
+      if (at.z > -0.3) continue;
+      const p = project(at, K);
+      list.push({ v: new THREE.Vector4(p.x, 1 - p.y, -foot.z / -at.z, r * 3 + Math.abs(fj) * 1.5), depth: -at.z });
+    }
+    list.sort((a, b) => b.depth - a.depth);
+    const arr = u.uClone!.value as THREE.Vector4[];
+    list.forEach((c, i) => arr[i]!.copy(c.v));
+    u.uCloneN!.value = list.length;
   }
 
   private resizeMask(w: number, h: number): void {

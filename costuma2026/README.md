@@ -93,6 +93,18 @@ in `src/main.ts`.
   costumes, then the grade again with the subjects' mask as alpha
   (`party.foreground`, drawn last). The microphone (`audio/beat.ts`, off by default) turns
   bass onsets into `uBeat`. A tap cycles the preset.
+- **Floor** (`src/pose/ground.ts`): the pyramids stand on a ground plane
+  estimated the way phone AR does without depth hardware. Up is the phone's
+  gravity (`platform/motion.ts`, iOS asks at Start) when it agrees with the
+  people in view (within 35°), else the people's own long-run ankle-to-shoulder
+  direction (they stand up), else a level camera. The floor's height along up
+  is the lowest visible heel or toe (MediaPipe's landmarks are metric and
+  already in camera space), else the hips less the person's measured legs,
+  else the camera 1.4 m up. EMA-smoothed. The 3D clones stand on it with a
+  contact shadow; the 2D clones' feet are laid on it and projected, their scale
+  the ratio of depths. Settings → Show the skeleton also draws the floor grid
+  and says where up came from. The gravity mapping in landscape and for the
+  front camera is reasoned, not measured on a phone — hence the agreement gate.
 - **Stage** (`src/render/stage.ts`): the video is a full-screen background,
   cover-fitted; a selfie mirrors the whole world group (`scale.x = −1`), not
   the data — mirrored landmarks would describe a different-handed person.
@@ -143,6 +155,10 @@ phone" as this app means it.
 - **Does the unseen-hemisphere guess look right?** Settle by: the same
   costume in a room lit from behind the camera vs. from behind the wearer;
   if the front is too dark in the first, raise `LIGHT_TUNE.back`.
+- **Does the floor sit on the floor on a phone?** Settle by: Show the
+  skeleton with someone full-length in frame; the grid should lie flat under
+  their feet and say `motion + feet`. If it says `body` while the phone is held
+  still and upright, the gravity mapping is off (`platform/motion.ts`).
 - **Does the focal guess (0.85 × long side) suit front and rear cameras?**
   Settle by: a costume that looks too flat/deep on a phone; adjust Lens, note
   the value per camera.

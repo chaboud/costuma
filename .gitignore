@@ -66,3 +66,6 @@ build/
 *.temp
 temp/
 tmp/
+# costuma 2026's picker thumbnails are generated (scripts/thumbs.mjs) and must ship
+!costuma2026/public/thumbs/*.png
+!2026/thumbs/*.png

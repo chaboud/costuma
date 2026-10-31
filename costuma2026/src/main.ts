@@ -4,12 +4,14 @@ import './style.css';
 import { Camera } from './camera';
 import { Detector } from './pose/detector';
 import { Tracker, type Detection, type Track } from './pose/tracker';
-import { guessIntrinsics, type Intrinsics } from './pose/solve';
+import { guessIntrinsics, project, type Intrinsics } from './pose/solve';
+import * as THREE from 'three';
 import { synthCrowd, synthMask } from './pose/synth';
 import { BONES, L } from './pose/landmarks';
 import { BG_VERT, Stage } from './render/stage';
 import { PRESETS, Party } from './render/party';
 import { Beat } from './audio/beat';
+import { Motion } from './platform/motion';
 import { LIGHT_TUNE } from './render/envlight';
 import { ROSTER, byId } from './characters/roster';
 import { loadSettings, saveSettings, type Settings } from './settings';
@@ -37,6 +39,7 @@ const stage = new Stage(canvas);
 stage.opts.size = settings.size; stage.opts.shadows = settings.shadows; stage.opts.envLight = settings.envLight;
 const party = new Party(stage.bgUniforms, BG_VERT);
 const beat = new Beat();
+const motion = new Motion();
 if (q.get('scene') === 'party' || q.get('scene') === 'costume') settings.scene = q.get('scene') as Settings['scene'];
 if (q.get('fx')) settings.effect = q.get('fx')!;
 if (q.get('pc')) settings.partyCostumes = q.get('pc') === 'behind' ? 'behind' : q.get('pc') === '1' || q.get('pc') === 'on' ? 'on' : 'off';
@@ -360,6 +363,7 @@ function loop(now: number): void {
     try { dets = detector.detect(detectionInput(), now); } catch (e) { console.error(e); }
   }
   if (dets) tracker.update(dets.slice(0, settings.people), now, K);
+  stage.ground.update(tracker.tracks, SYNTH ? null : motion.upInCamera(camera.facing), Math.min(0.25, (now - lastNow) / 1000));
   const costumed = settings.scene === 'costume' || settings.partyCostumes !== 'off';
   if (costumed) for (const t of tracker.tracks) ensureBuilt(castOf(t.id), true);
   const tSec = (now - t0) / 1000, dt = Math.min(0.25, (now - lastNow) / 1000);
@@ -378,7 +382,7 @@ function loop(now: number): void {
   if (settings.scene === 'party') {
     party.subjects = settings.people;
     party.beat = beat.env;
-    party.update(tracker.tracks, dt, tSec, K.w / K.h);
+    party.update(tracker.tracks, dt, tSec, K.w / K.h, stage.ground, K);
     party.render(stage.renderer, K.w, K.h);
   }
   stage.render(video, K, frame);
@@ -415,6 +419,23 @@ function drawOverlay(): void {
   if (!settings.debug) return;
   const c = stage.cover;
   const P = (p: { x: number; y: number }) => { let x = (p.x * c.vw - c.ox) * c.s; if (c.mirror) x = c.cw - x; return [x, (p.y * c.vh - c.oy) * c.s] as const; };
+  // the floor as the app believes it: a grid under the nearest person (or ahead of the camera), half-metre squares
+  {
+    const g = stage.ground, K = intrinsics(), { back, side } = g.axes();
+    const near = tracker.tracks.filter((t) => !t.lost).sort((a, b) => b.T.z - a.T.z)[0];
+    const o = g.foot(near ? new THREE.Vector3(near.T.x, near.T.y, near.T.z) : new THREE.Vector3(0, 0, -3)).addScaledVector(back, -1);
+    const pt = (u: number, v: number) => o.clone().addScaledVector(side, u).addScaledVector(back, v);
+    const line = (a: THREE.Vector3, b: THREE.Vector3) => {
+      if (a.z > -0.2 || b.z > -0.2) return;
+      const [ax, ay] = P(project(a, K)), [bx, by] = P(project(b, K));
+      octx.beginPath(); octx.moveTo(ax, ay); octx.lineTo(bx, by); octx.stroke();
+    };
+    octx.strokeStyle = 'rgba(125, 252, 255, 0.45)'; octx.lineWidth = 1.5;
+    for (let u = -3; u <= 3.001; u += 0.5) line(pt(u, 0), pt(u, 8));
+    for (let v = 0; v <= 8.001; v += 0.5) line(pt(-3, v), pt(3, v));
+    octx.fillStyle = '#7dfcff'; octx.font = '600 12px system-ui';
+    octx.fillText(`floor: ${g.source}${g.fromFeet ? ' + feet' : ''} · camera ${g.cameraHeight.toFixed(2)} m up`, 12, c.ch - 200);
+  }
   for (const t of tracker.tracks) {
     octx.globalAlpha = t.presence;
     octx.strokeStyle = '#7dfcff'; octx.lineWidth = 3;
@@ -480,6 +501,8 @@ async function start(): Promise<void> {
   const status = $('start-status');
   const btn = $<HTMLButtonElement>('btn-start');
   btn.disabled = true;
+  // the phone's gravity for the floor; iOS asks inside this tap, so before anything awaits
+  const motionAsk = SYNTH ? Promise.resolve(false) : motion.enable();
   try {
     if (SYNTH) {
       video.srcObject = fakeRoom();
@@ -495,6 +518,7 @@ async function start(): Promise<void> {
       await detector.load((s) => { status.textContent = s[0]!.toUpperCase() + s.slice(1) + '…'; });
     }
     stage.setVideo(video);
+    void motionAsk;
     status.textContent = `Dressing up as ${byId(settings.costume).name}…`;
     await new Promise((r) => setTimeout(r, 30));
     stage.template(settings.mode === 'one' ? settings.costume : ROSTER[0]!.id);

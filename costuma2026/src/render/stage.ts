@@ -9,6 +9,7 @@ import { Rig, poseFromLandmarks } from '../pose/rig';
 import type { Track } from '../pose/tracker';
 import type { Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
+import { Ground } from '../pose/ground';
 
 interface Wearer {
   trackId: number;
@@ -21,8 +22,16 @@ interface Wearer {
   boneList: THREE.Bone[];
   hist: Float32Array[];
   histHead: number;
-  clones: { root: THREE.Object3D; bones: THREE.Bone[]; row: number; col: number }[];
+  clones: { root: THREE.Object3D; bones: THREE.Bone[]; row: number; col: number; shadow: THREE.Mesh }[];
 }
+
+// a soft dark patch where a clone meets the floor: what makes something inserted look like it stands there
+const SHADOW_MAT = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, toneMapped: false,
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: 'varying vec2 vUv; void main() { float r = length(vUv - 0.5) * 2.0; gl_FragColor = vec4(0.0, 0.0, 0.0, 0.5 * pow(clamp(1.0 - r, 0.0, 1.0), 1.6)); }',
+});
+const SHADOW_GEO = new THREE.PlaneGeometry(1, 1);
 
 /** past poses kept per wearer; the back row of the pyramid dances this many frames late at most */
 const POSE_HIST = 12;
@@ -62,6 +71,8 @@ export class Stage {
   pyramid = false;
   /** the wearers themselves undressed (party's "behind you": only their pyramid shows, and they stay in front) */
   hideWearers = false;
+  /** the floor (pose/ground.ts): the pyramid stands on it */
+  ground = new Ground();
   /** drawn after everything: the cut-out people over the costumes (party.ts foreground) */
   private readonly fg: THREE.Mesh<THREE.PlaneGeometry, THREE.Material>;
   /** party mode's stage lights on the costumes: two coloured rims from behind, pulsing with the beat */
@@ -194,7 +205,7 @@ export class Stage {
 
   private drop(w: Wearer): void {
     this.world.remove(w.root);
-    for (const c of w.clones) this.world.remove(c.root);
+    for (const c of w.clones) this.world.remove(c.root, c.shadow);
     for (const m of w.mats) m.dispose();
     this.wearers.delete(w.trackId);
   }
@@ -234,7 +245,7 @@ export class Stage {
     const rows = this.pyramid ? (this.wearers.size > 1 ? 2 : 3) : 0;
     const want: [number, number][] = [];
     for (let r = 1; r <= rows; r++) for (let j = 0; j <= r; j++) want.push([r, j]);
-    while (w.clones.length > want.length) this.world.remove(w.clones.pop()!.root);
+    while (w.clones.length > want.length) { const c = w.clones.pop()!; this.world.remove(c.root, c.shadow); }
     while (w.clones.length < want.length) {
       const root = SkeletonUtils.clone(w.root);
       // the clone shares the wearer's (fading) materials; SkeletonUtils.clone already does, and drops its own clones
@@ -242,18 +253,30 @@ export class Stage {
       const bones = new Map<string, THREE.Bone>();
       root.traverse((o) => { if ((o as THREE.Bone).isBone) bones.set(o.name, o as THREE.Bone); });
       const [row, col] = want[w.clones.length]!;
-      w.clones.push({ root, bones: w.def.segs.map((sg) => bones.get(sg.name)!).filter(Boolean), row, col });
-      this.world.add(root);
+      const shadow = new THREE.Mesh(SHADOW_GEO, SHADOW_MAT);
+      shadow.renderOrder = 1;
+      w.clones.push({ root, bones: w.def.segs.map((sg) => bones.get(sg.name)!).filter(Boolean), row, col, shadow });
+      this.world.add(root, shadow);
     }
+    // on the floor: the wearer's hips dropped to it, then rows back along it and across it, the hips at the wearer's
+    // height above it; perspective shrinks and raises the back rows by itself
     const height = w.rig.torso * s * 3.2; // about the costume's height, metres
+    const g = this.ground, { back, side } = g.axes();
+    const hip = w.root.position, foot = g.foot(hip), up = g.height(hip);
+    const flat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), g.n);
     for (const c of w.clones) {
       const fj = c.col - c.row / 2;
       const delay = Math.round(c.row * 3 + Math.abs(fj) * 1.5);
       const h = w.hist[(w.histHead - delay + POSE_HIST * 4) % POSE_HIST]!;
       c.bones.forEach((b, i) => { b.quaternion.fromArray(h, i * 7); b.position.fromArray(h, i * 7 + 4); });
-      c.root.position.set(w.root.position.x + fj * height * 0.62, w.root.position.y + c.row * height * 0.3, w.root.position.z - c.row * height * 0.9);
+      const at = foot.clone().addScaledVector(back, c.row * height * 0.5).addScaledVector(side, fj * height * 0.55);
+      c.root.position.copy(at).addScaledVector(g.n, up);
       c.root.scale.copy(w.root.scale);
       c.root.visible = fade > 0.01;
+      c.shadow.position.copy(at).addScaledVector(g.n, 0.004);
+      c.shadow.quaternion.copy(flat);
+      c.shadow.scale.set(height * 0.42, height * 0.26, 1);
+      c.shadow.visible = c.root.visible;
       w.def.tick?.(c.root, t - delay / 30);
     }
   }
