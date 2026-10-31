@@ -15,7 +15,7 @@ const ids = (process.env.C ?? 'crimson').split(',');
 const times = (process.env.T ?? '0,1.5').split(',');
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required'] });
 const ctx = await browser.newContext({ viewport: { width: Number(process.env.W ?? 390), height: Number(process.env.H ?? 844) }, deviceScaleFactor: 1 });
-await ctx.addInitScript((dbg) => { try { localStorage.setItem('costuma26.settings', JSON.stringify({ debug: !!dbg, mode: 'one' })); } catch {} }, process.env.DEBUG ?? '');
+await ctx.addInitScript((dbg) => { try { localStorage.setItem('costuma26.settings', JSON.stringify({ debug: !!dbg[0], mode: dbg[1] || 'one' })); } catch {} }, [process.env.DEBUG ?? '', process.env.MODE ?? '']);
 const page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('pageerror', e.message));
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.log('console', m.text().slice(0, 300)); });

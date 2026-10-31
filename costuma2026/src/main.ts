@@ -301,7 +301,20 @@ function loop(now: number): void {
   hint(now - lastSeen > 2500 ? 'Step back until your head and hips are in view' : '');
   drawOverlay();
   fpsN++;
-  if (now - fpsT > 1000) { fps = (fpsN * 1000) / (now - fpsT); fpsN = 0; fpsT = now; readout(); }
+  if (now - fpsT > 1000) { fps = (fpsN * 1000) / (now - fpsT); fpsN = 0; fpsT = now; readout(); autoQuality(); }
+}
+
+// a slow phone steps its pixels down (then its shadows) rather than stutter: three slow seconds a step, never back up
+let slowSecs = 0, stepped = false;
+function autoQuality(): void {
+  if (TEST || !started || tracker.tracks.length === 0) return;
+  slowSecs = fps < 22 ? slowSecs + 1 : 0;
+  if (slowSecs < 3) return;
+  slowSecs = 0;
+  if (stage.opts.pixelRatio > 1.01) stage.opts.pixelRatio = Math.max(1, stage.opts.pixelRatio - 0.25);
+  else if (stage.opts.shadows) { stage.opts.shadows = false; }
+  else return;
+  if (!stepped) { stepped = true; toast('Lowering quality to keep up', 1500); }
 }
 
 function drawOverlay(): void {
@@ -339,6 +352,7 @@ function readout(): void {
     `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model})`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `people ${tracker.tracks.filter((t) => !t.lost).length} · dressed ${stage.count}`,
+    `pixels ×${stage.opts.pixelRatio.toFixed(2)} · shadows ${stage.opts.shadows ? 'on' : 'off'}`,
     `light mean ${stage.light.mean.toFixed(3)} × ${stage.light.gain.toFixed(2)} · key share ${stage.light.share.toFixed(2)} · every ${LIGHT_TUNE.every} frames`,
   ].join('\n');
 }

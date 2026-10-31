@@ -15,7 +15,9 @@ function capture(opts: { mech?: boolean; cape?: boolean; tail?: number | null })
   return (sg, x, y, z) => {
     if (sg.name.startsWith('thigh')) return z > -1.6 && y < sg.a[1]! + (mech ? 1.4 : 0.8) && Math.abs(Math.abs(x) - Math.abs(sg.a[0]!)) < (y < sg.a[1]! + 0.3 ? (mech ? 1.45 : 1.3) : (mech ? 1.4 : 0.9));
     if (sg.name.startsWith('tail')) return tail !== null ? z < tail : cape && z < -1.55;
-    if (!mech && (sg.name.startsWith('arm') || sg.name.startsWith('forearm'))) return Math.abs(x) > 2.0;
+    // and nothing behind the back: raised overhead (a costume's cheer; Strollzilla never lifted them so high) an arm that
+    // held the cape's edge or the back's side pulled a sheet up with it
+    if (!mech && (sg.name.startsWith('arm') || sg.name.startsWith('forearm'))) return Math.abs(x) > 2.0 && z > -1.2;
     if (mech && sg.name.startsWith('arm')) return z > -1.5;
     return true;
   };
@@ -64,9 +66,12 @@ export const VALKYRIE: CharacterDef = {
   idle: { tail: 0.05 },
 };
 
+// the wolf's hands hang by his haunches: without a reach his forearms took the hip and dragged it up with a cheer
+const WOLF_COSTUME_SEGS = WOLF_SEGMENTS.map((s) => (/^(arm|forearm)/.test(s.name) ? { ...s, reach: 1.95 } : s));
+
 export const HOWLER: CharacterDef = {
   id: 'howler', name: 'Howler', blurb: 'A wolf man with amber eyes',
-  segs: WOLF_SEGMENTS,
+  segs: WOLF_COSTUME_SEGS,
   body: { sdf: (x, y, z) => wolfSDF(x, y, z), region: wolfRegion, box: WOLF_BOX, palette: [0x77706a, 0xb8afa0, 0x34302c, 0x121010],
     capture: capture({ tail: -1.5 }), fur: { length: 0.8, density: 7, tip: 0.22 }, furLen: wolfFurLength },
   dress(d) {

@@ -1,0 +1,27 @@
+// The screens that are not the camera: start, QR sheet, settings — at a phone's size.   node scripts/ui-shots.mjs <dir>
+import { createRequire } from 'node:module';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { serveBuild } from './serve.mjs';
+const { chromium } = createRequire(import.meta.url)('playwright');
+const out = process.argv[2] ?? 'shots-ui';
+mkdirSync(out, { recursive: true });
+const server = await serveBuild();
+const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+page.on('pageerror', (e) => console.log('pageerror', e.message));
+await page.goto(`${server.url}index.html`);
+await page.waitForTimeout(1500);
+await page.screenshot({ path: path.join(out, 'start.png') });
+await page.click('#btn-start-qr');
+await page.waitForTimeout(500);
+await page.screenshot({ path: path.join(out, 'qr.png') });
+await page.click('#qr [data-close]');
+await page.goto(`${server.url}index.html?test=1&synth=1&c=builder`);
+await page.waitForFunction(() => window.__costuma?.started && window.__costuma.stage.count > 0, null, { timeout: 240000 });
+await page.click('#btn-gear');
+await page.waitForTimeout(1500);
+await page.screenshot({ path: path.join(out, 'settings.png'), timeout: 120000 });
+console.log('ok');
+await browser.close();
+await server.close();

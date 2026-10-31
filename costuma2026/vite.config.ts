@@ -9,6 +9,6 @@ export default defineConfig({
   build: { outDir: '../2026', emptyOutDir: true, sourcemap: false, target: 'es2022', rollupOptions: { input: { main: 'index.html' } } },
   server: { port: 5173 },
   // pre-bundled up front: discovered late, vite reloads the page mid-run (it broke the headless e2e)
-  optimizeDeps: { include: ['three', '@mediapipe/tasks-vision', 'qrcode-generator', 'three/addons/objects/MarchingCubes.js', 'three/addons/utils/SkeletonUtils.js', 'three/addons/environments/RoomEnvironment.js'] },
+  optimizeDeps: { include: ['three', '@mediapipe/tasks-vision', 'qrcode-generator', 'three/addons/objects/MarchingCubes.js', 'three/addons/utils/SkeletonUtils.js', 'three/addons/environments/RoomEnvironment.js', 'three/addons/geometries/RoundedBoxGeometry.js', 'three/addons/utils/BufferGeometryUtils.js'] },
   test: { exclude: ['**/node_modules/**', '**/dist/**'] },
 } as Parameters<typeof defineConfig>[0]);

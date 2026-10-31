@@ -1,5 +1,10 @@
 # Costuma - AR Costume Overlay Project
 
+> **Two apps live here.** `site/` is the 2024 app described below (PoseNet, Canvas 2D, single HTML file). **costuma
+> 2026** is `costuma2026/` (source: Vite + TypeScript + three, MediaPipe 3D pose for several people, code-built
+> characters) built into `2026/` for GitHub Pages — read [costuma2026/README.md](costuma2026/README.md) before touching
+> it; run `npm run check` there and commit the rebuilt `2026/` with the source.
+
 ## Project Overview
 
 Costuma is a browser-based AR costume experience built entirely with AI collaboration. It uses TensorFlow.js PoseNet for real-time pose detection to overlay costume images on people's faces/bodies through a webcam feed.

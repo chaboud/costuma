@@ -7,7 +7,9 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: #0d0b14; color: var(--ink); overflow: hidden; overscroll-behavior: none;
   font: 15px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; touch-action: manipulation; }
-#video { position: fixed; width: 2px; height: 2px; opacity: 0; pointer-events: none; left: -10px; top: -10px; }
+/* the video stays laid out on screen, under the opaque canvas: iOS Safari may stop decoding a video it thinks is hidden */
+#video { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: cover; pointer-events: none; z-index: 0; }
+#stage { z-index: 1; } #overlay { z-index: 2; } #hud { position: relative; z-index: 3; }
 #stage, #overlay { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; }
 #overlay { pointer-events: none; }
 button { font: inherit; color: inherit; border: 0; cursor: pointer; }
@@ -83,3 +85,18 @@ h1 { font-size: 46px; margin: 0 0 8px; letter-spacing: -0.01em; }
 .switch:checked { background: var(--pumpkin); }
 .switch:checked::after { transform: translateX(20px); }
 .readout { font: 11px/1.4 ui-monospace, Menlo, monospace; color: var(--dim); white-space: pre-wrap; margin: 10px 0 0; }
+
+/* a phone on its side: the shutter moves to the right edge and the picker shrinks, so people stay in view */
+@media (orientation: landscape) and (max-height: 540px) {
+  .shutter { position: fixed; right: calc(env(safe-area-inset-right, 0px) + 12px); top: 50%; transform: translateY(-50%); flex-direction: column; gap: 14px; margin: 0; }
+  .round { width: 52px; height: 52px; }
+  .picker { padding-right: calc(env(safe-area-inset-right, 0px) + 84px); padding-left: calc(env(safe-area-inset-left, 0px) + 10px); }
+  .card { width: 60px; border-radius: 14px; padding: 4px 3px; }
+  .card .thumb { width: 50px; height: 50px; border-radius: 11px; font-size: 18px; }
+  .card .name { font-size: 11px; }
+  .hint { top: calc(var(--safe-t) + 60px); }
+  .modal { place-items: center; }
+  .sheet { border-radius: 22px; max-height: 94vh; }
+  .qr-code { width: min(58vh, 300px); }
+  .preview-media img, .preview-media video { max-height: 56vh; }
+}

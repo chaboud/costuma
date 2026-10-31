@@ -195,6 +195,10 @@ function dress(d: Dresser): void {
     // the moustache: two chunky lobes swept out and down, a builder's
     const m = mesh(box(0.8, 0.34, 0.3, 0.14), brownHair); m.rotation.z = sx * -0.22; hang(m, 'head', sx * 0.38, 16.82, 1.41);
   }
+  // hair under the hat, round the back half of the head: from behind, bare skin read as a face with nothing on it (small
+  // sideburns alone read as square ear holes)
+  hang(mesh(box(2.96, 1.25, 0.5, 0.22), brownHair), 'head', 0, 17.55, -1.08);
+  for (const sx of [-1, 1]) hang(mesh(box(0.22, 1.05, 1.25, 0.1), brownHair), 'head', sx * 1.42, 17.6, -0.62);
   // the smile sits low enough that its ends clear the moustache (higher, only its bottom showed and it read as an "O")
   const smile = mesh(new THREE.TorusGeometry(0.5, 0.075, 6, 18, 2.3), ink);
   smile.rotation.z = -Math.PI / 2 - 1.15;
@@ -355,7 +359,8 @@ function tick(root: THREE.Object3D, t: number): void {
 }
 
 export const BUILDER: CharacterDef = {
-  id: 'builder', name: 'Tree Builder', blurb: 'A blocky builder, decked out as a Christmas tree',
+  // "Tree Builder" truncated in the picker's cell ("Tree Buil…"); the thumbnail shows the tree
+  id: 'builder', name: 'Builder', blurb: 'A blocky builder, decked out as a Christmas tree',
   segs: BUILDER_SEGMENTS,
   dress,
   tick,

@@ -1,5 +1,13 @@
 # Costuma - AI-Powered Halloween AR Costume 🎃
 
+## 2026: 3D costumes
+
+**[costuma 2026](https://chaboud.github.io/costuma/2026/)** (once merged to `main`) is a new app beside the 2024 one:
+3D pose for up to four people at once (MediaPipe), and code-built 3D characters that move with each person's skeleton —
+Jimothy the raccoon, a Christmas-tree builder, a skeleton, a pumpkin-head scarecrow, a wolf man, a suited hero, a
+valkyrie, a big bird and three robots — lit by the room the camera sees. A QR button shares the page; photos and clips
+go to the share sheet. Source and notes: [costuma2026/](costuma2026/README.md). The 2024 app below is unchanged.
+
 A last-minute Halloween costume solution built entirely with AI collaboration - because sometimes you need a costume and you need it *now*.
 
 ![iPhone Screenshot](docs/IMG_1845.PNG)

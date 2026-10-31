@@ -31,10 +31,13 @@ import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
 type V3 = [number, number, number];
 
 // joints (the left side; the right is mirrored)
-const HIP: V3 = [1.7, 6.0, 0.2], KNEE: V3 = [1.9, 3.4, 0.55], ANKLE: V3 = [1.9, 1.0, 0.0], TOE: V3 = [1.9, 0.3, 2.0];
-// the arms rest out and a little down and forward (an A-pose 25° under level): hanging, they would lie in the ball, the
-// marching cubes would join them to it, and the join would tear when the arm lifts
-const SHOULDER: V3 = [2.9, 11.0, 0.8], ELBOW: V3 = [4.84, 10.1, 1.33], WRIST: V3 = [6.47, 9.3, 1.88];
+// the legs stand apart: closer, the thighs met at the midline and a squat, splaying them, tore the skin they shared
+const LX = 2.1;
+const HIP: V3 = [1.95, 6.0, 0.2], KNEE: V3 = [LX, 3.4, 0.55], ANKLE: V3 = [LX, 1.0, 0.0], TOE: V3 = [LX, 0.3, 2.0];
+// the arms rest out, nearly level and a little forward: hanging, they would lie in the ball, the marching cubes would
+// join them to it, and the join would tear when the arm lifts. Lower (25° under level was tried) and the arm's underside
+// ran along the ball, so the ball's side was in the arm's seam and a cheer lifted it into a web down to the waist
+const SHOULDER: V3 = [2.9, 11.0, 0.8], ELBOW: V3 = [4.99, 10.54, 1.28], WRIST: V3 = [6.76, 10.06, 1.79];
 const TAIL: V3[] = [[0, 6.6, -2.6], [0.5, 4.6, -4.4], [1.6, 2.4, -5.3], [3.0, 1.1, -5.2], [4.5, 0.85, -4.1]];
 const TAIL_R = [1.15, 1.45, 1.4, 1.2, 0.75];
 /** the skull's centre: everything on the head is placed from it */
@@ -64,7 +67,7 @@ export const JIMOTHY_SEGMENTS: Seg[] = [
 ];
 function mx(p: V3): V3 { return [-p[0], p[1], p[2]]; }
 
-export const JIMOTHY_BOX = { min: [-8.3, -0.4, -7.2] as V3, max: [8.3, 18.4, 5.8] as V3 };
+export const JIMOTHY_BOX = { min: [-8.6, -0.4, -7.2] as V3, max: [8.6, 18.4, 5.8] as V3 };
 
 // his eyes and nose (dress hangs them on the head bone); Strollzilla's head scaled by 0.82 about the skull's centre
 export const JIMOTHY_EYES: V3 = [0.98, SK[1] + 0.33, SK[2] + 1.97];
@@ -84,7 +87,7 @@ const pastWrist = (ax: number, y: number, z: number) => (ax - WRIST[0]) * FA[0] 
 // the fingers, thumb and toes as fixed capsules (root, tip): built once, never per sample
 const FINGERS: [V3, V3][] = [-0.42, -0.14, 0.14, 0.42].map((s) => [along(PALM, 0.35, s * 1.1), along(PALM, 1.15 - Math.abs(s) * 0.5, s * 1.35, -0.12)]);
 FINGERS.push([along(PALM, -0.1, 0.45), along(PALM, 0.45, 0.95, -0.1)]);
-const TOES: [V3, V3][] = [-0.5, -0.17, 0.17, 0.5].map((s) => [[1.9 + s * 1.1, 0.3, 1.8], [1.9 + s * 1.3, 0.22, 2.7 - Math.abs(s) * 0.4]]);
+const TOES: [V3, V3][] = [-0.5, -0.17, 0.17, 0.5].map((s) => [[LX + s * 1.1, 0.3, 1.8], [LX + s * 1.3, 0.22, 2.7 - Math.abs(s) * 0.4]]);
 const capV = (x: number, y: number, z: number, a: V3, b: V3, ra: number, rb: number) => sdCapsule(x, y, z, a[0], a[1], a[2], b[0], b[1], b[2], ra, rb);
 
 /** each part's distance, for the surface and for who may skin it */
@@ -103,12 +106,15 @@ function parts(x: number, y: number, z: number): Parts {
   lx = x; ly = y; lz = z;
   const ax = Math.abs(x);
   // the ball: a belly that hangs a little below the hips, a narrower chest on it, a pad round each shoulder joint
-  let b = sdEllipsoid(x, y, z, 0, 7.7, 0.35, 3.85, 3.35, 3.4);
-  b = smin(b, sdEllipsoid(x, y, z, 0, 10.3, 0.3, 3.0, 2.1, 2.7), 1.6);
-  b = smin(b, sdEllipsoid(x, y, z, 0, 6.9, -1.2, 3.4, 2.6, 2.7), 1.2); // the seat
-  b = smin(b, sdSphere(ax, y, z, SHOULDER[0], SHOULDER[1], SHOULDER[2], 1.15), 0.9);
-  // the neck's ruff: short and thick, a pinch under the skull
-  b = smin(b, sdCapsule(x, y, z, 0, 11.0, 0.2, 0, SK[1] - 1.4, SK[2] - 0.15, 2.1, 1.7), 0.8);
+  let b = sdSphere(x, y, z, 0, 9.2, 0.2, 5.6);
+  if (b < FAR) {
+    b = sdEllipsoid(x, y, z, 0, 7.7, 0.35, 3.85, 3.35, 3.4);
+    b = smin(b, sdEllipsoid(x, y, z, 0, 10.3, 0.3, 3.0, 2.1, 2.7), 1.6);
+    b = smin(b, sdEllipsoid(x, y, z, 0, 6.9, -1.2, 3.4, 2.6, 2.7), 1.2); // the seat
+    b = smin(b, sdSphere(ax, y, z, SHOULDER[0], SHOULDER[1], SHOULDER[2], 1.15), 0.9);
+    // the neck's ruff: short and thick, a pinch under the skull
+    b = smin(b, sdCapsule(x, y, z, 0, 11.0, 0.2, 0, SK[1] - 1.4, SK[2] - 0.15, 2.1, 1.7), 0.8);
+  }
   P.body = b;
   // the head: broad cheeks, a pointed muzzle, a short jaw, rounded upright ears; sockets for the eyes
   const hy = y - SK[1], hz = z - SK[2];
@@ -134,12 +140,12 @@ function parts(x: number, y: number, z: number): Parts {
   }
   P.arm = a;
   // the leg on this side: a thick haunch into a short shank, a long flat hind foot
-  let l = sdCapsule(ax, y, z, HIP[0], HIP[1], HIP[2], 1.9, 0.6, 1.0, 2.0, 2.0);
+  let l = sdCapsule(ax, y, z, HIP[0], HIP[1], HIP[2], LX, 0.6, 1.0, 2.0, 2.0);
   if (l < FAR) {
-    l = capV(ax, y, z, HIP, KNEE, 1.55, 1.15);
-    l = smin(l, capV(ax, y, z, KNEE, ANKLE, 1.12, 0.85), 0.5);
+    l = capV(ax, y, z, HIP, KNEE, 1.42, 1.1);
+    l = smin(l, capV(ax, y, z, KNEE, ANKLE, 1.08, 0.85), 0.5);
     if (y < 2.6) {
-      l = smin(l, Math.max(sdEllipsoid(ax, y, z, 1.9, 0.45, 0.75, 0.95, 0.6, 1.75), -y), 0.45);
+      l = smin(l, Math.max(sdEllipsoid(ax, y, z, LX, 0.45, 0.75, 0.95, 0.6, 1.75), -y), 0.45);
       for (const t of TOES) l = smin(l, capV(ax, y, z, t[0], t[1], 0.26, 0.18), 0.15);
     }
   }
@@ -186,13 +192,16 @@ export function jimothyRegion(x: number, y: number, z: number): number {
   if (Math.hypot(x, y - JIMOTHY_NOSE[1], z - JIMOTHY_NOSE[2]) < 0.62) return 3;
   const p = parts(x, y, z), m = p.min;
   if (p.head === m) {
-    // the mask across the eyes with a dark stripe up the bridge, white brows over it, a white muzzle under it
+    // a bandit's mask: a dark oval round each eye drooping back toward the cheek, a dark stripe up the bridge from the
+    // nose to the crown, a white arc over each eye, white from the muzzle down. In face coordinates, so it moves with SK
     const hy = y - SK[1], hz = z - SK[2];
-    if (hz > 0.5 && hy > -1.5) {
-      if (hy > 0.98 && hy < 1.72 && ax < 2.05 && ax > 0.37) return 1;
-      if (hy > -0.25 && hy <= 0.98 && ax > 0.33) return 2;
-      if (ax <= 0.33 && hy > -0.25 && hy < 2.3) return 2;
-      if (hy <= -0.25) return 1;
+    if (hz > 0.2 && hy > -1.9) {
+      const ex = ax - 1.1, ev = hy - 0.22 + 0.32 * ex;
+      if ((ex / 1.25) ** 2 + (ev / 0.66) ** 2 < 1) return 2;
+      if (ax < 0.34 && hy > -0.35 && hy < 2.4 && hz > 0.6) return 2;
+      const bx = ax - 1.05, bv = hy - 1.12 + 0.18 * bx;
+      if ((bx / 1.0) ** 2 + (bv / 0.4) ** 2 < 1) return 1;
+      if (hy < -0.15 + 0.25 * Math.max(0, ax - 1.2) && hz > 0.5) return 1;
     }
     if (hy > 2.75 && ax > 0.98) return 1; // the ears' rims
     return 0;
@@ -224,29 +233,41 @@ export function jimothyFurLength(x: number, y: number, z: number): number {
   return 1.1;
 }
 
-/** Who may skin a vertex: a bone takes its own part's vertices and a seam SEAM wide where its part meets the body. */
-const SEAM = 0.6;
-function jimothyCapture(): Capture {
-  return (sg, x, y, z) => {
-    const q = parts(x, y, z), n = sg.name, near = (d: number) => d <= q.min + SEAM;
-    if (n === 'pelvis' || n === 'spine1' || n === 'spine2') return near(q.body);
+/**
+ * Who may skin a vertex: a bone takes its own part's vertices and a seam SEAM wide where its part meets another. Asked
+ * for every bone of every vertex (2.5M times a build), so the bone's part is a table lookup, not string tests.
+ */
+const SEAM = 0.25;
+const enum G { Body, Neck, Head, ArmL, ArmR, LegL, LegR, Tail }
+const GROUP = new Map<string, G>([
+  ['pelvis', G.Body], ['spine1', G.Body], ['spine2', G.Body], ['neck', G.Neck], ['head', G.Head], ['jaw', G.Head],
+  ['armL', G.ArmL], ['forearmL', G.ArmL], ['armR', G.ArmR], ['forearmR', G.ArmR],
+  ['thighL', G.LegL], ['shinL', G.LegL], ['footL', G.LegL], ['thighR', G.LegR], ['shinR', G.LegR], ['footR', G.LegR],
+  ['tail1', G.Tail], ['tail2', G.Tail], ['tail3', G.Tail], ['tail4', G.Tail],
+]);
+const jimothyCapture: Capture = (sg, x, y, z) => {
+  const q = parts(x, y, z), lim = q.min + SEAM;
+  switch (GROUP.get(sg.name)) {
+    case G.Body: return q.body <= lim;
     // the neck is the band between the ball and the skull; above it the head is one rigid piece
-    if (n === 'neck') return (near(q.body) || near(q.head)) && y > 10.6 && y < SK[1] - 1.0;
-    if (n === 'head' || n === 'jaw') return near(q.head) && y > SK[1] - 2.1;
-    if (n.startsWith('arm') || n.startsWith('forearm')) return near(q.arm) && (n.endsWith('L') ? x > 0.5 : x < -0.5);
-    if (n.startsWith('thigh') || n.startsWith('shin') || n.startsWith('foot')) return near(q.leg) && (n.endsWith('L') ? x > 0.2 : x < -0.2);
-    if (n.startsWith('tail')) return near(q.tail);
-    return true;
-  };
-}
+    case G.Neck: return (q.body <= lim || q.head <= lim) && y > 10.6 && y < SK[1] - 1.0;
+    case G.Head: return q.head <= lim && y > SK[1] - 2.1;
+    case G.ArmL: return q.arm <= lim && x > 0.5;
+    case G.ArmR: return q.arm <= lim && x < -0.5;
+    case G.LegL: return q.leg <= lim && x > 0.2;
+    case G.LegR: return q.leg <= lim && x < -0.2;
+    case G.Tail: return q.tail <= lim;
+    default: return true;
+  }
+};
 
 export const JIMOTHY: CharacterDef = {
   id: 'jimothy', name: 'Jimothy', blurb: 'The round Seattle raccoon, standing up',
   segs: JIMOTHY_SEGMENTS,
   body: {
     sdf: jimothySDF, region: jimothyRegion, box: JIMOTHY_BOX,
-    palette: [0x7a7064, 0xe6e0d2, 0x1c1917, 0x0a0a0a, 0xa89e8e, 0x3a3330],
-    weights: 'soft', capture: jimothyCapture(),
+    palette: [0x766c62, 0xe6e0d2, 0x1c1917, 0x0a0a0a, 0x9d9384, 0x3a3330],
+    weights: 'soft', capture: jimothyCapture,
     fur: { length: 1.0, density: 7, tip: 0.18 }, furLen: jimothyFurLength,
     tint(r, x, y, z, c) {
       // a raccoon's back is darker and more grizzled than its flanks; his limbs are darker than his body
@@ -260,11 +281,13 @@ export const JIMOTHY: CharacterDef = {
     // small, black, wet eyes in the mask; a black nose that shines
     const eye = d.std({ color: 0x050505, roughness: 0.06, metalness: 0.1 });
     for (const sx of [-1, 1]) d.at(new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 10), eye), 'head', sx * JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2]);
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.5, 14, 10), d.std({ color: 0x0a0a0a, roughness: 0.25 }));
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.42, 14, 10), d.std({ color: 0x0a0a0a, roughness: 0.25 }));
     nose.scale.set(1.15, 0.8, 0.75);
     d.at(nose, 'head', JIMOTHY_NOSE[0], JIMOTHY_NOSE[1], JIMOTHY_NOSE[2]);
   },
-  fit: { size: 1.05, limb: 0.4 },
+  fit: { size: 1.05, limb: 0.5 },
   idle: { tail: 0.15 },
+  // 84 and eight layers keep body and coat under 150k triangles (88 was 156k)
+  res: 84,
   furShells: 8,
 };

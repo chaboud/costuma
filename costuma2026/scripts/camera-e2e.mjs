@@ -41,11 +41,11 @@ const info = await page.evaluate(() => {
   });
 });
 console.log(JSON.stringify(info, null, 1));
-await page.screenshot({ path: path.join(out, `${C}-e2e.png`) });
+await page.screenshot({ path: path.join(out, `${C}-e2e.png`), timeout: 300000 });
 await page.evaluate(() => { window.__costuma.settings.debug = true; });
 const f1 = await page.evaluate(() => window.__costuma.frame);
 await page.waitForFunction((f) => window.__costuma.frame > f + 1, f1, { timeout: 100000, polling: 500 });
-await page.screenshot({ path: path.join(out, `${C}-e2e-debug.png`) });
+await page.screenshot({ path: path.join(out, `${C}-e2e-debug.png`), timeout: 300000 });
 await page.evaluate(() => document.getElementById('btn-gear').click());
 await page.waitForTimeout(6000);
 const readout = await page.evaluate(() => document.getElementById('readout').textContent);
