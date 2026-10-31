@@ -273,13 +273,6 @@ function merge(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
   for (const p of parts) p.dispose();
   return g;
 }
-const paint = (g: THREE.BufferGeometry, hex: number) => {
-  const c = new THREE.Color(hex), n = g.attributes.position!.count, a = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
-  g.setAttribute('color', new THREE.BufferAttribute(a, 3));
-  return g;
-};
-
 /**
  * A loose bandage end hanging from its origin along -y: a strip that curls out and twists a little, frayed at the tip,
  * its edges and its tip dirtier. Vertex colours; drawn from both sides.

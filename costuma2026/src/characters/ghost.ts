@@ -95,14 +95,14 @@ const BOX = { min: [-4.55, 3.95, -2.95] as [number, number, number], max: [4.55,
 // ---------------------------------------------------------------------------------------------------------------------
 // skin weights
 
-/**
- * Which bones carry the sheet at a bind-pose point, before normalising: the head its dome and face (the face's front
- * down to the chin, so the decals on it never part from it), the arms the sides from below the shoulder's top to below
- * the hand, fading toward the hem (rigidly, the sheet below a hand would swing up past it with a raised arm; faded, it
- * hangs between the hand and the hem), the thighs part of the front hem, the spine and pelvis the rest by height.
- */
 const BONES = ['head', 'armL', 'forearmL', 'armR', 'forearmR', 'thighL', 'thighR', 'spine2', 'spine1', 'pelvis'] as const;
 const [HEAD, ARM_L, FORE_L, ARM_R, FORE_R, THIGH_L, THIGH_R, SPINE2, SPINE1, PELVIS] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/**
+ * Which bones carry the sheet at a bind-pose point, into `w` by BONES, summing to 1: the head its dome and face (the
+ * face's front down to the chin, so the decals on it never part from it), the arms the sides from below the shoulder's
+ * top to below the hand, fading toward the hem (rigidly, the sheet below a hand would swing up past it with a raised arm;
+ * faded, it hangs between the hand and the hem), the thighs part of the front hem, the spine and pelvis the rest.
+ */
 function sheetWeights(x: number, y: number, z: number, w: Float32Array): void {
   w.fill(0);
   const ax = Math.abs(x), left = x >= 0;
@@ -259,14 +259,14 @@ export const GHOST: CharacterDef = {
   body: { sdf: ghostSDF, region: ghostRegion, box: BOX, palette: [0xe9ecf3, 0x6c7486], surface: 'soft', weights: 'soft', tint: ghostTint },
   dress,
   // the sheet is wide already; its head may sit a little high on the wearer's (a sheet's crown has slack)
-  fit: { size: 1.04, limb: 0.6, head: 0.6 },
+  fit: { size: 1.04, limb: 0.6, head: 0.45 },
   face: {
     // the jaw opens nothing (the mouth is a morph); a small angle only lowers where the breath comes out as it opens
     jaw: 0.3,
     eyes: [[EYE.x, EYE.y, EYE_Z + 0.05, 0.34], [-EYE.x, EYE.y, EYE_Z + 0.05, 0.34]],
     breath: { colors: [0xeaf6ff, 0xa8dcff, 0xc8bcff, 0xffffff], rate: 0.7, speed: 0.55, size: 1.5 },
   },
-  res: 96,
+  res: 90,
   tick(root, t, face) {
     let e = PARTS.get(root);
     if (!e) {
