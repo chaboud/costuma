@@ -10,7 +10,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'public/thumbs');
 mkdirSync(out, { recursive: true });
-const server = await createServer({ root, server: { port: 0, host: '127.0.0.1' }, logLevel: 'error' });
+const server = await createServer({ root, server: { port: 0, host: '127.0.0.1', hmr: false, watch: null }, logLevel: 'error' });
 await server.listen();
 const port = server.httpServer.address().port;
 const { ROSTER_IDS } = await server.ssrLoadModule('/src/characters/ids.ts');

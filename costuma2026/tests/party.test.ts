@@ -19,7 +19,7 @@ describe('party', () => {
     let t = 0;
     for (let i = 0; i < 12; i++) p.update(frame(tr, [-0.8, 0.9], (t += 33)), 0.033, t / 1000, 16 / 9);
     const near = tr.tracks.reduce((a, b) => (b.T.z > a.T.z ? b : a));
-    const on = (p.material.uniforms.uOn!.value as { x: number; y: number; z: number; w: number });
+    const on = (p as unknown as { uOn: { x: number; y: number; z: number; w: number } }).uOn;
     expect([on.x, on.y, on.z, on.w].filter((v) => v > 0).length).toBe(1);
     expect((p as unknown as { chans: (number | null)[] }).chans[0]).toBe(near.id);
     p.subjects = 2;

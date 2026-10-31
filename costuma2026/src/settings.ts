@@ -15,8 +15,10 @@ export interface Settings {
   effect: string;
   /** keep wearing costumes in party mode */
   partyCostumes: boolean;
+  /** listen to the music (the microphone) for the beat; never on by default — it asks for the mic */
+  music: boolean;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'pop', partyCostumes: false };
+export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'pop', partyCostumes: false, music: false };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {

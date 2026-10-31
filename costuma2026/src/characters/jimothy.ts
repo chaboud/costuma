@@ -23,7 +23,9 @@
 // every vertex first asks which *part* it is on (the SDF pieces below, grouped: body, head, each arm, each leg, the
 // tail) and a bone may take only its own part's vertices, plus a thin seam where two parts meet. The shoulder joint sits
 // in the middle of a round shoulder pad that belongs to the body, so the arm's root lies on a sphere about its pivot:
-// when it swings, the seam slides over the pad instead of tearing off it.
+// when it swings, the seam slides over the pad instead of tearing off it. It still stretches — the arm's side of the
+// seam turns and the body's doesn't, and two-bone blending by distance to the bones' axes cannot grade it, the spine's
+// axis being three metres off — so the arm leaves the shoulder thin, where that stretch is paid by its girth.
 import * as THREE from 'three';
 import type { CharacterDef, Capture } from './build';
 import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
@@ -34,10 +36,11 @@ type V3 = [number, number, number];
 // the legs stand apart: closer, the thighs met at the midline and a squat, splaying them, tore the skin they shared
 const LX = 2.1;
 const HIP: V3 = [1.95, 6.0, 0.2], KNEE: V3 = [LX, 3.4, 0.55], ANKLE: V3 = [LX, 1.0, 0.0], TOE: V3 = [LX, 0.3, 2.0];
-// the arms rest out, nearly level and a little forward: hanging, they would lie in the ball, the marching cubes would
-// join them to it, and the join would tear when the arm lifts. Lower (25° under level was tried) and the arm's underside
-// ran along the ball, so the ball's side was in the arm's seam and a cheer lifted it into a web down to the waist
-const SHOULDER: V3 = [2.9, 11.0, 0.8], ELBOW: V3 = [4.38, 9.47, 1.36], WRIST: V3 = [5.57, 8.09, 1.88];
+// the arms rest out, nearly level and a little forward. A swing from rest stretches the skin where the arm meets the
+// body; measured on the CPU-skinned mesh, the stretched skin on a hanging arm halves from 12° under level to 45°, the
+// cheer's is no smaller, and at 45° (the arm's underside then joined to the chest) it runs down the body as a web that
+// shows from the front. Hanging, they would lie in the ball and the marching cubes would join them to it
+const SHOULDER: V3 = [2.9, 11.0, 0.8], ELBOW: V3 = [4.99, 10.54, 1.28], WRIST: V3 = [6.76, 10.06, 1.79];
 const TAIL: V3[] = [[0, 6.6, -2.6], [0.5, 4.6, -4.4], [1.6, 2.4, -5.3], [3.0, 1.1, -5.2], [4.5, 0.85, -4.1]];
 const TAIL_R = [1.15, 1.45, 1.4, 1.2, 0.75];
 /** the skull's centre: everything on the head is placed from it */
@@ -94,7 +97,8 @@ const capV = (x: number, y: number, z: number, a: V3, b: V3, ra: number, rb: num
 interface Parts { body: number; head: number; arm: number; leg: number; tail: number; min: number }
 /**
  * A part further than FAR from a point is given its bound's distance instead of its own: the field clamps past 1.25
- * (build.ts), and nothing reads a part that far for skinning, so only the build time sees the difference (it halves it).
+ * (build.ts), and nothing reads a part that far for skinning, so only the build time sees the difference (with the
+ * fingers made constants, the grid's pass went from 1.8 s to 0.55 s in Node).
  */
 const FAR = 2.5;
 let lx = NaN, ly = NaN, lz = NaN;
@@ -111,7 +115,7 @@ function parts(x: number, y: number, z: number): Parts {
     b = sdEllipsoid(x, y, z, 0, 7.7, 0.35, 3.85, 3.35, 3.4);
     b = smin(b, sdEllipsoid(x, y, z, 0, 10.3, 0.3, 3.0, 2.1, 2.7), 1.6);
     b = smin(b, sdEllipsoid(x, y, z, 0, 6.9, -1.2, 3.4, 2.6, 2.7), 1.2); // the seat
-    b = smin(b, sdSphere(ax, y, z, SHOULDER[0], SHOULDER[1], SHOULDER[2], 1.15), 0.9);
+    b = smin(b, sdSphere(ax, y, z, SHOULDER[0], SHOULDER[1], SHOULDER[2], 0.85), 0.7);
     // the neck's ruff: short and thick, a pinch under the skull
     b = smin(b, sdCapsule(x, y, z, 0, 11.0, 0.2, 0, SK[1] - 1.4, SK[2] - 0.15, 2.1, 1.7), 0.8);
   }
@@ -128,10 +132,12 @@ function parts(x: number, y: number, z: number): Parts {
     h = Math.max(h, -sdSphere(ax, y, z, JIMOTHY_EYES[0] + 0.05, JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.2, 0.34));
   }
   P.head = h;
-  // the arm on this side: a thick upper arm, a forearm, a dark hand with a raccoon's long fingers
+  // the arm on this side: thin where it leaves the shoulder (the skin there is what a swing stretches, by its girth and
+  // its distance from the joint) and thick past it, a forearm, a dark hand with a raccoon's long fingers
   let a = capV(ax, y, z, SHOULDER, HAND_TIP, 1.6, 1.6);
   if (a < FAR) {
-    a = capV(ax, y, z, SHOULDER, ELBOW, 0.95, 0.8);
+    a = capV(ax, y, z, SHOULDER, ELBOW, 0.72, 0.8);
+    a = smin(a, sdSphere(ax, y, z, (SHOULDER[0] + ELBOW[0]) / 2, (SHOULDER[1] + ELBOW[1]) / 2, (SHOULDER[2] + ELBOW[2]) / 2, 0.9), 0.6);
     a = smin(a, capV(ax, y, z, ELBOW, WRIST, 0.8, 0.6), 0.4);
     if (sdSphere(ax, y, z, PALM[0], PALM[1], PALM[2], 1.6) < FAR) {
       a = smin(a, sdEllipsoid(ax, y, z, PALM[0], PALM[1], PALM[2], 0.62, 0.38, 0.62), 0.3);
@@ -237,8 +243,8 @@ export function jimothyFurLength(x: number, y: number, z: number): number {
  * Who may skin a vertex: a bone takes its own part's vertices and a seam SEAM wide where its part meets another. Asked
  * for every bone of every vertex (2.5M times a build), so the bone's part is a table lookup, not string tests.
  */
-// measured (scratchpad stretch probe, share of the surface past 4x in a cheer): 0.95 % at 0.8, 0.62 % at 0.4, 0.52 % at
-// 0.12; at 0 the whole jump in weight sits in one row of triangles, a crease
+// measured on this body before the limb rules below (the share of the surface stretched past 4x in a cheer): 0.95 % at
+// 0.8, 0.62 % at 0.4, 0.52 % at 0.12; at 0 the whole jump in weight sits in one row of triangles, a crease
 const SEAM = 0.15;
 const enum G { Body, Neck, Head, ArmL, ArmR, LegL, LegR, Tail }
 const GROUP = new Map<string, G>([
@@ -247,6 +253,17 @@ const GROUP = new Map<string, G>([
   ['thighL', G.LegL], ['shinL', G.LegL], ['footL', G.LegL], ['thighR', G.LegR], ['shinR', G.LegR], ['footR', G.LegR],
   ['tail1', G.Tail], ['tail2', G.Tail], ['tail3', G.Tail], ['tail4', G.Tail],
 ]);
+/**
+ * A forearm, shin or foot takes only what lies past a little before its joint: the soft falloff otherwise gives the
+ * root of the arm a third of the forearm's weight, and a bent elbow (a wave) or knee (a squat) drags the shoulder or hip
+ */
+const SHIN = norm(sub(ANKLE, KNEE));
+const CHILD = new Map<string, (ax: number, y: number, z: number) => boolean>([
+  ['forearm', (ax, y, z) => (ax - ELBOW[0]) * FA[0] + (y - ELBOW[1]) * FA[1] + (z - ELBOW[2]) * FA[2] > -0.9],
+  ['shin', (ax, y, z) => (ax - KNEE[0]) * SHIN[0] + (y - KNEE[1]) * SHIN[1] + (z - KNEE[2]) * SHIN[2] > -0.9],
+  ['foot', (_ax, y) => y < ANKLE[1] + 0.7],
+]);
+const childOk = (n: string, x: number, y: number, z: number) => { const f = CHILD.get(n.slice(0, -1)); return !f || f(Math.abs(x), y, z); };
 const jimothyCapture: Capture = (sg, x, y, z) => {
   const q = parts(x, y, z), lim = q.min + SEAM;
   switch (GROUP.get(sg.name)) {
@@ -256,10 +273,10 @@ const jimothyCapture: Capture = (sg, x, y, z) => {
     // one rigid piece
     case G.Neck: return y > 10.6 && ((q.body <= lim && Math.abs(x) < 2.4) || (q.head <= lim && y < SK[1] - 1.6));
     case G.Head: return (q.head <= lim && y > SK[1] - 2.1) || (q.body <= lim && y > 12.0 && Math.abs(x) < 2.0);
-    case G.ArmL: return q.arm <= lim && x > 0.5;
-    case G.ArmR: return q.arm <= lim && x < -0.5;
-    case G.LegL: return q.leg <= lim && x > 0.2;
-    case G.LegR: return q.leg <= lim && x < -0.2;
+    case G.ArmL: return q.arm <= lim && x > 0.5 && childOk(sg.name, x, y, z);
+    case G.ArmR: return q.arm <= lim && x < -0.5 && childOk(sg.name, x, y, z);
+    case G.LegL: return q.leg <= lim && x > 0.2 && childOk(sg.name, x, y, z);
+    case G.LegR: return q.leg <= lim && x < -0.2 && childOk(sg.name, x, y, z);
     case G.Tail: return q.tail <= lim;
     default: return true;
   }
@@ -270,7 +287,7 @@ export const JIMOTHY: CharacterDef = {
   segs: JIMOTHY_SEGMENTS,
   body: {
     sdf: jimothySDF, region: jimothyRegion, box: JIMOTHY_BOX,
-    palette: [0x766c62, 0xe6e0d2, 0x1c1917, 0x0a0a0a, 0x9d9384, 0x3a3330],
+    palette: [0x6c655d, 0xe6e0d2, 0x1c1917, 0x0a0a0a, 0x8f877c, 0x3a3330],
     weights: 'soft', capture: jimothyCapture,
     fur: { length: 1.0, density: 7, tip: 0.18 }, furLen: jimothyFurLength,
     tint(r, x, y, z, c) {
@@ -289,6 +306,9 @@ export const JIMOTHY: CharacterDef = {
     nose.scale.set(1.15, 0.8, 0.75);
     d.at(nose, 'head', JIMOTHY_NOSE[0], JIMOTHY_NOSE[1], JIMOTHY_NOSE[2]);
   },
+  // size: his shoulders land a twentieth above the wearer's and his head over theirs (the numbers at the top); more and
+  // the head floats off the face. limb: halfway, so his short arms reach the wearer's forearms and his feet hover a
+  // little above theirs, short and thick still
   fit: { size: 1.05, limb: 0.5 },
   idle: { tail: 0.15 },
   // 84 and eight layers keep body and coat under 150k triangles (88 was 156k)

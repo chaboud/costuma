@@ -9,6 +9,7 @@ import { synthCrowd, synthMask } from './pose/synth';
 import { BONES, L } from './pose/landmarks';
 import { BG_VERT, Stage } from './render/stage';
 import { PRESETS, Party } from './render/party';
+import { Beat } from './audio/beat';
 import { LIGHT_TUNE } from './render/envlight';
 import { ROSTER, byId } from './characters/roster';
 import { loadSettings, saveSettings, type Settings } from './settings';
@@ -35,6 +36,7 @@ const octx = overlay.getContext('2d')!;
 const stage = new Stage(canvas);
 stage.opts.size = settings.size; stage.opts.shadows = settings.shadows; stage.opts.envLight = settings.envLight;
 const party = new Party(stage.bgUniforms, BG_VERT);
+const beat = new Beat();
 if (q.get('scene') === 'party' || q.get('scene') === 'costume') settings.scene = q.get('scene') as Settings['scene'];
 if (q.get('fx')) settings.effect = q.get('fx')!;
 party.preset = PRESETS.find((p) => p.id === settings.effect) ?? PRESETS[0]!;
@@ -236,6 +238,11 @@ function buildSettings(): void {
   row('Light from the camera', 'The costume is lit by the room it stands in', sw(() => settings.envLight, (v) => { settings.envLight = v; stage.opts.envLight = v; }));
   row('Shadows', 'Off is faster on older phones', sw(() => settings.shadows, (v) => { settings.shadows = v; stage.opts.shadows = v; }));
   row('Lens', 'If costumes look too flat or too deep', range(0.55, 1.3, 0.01, () => settings.lens, (v) => { settings.lens = v; }));
+  row('React to the music', 'Listens through the microphone for the beat; clips record the sound', sw(() => settings.music, (v) => {
+    settings.music = v;
+    if (v) beat.start().then(() => toast('Listening for the beat', 1200)).catch(() => { settings.music = false; persist(); toast('No microphone'); });
+    else beat.stop();
+  }));
   row('Costumes in party mode', 'Wear your costume while the room parties', sw(() => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
   row('Show the skeleton', 'What the pose tracker sees', sw(() => settings.debug, (v) => { settings.debug = v; }));
 }
@@ -270,7 +277,10 @@ function toggleRecording(): void {
   const cs = (canvas as HTMLCanvasElement & { captureStream?: (fps: number) => MediaStream }).captureStream;
   if (!mime || !cs) { toast('Recording is not supported in this browser'); return; }
   const chunks: Blob[] = [];
-  const r = new MediaRecorder(cs.call(canvas, 30), { mimeType: mime, videoBitsPerSecond: 6_000_000 });
+  const stream = cs.call(canvas, 30);
+  // with the music on, the clip carries the sound the beat was taken from
+  for (const t of beat.stream?.getAudioTracks() ?? []) stream.addTrack(t);
+  const r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
   r.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   r.onstop = () => {
     clearTimeout(recTimer);
@@ -354,7 +364,13 @@ function loop(now: number): void {
   lastNow = now;
   const dressing = settings.scene === 'costume' || settings.partyCostumes;
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
-  if (settings.scene === 'party') { party.subjects = settings.people; party.update(tracker.tracks, dt, tSec, K.w / K.h); }
+  beat.update(dt, now);
+  if (settings.scene === 'party') {
+    party.subjects = settings.people;
+    party.beat = beat.env;
+    party.update(tracker.tracks, dt, tSec, K.w / K.h);
+    party.render(stage.renderer, K.w, K.h);
+  }
   stage.render(video, K, frame);
   if (snapWanted) {
     snapWanted = false;
@@ -506,7 +522,7 @@ function boot(): void {
   buildPicker();
   requestAnimationFrame(loop);
   const w = window as unknown as { __costuma: unknown };
-  w.__costuma = { stage, tracker, settings, start, choose, party, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, LIGHT_TUNE };
+  w.__costuma = { stage, tracker, settings, start, choose, party, beat, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, LIGHT_TUNE };
   if (TEST && SYNTH) void start();
 }
 boot();

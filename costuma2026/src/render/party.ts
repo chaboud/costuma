@@ -1,10 +1,20 @@
-// Party mode: the people cut out of the frame and the frame rebuilt round them. MediaPipe's pose model gives each person
-// their own mask (detector.ts), so "cut out one, or several" is a count: the N nearest tracked people are subjects, each
-// on a channel of one RGBA mask texture, keeping that channel while they stay (their colours do not jump); anyone else
-// belongs to the background. Everything runs on the phone: the masks come off the GPU once a frame, and the two things a
-// shader cannot do in one pass — how far each pixel is from the nearest subject (for the contour rings and the neon
-// glow) and where they have been (the echo trails) — are done on the CPU at a low resolution (a chamfer distance and a
-// decaying max), then drawn smooth by the texture filter. One fragment shader holds every preset.
+// Party mode: the people cut out of the frame and the frame rebuilt round them, graded like a concert's screens.
+//
+// Who: MediaPipe's pose model gives each person their own mask (detector.ts), so "cut out one, or several" is a count:
+// the N nearest tracked people are subjects, each on a channel of one RGBA mask texture, keeping that channel while
+// they stay (their colours do not jump); anyone else belongs to the background.
+//
+// How it is drawn, all on the phone, each frame:
+//   1. the CPU, on a 160-px grid: the union of the subjects, its outside distance (a two-pass chamfer: rings, glows),
+//      the echo trails (a decaying max) and the subjects' box (the pyramid's anchor);
+//   2. a cut-out pass writes this frame's subjects (rgb + alpha) into a 12-deep history (the pyramid's clones dance in
+//      canon, a few frames behind each other);
+//   3. the scene pass, in the video's own uv, in half-float so lasers and neon can run past white: one fragment
+//      shader, a branch per preset; it reads the previous scene for feedback (the tunnel);
+//   4. bloom: a bright pass at a quarter size, blurred, and again at a sixteenth for the wide halo;
+//   5. the grade, as the background quad's material: chromatic split toward the edges, the bloom, a vignette, grain,
+//      a highlight roll-off, a beat's flash.
+// With the microphone on (audio/beat.ts) the bass drives `uBeat`: kicks in the feedback, the lasers, the split.
 import * as THREE from 'three';
 import type { Track } from '../pose/tracker';
 
@@ -17,11 +27,15 @@ export interface Preset {
 }
 
 export const PRESETS: Preset[] = [
+  { id: 'pyramid', name: 'Pyramid', code: 8, swatch: 'conic-gradient(from 150deg at 50% 18%, transparent 0 60deg, #ff2d95 60deg 64deg, #b6ff2e 64deg 68deg, transparent 68deg), linear-gradient(#2a0f3d, #08050f)' },
+  { id: 'tunnel', name: 'Tunnel', code: 9, swatch: 'repeating-radial-gradient(circle, #ff2d95 0 3px, #12071f 3px 8px, #2ee6ff 8px 11px, #12071f 11px 16px)' },
+  { id: 'lasers', name: 'Lasers', code: 10, swatch: 'linear-gradient(115deg, transparent 46%, #b6ff2e 48%, transparent 50%), linear-gradient(65deg, transparent 46%, #ff2d95 48%, transparent 50%), linear-gradient(90deg, transparent 47%, #2ee6ff 49%, transparent 51%), #07040d' },
+  { id: 'kaleido', name: 'Kaleido', code: 11, swatch: 'conic-gradient(#ff2d95, #ffe62e, #b6ff2e, #2ee6ff, #8a2eff, #ff2d95)' },
+  { id: 'rings', name: 'Rings', code: 5, swatch: 'repeating-radial-gradient(circle, #ff3d7f 0 5px, #ffb23d 5px 10px, #3dd6ff 10px 15px, #8c5cff 15px 20px)' },
+  { id: 'neon', name: 'Neon', code: 4, swatch: 'radial-gradient(circle, transparent 0 40%, #39ff9c 42% 50%, transparent 54%), #06030f' },
   { id: 'pop', name: 'Pop Art', code: 1, swatch: 'radial-gradient(circle at 30% 30%, #ffde00 0 22%, transparent 23%), radial-gradient(circle at 70% 70%, #ff2d8a 0 22%, transparent 23%), #19c3ff' },
   { id: 'warhol', name: 'Warhol', code: 2, swatch: 'conic-gradient(#ff5fa2 0 25%, #ffd400 0 50%, #2ad4c4 0 75%, #7b5cff 0)' },
-  { id: 'rings', name: 'Rings', code: 5, swatch: 'repeating-radial-gradient(circle, #ff3d7f 0 5px, #ffb23d 5px 10px, #3dd6ff 10px 15px, #8c5cff 15px 20px)' },
   { id: 'echo', name: 'Echoes', code: 6, swatch: 'linear-gradient(90deg, #1b1033, #ff2db4 40%, #2de2ff 70%, #1b1033)' },
-  { id: 'neon', name: 'Neon', code: 4, swatch: 'radial-gradient(circle, transparent 0 40%, #39ff9c 42% 50%, transparent 54%), #06030f' },
   { id: 'disco', name: 'Disco', code: 7, swatch: 'radial-gradient(circle at 30% 30%, #ff4fd8, transparent 45%), radial-gradient(circle at 70% 60%, #4fd1ff, transparent 45%), radial-gradient(circle at 45% 80%, #ffe14f, transparent 40%), #120820' },
   { id: 'solar', name: 'Solarize', code: 3, swatch: 'linear-gradient(135deg, #1a0b3d, #ff7a00 45%, #00e5ff 55%, #2a0b3d)' },
   { id: 'spot', name: 'Spotlight', code: 0, swatch: 'radial-gradient(circle at 50% 40%, #fff6d8, #6a5a40 45%, #120f0a 75%)' },
@@ -35,39 +49,76 @@ const PALETTES: number[][] = [
   [0x10261a, 0xff2e2e, 0x2ec5ff, 0xffe1f0],
 ];
 
-const FRAG = /* glsl */ `
-  precision highp float;
-  varying vec2 vUv;
-  uniform sampler2D uTex, uMask, uFx;
-  uniform float uTime, uAspect;
-  uniform int uPreset;
-  uniform vec4 uOn;
-  uniform vec3 uPal[16];
+const HIST = 12;
 
+const QUAD_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() { vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
+const COMMON = /* glsl */ `
   vec3 hsv(float h, float s, float v) { vec3 k = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0); return v * mix(vec3(1.0), k, s); }
   float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+  // the show's palette: hot pink, lime, sun yellow, aqua, violet, round and round, smooth
+  vec3 neon(float t) {
+    t = fract(t) * 5.0;
+    float f = fract(t); f = f * f * (3.0 - 2.0 * f);
+    int i = int(floor(t));
+    vec3 c0 = vec3(1.0, 0.16, 0.58), c1 = vec3(0.70, 1.0, 0.16), c2 = vec3(1.0, 0.88, 0.16), c3 = vec3(0.16, 0.88, 1.0), c4 = vec3(0.55, 0.18, 1.0);
+    vec3 a = i == 0 ? c0 : i == 1 ? c1 : i == 2 ? c2 : i == 3 ? c3 : c4;
+    vec3 b = i == 0 ? c1 : i == 1 ? c2 : i == 2 ? c3 : i == 3 ? c4 : c0;
+    return mix(a, b, f);
+  }`;
+
+const CUT_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform sampler2D uTex, uMask;
+  uniform vec4 uOn;
+  void main() {
+    vec4 m = smoothstep(0.3, 0.7, texture2D(uMask, vec2(vUv.x, 1.0 - vUv.y))) * uOn;
+    gl_FragColor = vec4(texture2D(uTex, vUv).rgb, max(max(m.r, m.g), max(m.b, m.a)));
+  }`;
+
+const SCENE_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform sampler2D uTex, uMask, uFx, uPrev;
+  uniform highp sampler2DArray uHist;
+  uniform float uHead, uTime, uAspect, uBeat, uLevel;
+  uniform int uPreset;
+  uniform vec4 uOn, uBox;
+  uniform vec3 uPal[16];
+  ${COMMON}
+
   vec3 pal(int who, int k) { return uPal[who * 4 + k]; }
-  // four tones by brightness: the screen print
-  vec3 print(vec3 c, int who) {
-    float l = luma(c);
-    return l < 0.22 ? pal(who, 0) : l < 0.45 ? pal(who, 1) : l < 0.7 ? pal(who, 2) : pal(who, 3);
-  }
+  vec3 print(vec3 c, int who) { float l = luma(c); return l < 0.22 ? pal(who, 0) : l < 0.45 ? pal(who, 1) : l < 0.7 ? pal(who, 2) : pal(who, 3); }
   vec3 solar(vec3 c, float t) {
     vec3 s = mix(c, 1.0 - c, step(0.5, c));
-    float h = fract(t * 0.07);
-    return mix(s * 2.0, hsv(h + luma(c) * 0.8, 0.85, 1.0) * (0.35 + 1.2 * luma(s)), 0.55);
+    return mix(s * 2.0, hsv(fract(t * 0.07) + luma(c) * 0.8, 0.85, 1.0) * (0.35 + 1.2 * luma(s)), 0.55);
   }
-  // disco: coloured spots sweeping the room, a mirror ball's flecks
   vec3 discoLight(vec2 p, float t) {
     vec3 acc = vec3(0.0);
     for (int i = 0; i < 5; i++) {
       float fi = float(i);
       vec2 c = vec2(0.5 + 0.42 * sin(t * (0.45 + fi * 0.13) + fi * 1.7), 0.45 + 0.35 * cos(t * (0.37 + fi * 0.11) + fi * 2.3));
       vec2 d = (p - c) * vec2(uAspect, 1.0);
-      acc += hsv(fi / 5.0 + t * 0.03, 0.9, 1.0) * exp(-dot(d, d) * 45.0) * 0.75;
+      acc += neon(fi / 5.0 + t * 0.03) * exp(-dot(d, d) * 45.0) * 0.9;
     }
     return acc;
+  }
+  // a frame of the subjects, \`delay\` frames ago, at q (outside the frame: nothing)
+  vec4 past(vec2 q, float delay) {
+    if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) return vec4(0.0);
+    return texture(uHist, vec3(q, mod(uHead - delay + ${HIST}.0 * 8.0, ${HIST}.0)));
+  }
+  // a laser from \`o\` at angle \`a\` (from straight down), in aspect-correct space
+  float beam(vec2 p, vec2 o, float a, float w) {
+    vec2 d = vec2(sin(a), -cos(a));
+    vec2 v = p - o;
+    float along = dot(v, d);
+    float across = abs(v.x * d.y - v.y * d.x);
+    return along > 0.0 ? exp(-across * across / (w * w)) * exp(-along * 0.25) : 0.0;
   }
 
   void main() {
@@ -84,23 +135,24 @@ const FRAG = /* glsl */ `
     if (m.a > best) { best = m.a; who = 3; }
     vec4 fx = texture2D(uFx, muv);
     float dist = fx.r, trail = fx.g, stamp = fx.b;
-    float t = uTime;
-    vec3 bg = vid, fg = vid;
+    float t = uTime, beat = uBeat;
     vec2 sp = vec2(uv.x * uAspect, uv.y);
+    // a lit edge on every subject, and a halo just outside them, in the show's colours
+    float rim = clamp(1.0 - abs(subj - 0.5) * 2.0, 0.0, 1.0);
+    vec3 hue = neon(t * 0.06 + float(who) * 0.23);
+    vec3 halo = hue * exp(-dist * 22.0) * 0.6;
+    vec3 bg = vid, fg = vid;
 
     if (uPreset == 0) {
-      // a stage: the room dimmed and greyed, light pooled round the subjects
       bg = vec3(luma(vid)) * vec3(0.75, 0.78, 0.95) * (0.12 + 0.75 * exp(-dist * 7.0));
       fg = vid * 1.08;
     } else if (uPreset == 1) {
-      // pop art: subjects screen-printed in their own four colours; the room a flat colour with Ben-Day dots
       fg = print(vid, who);
-      vec3 base = hsv(fract(0.55 + floor(t * 0.25) * 0.23), 0.75, 1.0);
+      vec3 base = hsv(fract(0.55 + floor(t * 0.25 + beat * 0.0) * 0.23), 0.75, 1.0);
       vec2 g = fract(sp * 70.0) - 0.5;
       float dots = step(length(g), 0.18 + 0.22 * luma(vid));
       bg = mix(base, base * 0.55 + vec3(0.05), dots);
     } else if (uPreset == 2) {
-      // four panels, each printed in its own colours: the subjects and their room both
       int ci = int(cellIx);
       fg = print(vid, ci);
       bg = mix(pal((ci + 2) - 4 * ((ci + 2) / 4), 2), pal(ci, 3), 0.15);
@@ -108,40 +160,147 @@ const FRAG = /* glsl */ `
       fg = solar(vid, t);
       bg = solar(vid, t + 3.0) * 0.7;
     } else if (uPreset == 4) {
-      // neon: a black room, each subject a dark shape with a glowing tube round it
-      vec3 tube = hsv(fract(t * 0.08 + muv.y * 0.3), 0.9, 1.0);
+      vec3 tube = neon(t * 0.08 + muv.y * 0.3);
       float line = exp(-pow((dist - 0.035) * 60.0, 2.0)), glow = exp(-dist * 14.0);
-      bg = tube * (line * 1.6 + glow * 0.45);
-      float rim = clamp(1.0 - abs(subj - 0.5) * 2.0, 0.0, 1.0);
-      fg = vid * 0.18 + tube * rim * 1.4;
+      bg = tube * (line * 2.4 * (1.0 + beat) + glow * 0.5);
+      fg = vid * 0.16 + tube * rim * 2.0;
     } else if (uPreset == 5) {
-      // rings: the subjects' outline echoed outward, band after band, flowing away from them
-      float k = dist * 9.0 - t * 0.9;
+      float k = dist * 9.0 - t * 0.9 - beat * 0.4;
       float band = fract(k);
-      bg = hsv(fract(floor(k) * 0.13 + t * 0.02), 0.8, 1.0) * (0.55 + 0.45 * smoothstep(0.0, 0.12, band) * smoothstep(1.0, 0.85, band));
-      bg *= 0.35 + 0.65 * exp(-dist * 1.5);
-      fg = vid;
+      bg = neon(floor(k) * 0.17 + t * 0.02) * (0.25 + 1.1 * smoothstep(0.0, 0.08, band) * smoothstep(0.32, 0.12, band));
+      bg *= 0.3 + 0.9 * exp(-dist * 1.4);
+      fg = vid + halo;
     } else if (uPreset == 6) {
-      // echoes: where the dancers were, in the colour of when
-      bg = vid * 0.3 * vec3(0.7, 0.75, 1.0);
-      bg = mix(bg, hsv(stamp, 0.9, 1.0), clamp(trail, 0.0, 1.0) * 0.85);
+      bg = vid * 0.25 * vec3(0.7, 0.75, 1.0);
+      bg = mix(bg, neon(stamp) * 1.3, clamp(trail, 0.0, 1.0) * 0.85);
       fg = vid;
     } else if (uPreset == 7) {
       vec3 L = discoLight(uv, t);
       vec2 fc = floor(sp * 140.0);
-      float fleck = step(0.992, hash(fc + floor(t * 6.0))) * 1.2;
-      bg = vid * 0.1 + L * 0.8 + fleck * hsv(hash(fc), 0.5, 1.0);
+      float fleck = step(0.992, hash(fc + floor(t * 6.0))) * 1.6;
+      bg = vid * 0.1 + L * (0.9 + beat) + fleck * hsv(hash(fc), 0.5, 1.0);
       fg = vid * (0.75 + 0.7 * L);
+    } else if (uPreset == 8) {
+      // the dance pyramid: the subjects cloned behind and above themselves, each row smaller and later — a canon
+      float y = uv.y;
+      float scan = pow(0.5 + 0.5 * sin(y * 90.0 - t * 5.0), 10.0);
+      bg = neon(y * 0.5 - t * 0.07) * (0.06 + 0.22 * scan + 0.05 * beat) + vid * 0.04;
+      vec2 base = vec2((uBox.x + uBox.z) * 0.5, uBox.y);
+      float W = max(uBox.z - uBox.x, 0.08), H = max(uBox.w - uBox.y, 0.12);
+      vec3 col = bg;
+      for (int r = 3; r >= 1; r--) {
+        float fr = float(r), s = pow(0.74, fr);
+        for (int j = 0; j <= 3; j++) {
+          if (j > r) break;
+          float fj = float(j) - fr * 0.5;
+          vec2 off = vec2(fj * W * 1.05 * s * 1.25, fr * H * 0.27);
+          vec2 q = base + (uv - base - off) / s;
+          vec4 c = past(q, fr * 3.0 + abs(fj) * 1.5);
+          vec3 tint = neon(fr * 0.27 + float(j) * 0.11 + t * 0.05);
+          vec3 cc = mix(c.rgb, tint * (0.25 + 1.6 * luma(c.rgb)), 0.65) + tint * clamp(1.0 - abs(c.a - 0.5) * 2.0, 0.0, 1.0) * 1.8;
+          col = mix(col, cc * (1.0 - 0.12 * fr), c.a);
+        }
+      }
+      // a floor of light under the front row
+      col += neon(t * 0.05) * exp(-pow((uv.y - uBox.y) * 18.0, 2.0)) * exp(-pow((uv.x - base.x) / (W * 2.5), 2.0)) * 0.5;
+      bg = col;
+      fg = vid + hue * rim * 1.6;
+    } else if (uPreset == 9) {
+      // the tunnel: the last frame, a little smaller and turned, fed back under this one — the dancers recede forever
+      vec2 c = vec2(0.5, 0.52);
+      vec2 d = (uv - c) * vec2(uAspect, 1.0);
+      float a = 0.012 + 0.03 * beat, z = 0.962 - 0.035 * beat;
+      d = mat2(cos(a), -sin(a), sin(a), cos(a)) * d / z;
+      vec3 prev = texture2D(uPrev, c + d / vec2(uAspect, 1.0)).rgb;
+      prev = mix(prev, neon(t * 0.08) * luma(prev) * 1.5, 0.07) * 0.94;
+      bg = vid * 0.1 + prev;
+      fg = vid + hue * rim * 1.4;
+    } else if (uPreset == 10) {
+      // lasers through haze: three sources over the stage, fans that sweep, snap on the beat
+      vec2 p = sp;
+      float haze = 0.4 + 0.6 * noise(p * 3.0 + vec2(t * 0.15, -t * 0.08));
+      vec3 acc = vec3(0.0);
+      for (int s = 0; s < 3; s++) {
+        float fs = float(s);
+        vec2 o = vec2((0.15 + 0.35 * fs) * uAspect, 1.04);
+        for (int k = 0; k < 6; k++) {
+          float fk = float(k);
+          float a = (fk - 2.5) * (0.16 + 0.06 * sin(t * 0.7 + fs)) + 0.55 * sin(t * (0.35 + 0.1 * fs) + fs * 2.0);
+          acc += neon(fs * 0.33 + fk * 0.04 + t * 0.02) * beam(p, o, a, 0.0045 + 0.004 * beat);
+        }
+      }
+      bg = vid * 0.06 + acc * (1.4 + 1.8 * beat) * haze + neon(t * 0.03) * 0.05 * haze;
+      fg = vid * 0.9 + hue * rim * 1.5 + acc * 0.25;
+    } else if (uPreset == 11) {
+      // a kaleidoscope of the room behind them, turning
+      vec2 p = (uv - 0.5) * vec2(uAspect, 1.0);
+      float r = length(p) * (1.0 - 0.08 * beat), a = atan(p.y, p.x) + t * 0.12;
+      float seg = 6.2831853 / 6.0;
+      a = mod(a, seg); a = abs(a - seg * 0.5);
+      vec2 q = vec2(cos(a), sin(a)) * r;
+      vec3 k = texture2D(uTex, clamp(0.5 + q / vec2(uAspect, 1.0) * 0.9, 0.0, 1.0)).rgb;
+      k = mix(vec3(luma(k)), k, 1.8);
+      bg = clamp(k, 0.0, 1.5) * 0.8 * mix(vec3(1.0), neon(r * 0.8 - t * 0.1) * 1.4, 0.45);
+      fg = vid + hue * rim * 1.3;
     }
+    if (uPreset != 1 && uPreset != 2 && uPreset != 0) bg += halo * (uPreset == 4 ? 0.0 : 1.0);
     gl_FragColor = vec4(mix(bg, fg, subj), 1.0);
   }`;
 
+const BRIGHT_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform sampler2D uSrc;
+  uniform vec2 uTexel;
+  uniform float uThreshold;
+  void main() {
+    vec3 c = (texture2D(uSrc, vUv + uTexel * vec2(-1.0, -1.0)).rgb + texture2D(uSrc, vUv + uTexel * vec2(1.0, -1.0)).rgb
+            + texture2D(uSrc, vUv + uTexel * vec2(-1.0, 1.0)).rgb + texture2D(uSrc, vUv + uTexel * vec2(1.0, 1.0)).rgb) * 0.25;
+    float l = max(max(c.r, c.g), c.b);
+    float k = smoothstep(uThreshold, uThreshold + 0.35, l);
+    gl_FragColor = vec4(c * k, 1.0);
+  }`;
+
+const BLUR_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform sampler2D uSrc;
+  uniform vec2 uDir;
+  void main() {
+    vec3 c = texture2D(uSrc, vUv).rgb * 0.2270270;
+    c += (texture2D(uSrc, vUv + uDir * 1.3846154).rgb + texture2D(uSrc, vUv - uDir * 1.3846154).rgb) * 0.3162162;
+    c += (texture2D(uSrc, vUv + uDir * 3.2307692).rgb + texture2D(uSrc, vUv - uDir * 3.2307692).rgb) * 0.0702703;
+    gl_FragColor = vec4(c, 1.0);
+  }`;
+
+const FINAL_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform sampler2D uScene, uBloom1, uBloom2;
+  uniform float uTime, uBeat, uFlash;
+  uniform vec2 uRes;
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  void main() {
+    vec2 d = vUv - 0.5;
+    float ca = 0.006 + 0.012 * uBeat;
+    vec3 c = vec3(texture2D(uScene, vUv + d * ca).r, texture2D(uScene, vUv).g, texture2D(uScene, vUv - d * ca).b);
+    c += texture2D(uBloom1, vUv).rgb * 0.75 + texture2D(uBloom2, vUv).rgb * 0.9;
+    vec2 v = d * vec2(1.0, 1.15);
+    c *= 1.0 - 0.55 * dot(v, v);
+    c += uBeat * uFlash * 0.07;
+    // the highlights roll off instead of clipping: neon stays a colour
+    vec3 hi = max(c - 0.8, 0.0);
+    c = min(c, 0.8) + 0.2 * (1.0 - exp(-hi * 3.0)) + hi * 0.05;
+    c += (hash(vUv * uRes + fract(uTime * 7.31) * 100.0) - 0.5) * 0.04;
+    gl_FragColor = vec4(c, 1.0);
+  }`;
+
 export class Party {
+  /** the background quad's material while party mode is on: the grade (step 5) */
   readonly material: THREE.ShaderMaterial;
   preset: Preset = PRESETS[0]!;
   /** how many people to cut out (the nearest) */
   subjects = 2;
-  private maskTex: THREE.DataTexture | null = null;
+  /** the bass's envelope, 0..1 (audio/beat.ts); 0 without the microphone */
+  beat = 0;
+  private maskTex: THREE.DataTexture;
   private maskData = new Uint8Array(4);
   private mw = 0;
   private mh = 0;
@@ -156,18 +315,51 @@ export class Party {
   private trail!: Float32Array;
   private stamp!: Float32Array;
   private readonly uOn = new THREE.Vector4();
+  private readonly box = new THREE.Vector4(0.35, 0.1, 0.65, 0.7);
+  // passes
+  private readonly quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+  private readonly quadScene = new THREE.Scene();
+  private readonly cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private readonly cut: THREE.ShaderMaterial;
+  private readonly scene: THREE.ShaderMaterial;
+  private readonly bright: THREE.ShaderMaterial;
+  private readonly blur: THREE.ShaderMaterial;
+  private rtScene: THREE.WebGLRenderTarget[] = [];
+  private rtB1a: THREE.WebGLRenderTarget | null = null;
+  private rtB1b: THREE.WebGLRenderTarget | null = null;
+  private rtB2a: THREE.WebGLRenderTarget | null = null;
+  private rtB2b: THREE.WebGLRenderTarget | null = null;
+  private hist: THREE.WebGLArrayRenderTarget | null = null;
+  private head = 0;
+  private flip = 0;
+  private sizeKey = '';
 
   constructor(shared: { uTex: THREE.IUniform; uCrop: THREE.IUniform; uMirror: THREE.IUniform }, vertexShader: string) {
+    this.maskTex = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat);
+    this.maskTex.needsUpdate = true;
     this.resizeFx(160, 90);
-    this.material = new THREE.ShaderMaterial({
-      vertexShader, fragmentShader: FRAG, depthTest: false, depthWrite: false, toneMapped: false,
+    const common = { depthTest: false, depthWrite: false, toneMapped: false };
+    this.cut = new THREE.ShaderMaterial({ ...common, vertexShader: QUAD_VERT, fragmentShader: CUT_FRAG, uniforms: { uTex: shared.uTex, uMask: { value: this.maskTex }, uOn: { value: this.uOn } } });
+    this.scene = new THREE.ShaderMaterial({
+      ...common, vertexShader: QUAD_VERT, fragmentShader: SCENE_FRAG,
       uniforms: {
-        ...shared,
-        uMask: { value: null }, uFx: { value: this.fxTex }, uTime: { value: 0 }, uAspect: { value: 1 }, uPreset: { value: 0 },
-        uOn: { value: this.uOn },
-        uPal: { value: PALETTES.flat().map((h) => new THREE.Color(h)) },
+        uTex: shared.uTex, uMask: { value: this.maskTex }, uFx: { value: this.fxTex }, uPrev: { value: null }, uHist: { value: null },
+        uHead: { value: 0 }, uTime: { value: 0 }, uAspect: { value: 1 }, uBeat: { value: 0 }, uLevel: { value: 0 }, uPreset: { value: 0 },
+        uOn: { value: this.uOn }, uBox: { value: this.box }, uPal: { value: PALETTES.flat().map((h) => new THREE.Color(h)) },
       },
     });
+    this.bright = new THREE.ShaderMaterial({ ...common, vertexShader: QUAD_VERT, fragmentShader: BRIGHT_FRAG, uniforms: { uSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uThreshold: { value: 0.72 } } });
+    this.blur = new THREE.ShaderMaterial({ ...common, vertexShader: QUAD_VERT, fragmentShader: BLUR_FRAG, uniforms: { uSrc: { value: null }, uDir: { value: new THREE.Vector2() } } });
+    this.material = new THREE.ShaderMaterial({
+      ...common, vertexShader, fragmentShader: FINAL_FRAG,
+      uniforms: {
+        uCrop: shared.uCrop, uMirror: shared.uMirror,
+        uScene: { value: null }, uBloom1: { value: null }, uBloom2: { value: null },
+        uTime: { value: 0 }, uBeat: { value: 0 }, uFlash: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) },
+      },
+    });
+    this.quad.frustumCulled = false;
+    this.quadScene.add(this.quad);
   }
 
   private resizeFx(w: number, h: number): void {
@@ -178,18 +370,18 @@ export class Party {
     this.union = new Float32Array(w * h); this.dist = new Float32Array(w * h);
     this.trail = new Float32Array(w * h); this.stamp = new Float32Array(w * h);
     for (let i = 0; i < w * h; i++) this.fxData[i * 4] = 255; // nobody yet: everywhere is far from a subject
+    this.fxTex.needsUpdate = true;
     this.fw = w; this.fh = h;
-    if (this.material) this.material.uniforms.uFx!.value = this.fxTex;
+    if (this.scene) this.scene.uniforms.uFx!.value = this.fxTex;
   }
 
-  /** the subjects this frame, their masks into the textures, the distance field and the trails */
+  /** the subjects this frame, their masks into the textures, the distance field, the trails, the box (step 1) */
   update(tracks: Track[], dt: number, t: number, aspect: number): void {
-    const u = this.material.uniforms;
-    u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code;
-    // the fx grid follows the frame's shape, long side 160
+    const u = this.scene.uniforms;
+    u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code; u.uBeat!.value = this.beat;
+    this.material.uniforms.uTime!.value = t; this.material.uniforms.uBeat!.value = this.beat;
     const fw = aspect >= 1 ? 160 : Math.max(48, Math.round(160 * aspect)), fh = aspect >= 1 ? Math.max(48, Math.round(160 / aspect)) : 160;
     if (fw !== this.fw || fh !== this.fh) this.resizeFx(fw, fh);
-    // the nearest N live people, by apparent size
     const live = tracks.filter((k) => k.presence > 0).sort((a, b) => b.len.torso / -b.T.z - a.len.torso / -a.T.z).slice(0, this.subjects);
     const ids = new Set(live.map((k) => k.id));
     for (let c = 0; c < 4; c++) if (this.chans[c] !== null && !ids.has(this.chans[c]!)) { this.chans[c] = null; this.chanMask[c] = null; }
@@ -208,8 +400,7 @@ export class Party {
     for (let c = 0; c < 4; c++) { const id = this.chans[c]; if (id !== null && this.chanMask[c]) on[c] = tracks.find((k) => k.id === id)?.presence ?? 0; }
     this.uOn.set(on[0]!, on[1]!, on[2]!, on[3]!);
     this.fx(dt, t, on);
-    if (!this.maskTex) return;
-    // the mask texture: subject c in channel c
+    if (!this.mw) return;
     const n = this.mw * this.mh, md = this.maskData;
     for (let c = 0; c < 4; c++) {
       const src = this.chanMask[c];
@@ -220,25 +411,35 @@ export class Party {
   }
 
   private resizeMask(w: number, h: number): void {
-    this.maskTex?.dispose();
+    this.maskTex.dispose();
     this.mw = w; this.mh = h;
     this.maskData = new Uint8Array(w * h * 4);
     this.maskTex = new THREE.DataTexture(this.maskData, w, h, THREE.RGBAFormat);
     this.maskTex.magFilter = THREE.LinearFilter; this.maskTex.minFilter = THREE.LinearFilter;
-    this.material.uniforms.uMask!.value = this.maskTex;
+    this.scene.uniforms.uMask!.value = this.maskTex;
+    this.cut.uniforms.uMask!.value = this.maskTex;
   }
 
-  /** the union of the subjects at the fx grid's size; its outside distance (chamfer, cells); the trails */
   private fx(dt: number, t: number, on: number[]): void {
     const W = this.fw, H = this.fh, U = this.union, D = this.dist;
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
     for (let y = 0; y < H; y++) {
       const my = Math.min(this.mh - 1, Math.floor(((y + 0.5) / H) * this.mh));
       for (let x = 0; x < W; x++) {
-        const mi = my * this.mw + Math.min(this.mw - 1, Math.floor(((x + 0.5) / W) * this.mw));
         let v = 0;
-        for (let c = 0; c < 4; c++) { const m = this.chanMask[c]; if (m && this.mw) v = Math.max(v, m[mi]! * on[c]!); }
+        if (this.mw) {
+          const mi = my * this.mw + Math.min(this.mw - 1, Math.floor(((x + 0.5) / W) * this.mw));
+          for (let c = 0; c < 4; c++) { const m = this.chanMask[c]; if (m) v = Math.max(v, m[mi]! * on[c]!); }
+        }
         U[y * W + x] = v;
+        if (v > 0.5) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
       }
+    }
+    // the subjects' box in uv (y up), smoothed: the pyramid stands on it
+    if (x1 >= 0) {
+      const k = 1 - Math.exp(-dt / 0.12);
+      const bx0 = x0 / W, bx1 = (x1 + 1) / W, by0 = 1 - (y1 + 1) / H, by1 = 1 - y0 / H;
+      this.box.set(this.box.x + (bx0 - this.box.x) * k, this.box.y + (by0 - this.box.y) * k, this.box.z + (bx1 - this.box.z) * k, this.box.w + (by1 - this.box.w) * k);
     }
     const INF = 1e6, R2 = Math.SQRT2;
     for (let i = 0; i < W * H; i++) D[i] = U[i]! > 0.5 ? 0 : INF;
@@ -269,6 +470,70 @@ export class Party {
     this.fxTex.needsUpdate = true;
   }
 
-  /** the masks come off the GPU while party mode is on; nobody in it: the rooms still play */
-  get hasMasks(): boolean { return !!this.maskTex; }
+  /** (re)make the render targets for a video of w × h */
+  private targets(renderer: THREE.WebGLRenderer, vw: number, vh: number): void {
+    const long = 900, k = long / Math.max(vw, vh);
+    const w = Math.max(64, Math.round(vw * k)), h = Math.max(64, Math.round(vh * k));
+    const key = `${w}x${h}`;
+    if (key === this.sizeKey) return;
+    this.sizeKey = key;
+    for (const r of [...this.rtScene, this.rtB1a, this.rtB1b, this.rtB2a, this.rtB2b]) r?.dispose();
+    this.hist?.dispose();
+    // half float when the phone can draw into it (lasers and neon past white feed the bloom); bytes otherwise
+    const ext = renderer.extensions;
+    const hdr = ext.has('EXT_color_buffer_half_float') || ext.has('EXT_color_buffer_float');
+    const opt = { type: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType, depthBuffer: false, magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter } as const;
+    this.bright.uniforms.uThreshold!.value = hdr ? 0.72 : 0.62;
+    this.rtScene = [new THREE.WebGLRenderTarget(w, h, opt), new THREE.WebGLRenderTarget(w, h, opt)];
+    const w1 = Math.max(16, Math.round(w / 4)), h1 = Math.max(16, Math.round(h / 4));
+    const w2 = Math.max(8, Math.round(w / 16)), h2 = Math.max(8, Math.round(h / 16));
+    this.rtB1a = new THREE.WebGLRenderTarget(w1, h1, opt); this.rtB1b = new THREE.WebGLRenderTarget(w1, h1, opt);
+    this.rtB2a = new THREE.WebGLRenderTarget(w2, h2, opt); this.rtB2b = new THREE.WebGLRenderTarget(w2, h2, opt);
+    const hk = 480 / Math.max(vw, vh);
+    this.hist = new THREE.WebGLArrayRenderTarget(Math.round(vw * hk), Math.round(vh * hk), HIST, { depthBuffer: false });
+    this.hist.texture.magFilter = THREE.LinearFilter; this.hist.texture.minFilter = THREE.LinearFilter;
+    this.scene.uniforms.uHist!.value = this.hist.texture;
+    this.material.uniforms.uRes!.value.set(w, h);
+  }
+
+  private pass(renderer: THREE.WebGLRenderer, mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null, layer = 0): void {
+    this.quad.material = mat;
+    renderer.setRenderTarget(target, layer);
+    renderer.render(this.quadScene, this.cam);
+  }
+
+  /** steps 2–4, before the frame is drawn; the grade (step 5) is the background quad itself */
+  render(renderer: THREE.WebGLRenderer, vw: number, vh: number): void {
+    this.targets(renderer, vw, vh);
+    const prevTarget = renderer.getRenderTarget();
+    // 2: this frame's cut-out into the history
+    this.head = (this.head + 1) % HIST;
+    this.pass(renderer, this.cut, this.hist as unknown as THREE.WebGLRenderTarget, this.head);
+    this.scene.uniforms.uHead!.value = this.head;
+    // 3: the scene, reading the last one
+    const cur = this.rtScene[this.flip]!, prev = this.rtScene[1 - this.flip]!;
+    this.flip = 1 - this.flip;
+    this.scene.uniforms.uPrev!.value = prev.texture;
+    this.pass(renderer, this.scene, cur);
+    // 4: bloom
+    const b = this.bright.uniforms, bl = this.blur.uniforms;
+    b.uSrc!.value = cur.texture; (b.uTexel!.value as THREE.Vector2).set(1 / cur.width, 1 / cur.height);
+    this.pass(renderer, this.bright, this.rtB1a);
+    const blur2 = (a: THREE.WebGLRenderTarget, c: THREE.WebGLRenderTarget, times: number) => {
+      for (let i = 0; i < times; i++) {
+        bl.uSrc!.value = a.texture; (bl.uDir!.value as THREE.Vector2).set(1.4 / a.width, 0); this.pass(renderer, this.blur, c);
+        bl.uSrc!.value = c.texture; (bl.uDir!.value as THREE.Vector2).set(0, 1.4 / a.height); this.pass(renderer, this.blur, a);
+      }
+    };
+    blur2(this.rtB1a!, this.rtB1b!, 1);
+    b.uSrc!.value = this.rtB1a!.texture; (b.uTexel!.value as THREE.Vector2).set(1 / this.rtB1a!.width, 1 / this.rtB1a!.height);
+    const th = b.uThreshold!.value as number;
+    b.uThreshold!.value = 0;
+    this.pass(renderer, this.bright, this.rtB2a);
+    b.uThreshold!.value = th;
+    blur2(this.rtB2a!, this.rtB2b!, 2);
+    renderer.setRenderTarget(prevTarget);
+    const f = this.material.uniforms;
+    f.uScene!.value = cur.texture; f.uBloom1!.value = this.rtB1a!.texture; f.uBloom2!.value = this.rtB2a!.texture;
+  }
 }
