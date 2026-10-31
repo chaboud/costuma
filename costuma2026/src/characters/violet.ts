@@ -28,7 +28,7 @@ type V3 = [number, number, number];
 const HIP: V3 = [1.2, 7.9, 0], KNEE: V3 = [1.32, 4.5, 0.15], ANKLE: V3 = [1.32, 1.35, -0.1], TOE: V3 = [1.32, 1.0, 2.0];
 // the wings hang a little out from her sides: a wing that touched the body would be joined to it by the marching cubes
 // and tear off it when raised
-const SHOULDER: V3 = [2.45, 12.1, 0], ELBOW: V3 = [3.3, 9.7, -0.1], WRIST: V3 = [3.85, 7.4, 0.15];
+const SHOULDER: V3 = [2.55, 12.1, 0], ELBOW: V3 = [3.4, 9.7, -0.1], WRIST: V3 = [3.95, 7.4, 0.15];
 const WAIST = 9.4, HEM = 5.9;
 const mx = (p: V3): V3 => [-p[0], p[1], p[2]];
 
@@ -90,19 +90,22 @@ function torsoD(x: number, y: number, z: number): number {
   const ax = Math.abs(x);
   let d = sdEllipsoid(x, y, z, 0, 10.0, 0.1, 1.9, 2.4, 1.55);
   d = smin(d, sdEllipsoid(x, y, z, 0, 10.75, 0.45, 1.55, 1.3, 1.25), 0.6);
-  d = smin(d, sdEllipsoid(x, y, z, 0, 11.45, 0, 2.15, 1.0, 1.35), 0.7);
-  d = smin(d, sdSphere(ax, y, z, 2.2, 11.85, 0, 0.7), 0.5);
+  d = smin(d, sdEllipsoid(x, y, z, 0, 11.45, 0, 2.0, 1.0, 1.35), 0.7);
+  d = smin(d, sdSphere(ax, y, z, 2.25, 11.85, 0, 0.68), 0.5);
   return smin(d, sdEllipsoid(x, y, z, 0, 8.3, -0.1, 1.65, 1.0, 1.4), 0.6);
 }
 
 /** the skirt: a pleated bell from the waist (inside the body) to the hem */
 function skirtD(x: number, y: number, z: number): number {
   if (y > WAIST + 0.6 || y < HEM - 0.6) return Math.max(y - WAIST, HEM - y);
+  return Math.max(skirtRing(x, y, z), y - WAIST, HEM - y);
+}
+/** the distance out from the bell's side (negative inside it) */
+function skirtRing(x: number, y: number, z: number): number {
   const t = Math.min(1, Math.max(0, (WAIST - y) / (WAIST - HEM))), f = 1 - (1 - t) * (1 - t);
   const pleat = 1 + 0.03 * f * Math.cos(Math.atan2(x, z) * 10);
   const rx = (1.72 + 0.95 * f) * pleat, rz = (1.45 + 0.85 * f) * pleat, zc = 0.05 - 0.1 * f;
-  const ring = (Math.hypot(x / rx, (z - zc) / rz) - 1) * Math.min(rx, rz);
-  return Math.max(ring, y - WAIST, HEM - y);
+  return (Math.hypot(x / rx, (z - zc) / rz) - 1) * Math.min(rx, rz);
 }
 
 /** the head, design units: a big round Muppet head, plump cheeks, a tuft on top, sockets the eyes sit in */
@@ -129,7 +132,7 @@ function wingD(ax: number, y: number, z: number): number {
   if (ax < 1.0) return 1.7 - ax;
   if (y > 13.4) return y - 12.8;
   if (y < 4.6) return 5.2 - y;
-  let d = sdCapsule(ax, y, z, ...SHOULDER, ...ELBOW, 0.7, 0.58);
+  let d = sdCapsule(ax, y, z, ...SHOULDER, ...ELBOW, 0.6, 0.56);
   const k = 1.75; // the blade is this much broader front to back than across
   d = smin(d, sdCapsule(ax, y, z / k, ELBOW[0], ELBOW[1], ELBOW[2] / k, WRIST[0], WRIST[1], WRIST[2] / k, 0.5, 0.4), 0.45);
   for (let i = 0; i < 4; i++) {
@@ -204,7 +207,8 @@ const violetCapture: Capture = (sg, x, y, z) => {
   if (n === 'head') return near(HEAD);
   if (n === 'jaw' || n.startsWith('foot')) return false;
   if (n.startsWith('tail')) return near(TAIL);
-  if (n.startsWith('arm') || n.startsWith('forearm')) return near(WING);
+  // and of the body only the shoulder: the dress under the arm stays with the spine when the wing goes up
+  if (n.startsWith('arm') || n.startsWith('forearm')) return near(WING) && (lastPart === WING || y > 11.3);
   if (n.startsWith('shin')) return near(LEG);
   if (n.startsWith('thigh')) {
     if (near(LEG)) return true;
@@ -214,16 +218,27 @@ const violetCapture: Capture = (sg, x, y, z) => {
 };
 
 const CREST_Y = hs([0, 15.95, 0])[1];
-const neckline = (ax: number, z: number) => (z > 0 ? 11.55 - 1.0 * Math.max(0, 1 - ax / 1.05) : 11.55);
+/** the dress's top: a V at the front, cut lower under the arms (the shoulders are feathers, and stretch when a wing goes up) */
+const neckline = (ax: number, z: number) => (z > 0 ? 11.55 - 1.0 * Math.max(0, 1 - ax / 1.05) : 11.55) - 0.5 * sstep(1.3, 1.9, ax);
+const PLUMAGE = 0x7a3cc8;
 const BLACK_C = new THREE.Color(0x141218), GOLD_C = new THREE.Color(0xe2ac38), CLOTH_C = new THREE.Color(0x8a48d8);
+// the cloth is brightened by 1.6 (tint) where the plumage is not: this lands on the plumage's own undercoat
+const PLUM_C = new THREE.Color(PLUMAGE).multiplyScalar(1 / 1.6);
 /** a band's weight: 1 inside `half` of its centre, 0 past it, blended over `soft` either side */
 const band = (s: number, half: number, soft: number) => 1 - sstep(half - soft, half + soft, Math.abs(s));
 /** the dress's colour: black, the gold neckline and hem, the violet waistband (which also hides where the skirt leaves the body) */
 function cloth(p: number, x: number, y: number, z: number, c: THREE.Color): void {
   c.copy(BLACK_C);
-  if (p === TORSO) c.lerp(GOLD_C, band(y - (neckline(Math.abs(x), z) - 0.15), 0.15, 0.08));
+  if (p === TORSO) {
+    // above the gold, a strip as violet as the feathers' roots that the feathers hang over: where the feathered region
+    // begins, the grid's zigzag is violet against violet
+    const neck = neckline(Math.abs(x), z);
+    c.lerp(GOLD_C, band(y - (neck - 0.15), 0.15, 0.08));
+    c.lerp(PLUM_C, sstep(neck + 0.02, neck + 0.14, y));
+  }
   c.lerp(CLOTH_C, band(y - (WAIST - 0.17), 0.28, 0.08));
-  if (p === SKIRT) c.lerp(GOLD_C, 1 - sstep(HEM + 0.34, HEM + 0.5, y));
+  // the hem's gold on the outside only: the skirt's underside shows when a squat lifts it
+  if (p === SKIRT) c.lerp(GOLD_C, (1 - sstep(HEM + 0.34, HEM + 0.5, y)) * (skirtRing(x, y, z) > -0.12 ? 1 : 0));
 }
 
 /** Regions: 0 violet plumage, 1 dark violet (feather tips), 2 the dress's black, 3 gold trim, 4 white, 5 violet cloth. */
@@ -233,7 +248,7 @@ export function violetRegion(x: number, y: number, z: number): number {
   if (p === TORSO) {
     // a V neckline at the front, sleeveless (the shoulders feathered), a violet waistband
     const neck = neckline(ax, z);
-    if (y > neck) return 0;
+    if (y > neck + 0.3) return 0;
     if (y > neck - 0.3) return 3;
     if (y < WAIST + 0.1 && y > WAIST - 0.45) return 5;
     return 2;
@@ -426,7 +441,7 @@ export const VIOLET: CharacterDef = {
   segs: VIOLET_SEGMENTS,
   body: {
     sdf: violetSDF, region: violetRegion, box: VIOLET_BOX,
-    palette: [0x7a3cc8, 0x2c1448, 0x141218, GOLD, WHITE, 0x8a48d8],
+    palette: [PLUMAGE, 0x2c1448, 0x141218, GOLD, WHITE, 0x8a48d8],
     surface: 'soft', capture: violetCapture,
     fur: { length: 1.2, density: 2.0, tip: 0.3, feather: true }, furLen: violetFeatherLength,
     tint(r, x, y, z, c) {
