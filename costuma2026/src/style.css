@@ -105,3 +105,7 @@ h1 { font-size: 46px; margin: 0 0 8px; letter-spacing: -0.01em; }
   .qr-code { width: min(58vh, 300px); }
   .preview-media img, .preview-media video { max-height: 56vh; }
 }
+
+/* a dip to black over a change of mode or camera: what would be a cut becomes a fade */
+.dip { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 10; transition: opacity 0.18s ease; }
+.dip.on { opacity: 1; }

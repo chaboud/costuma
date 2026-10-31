@@ -29,6 +29,14 @@ export interface Track {
 export const TUNE = {
   /** seconds: world landmarks (shape), image landmarks, lateral position, depth, body lengths */
   tauWorld: 0.045, tauImage: 0.035, tauXY: 0.05, tauZ: 0.14, tauLen: 1.5,
+  /** visibility decides pose-or-rest per limb: slow, or a limb at the frame's edge flickers between the two */
+  tauVis: 0.25,
+  /**
+   * the torso and the face (shoulders, hips, the head's points) smoothed harder than the limbs: they turn slower, and
+   * their jitter is what shows on a big costume. Measured on a noisy still replayed at 30 fps (scripts/jitter-sim):
+   * raw pelvis 1.13°, head 1.19°; at the limbs' 45 ms they keep 0.78° / 0.71°, at 90 ms 0.56° / 0.51°
+   */
+  tauCore: 0.09,
   fadeIn: 0.22, fadeOut: 0.35, forgetAfter: 0.6,
   /** a detection joins a track within this many of the track's torso lengths (in the image) */
   matchRadius: 1.3,
@@ -48,10 +56,11 @@ const center = (im: LM[]): { x: number; y: number; s: number } => {
 const ema = (a: number, b: number, k: number) => a + (b - a) * k;
 const kOf = (dt: number, tau: number) => 1 - Math.exp(-dt / Math.max(tau, 1e-4));
 
-function blendLM(out: LM[], inp: LM[], k: number): void {
+const CORE = new Set<number>([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, L.shL, L.shR, L.hipL, L.hipR]);
+function blendLM(out: LM[], inp: LM[], k: number, kv: number, kCore = k): void {
   for (let i = 0; i < N_LANDMARKS; i++) {
-    const o = out[i]!, p = inp[i]!;
-    o.x = ema(o.x, p.x, k); o.y = ema(o.y, p.y, k); o.z = ema(o.z, p.z, k); o.v = ema(o.v, p.v, Math.min(1, k * 1.5));
+    const o = out[i]!, p = inp[i]!, kk = CORE.has(i) ? kCore : k;
+    o.x = ema(o.x, p.x, kk); o.y = ema(o.y, p.y, kk); o.z = ema(o.z, p.z, kk); o.v = ema(o.v, p.v, kv);
   }
 }
 const copyLM = (a: LM[]): LM[] => a.map((p) => ({ ...p }));
@@ -84,8 +93,9 @@ export class Tracker {
       const t = live[pr.ti]!, p = placed[pr.di]!;
       // a track coming back from lost snaps rather than gliding across the frame
       const snap = t.lost;
-      blendLM(t.world, p.d.world, snap ? 1 : kOf(dt, TUNE.tauWorld));
-      blendLM(t.image, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage));
+      const kv = snap ? 1 : kOf(dt, TUNE.tauVis);
+      blendLM(t.world, p.d.world, snap ? 1 : kOf(dt, TUNE.tauWorld), kv, snap ? 1 : kOf(dt, TUNE.tauCore));
+      blendLM(t.image, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage), kv);
       const kxy = snap ? 1 : kOf(dt, TUNE.tauXY), kz = snap ? 1 : kOf(dt, TUNE.tauZ);
       t.T = { x: ema(t.T.x, p.T!.x, kxy), y: ema(t.T.y, p.T!.y, kxy), z: ema(t.T.z, p.T!.z, kz) };
       const nl = bodyLengths(t.world), kl = kOf(dt, TUNE.tauLen);

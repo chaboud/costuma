@@ -79,8 +79,31 @@ export interface Built {
   ms: number;
 }
 
+/** A skinned surface as plain arrays: what a worker computes and hands back (build.worker.ts). */
+export interface SurfaceArrays {
+  position: Float32Array; normal: Float32Array; color: Float32Array; skinIndex: Uint16Array; skinWeight: Float32Array; aFur?: Float32Array;
+}
+/** the arrays' buffers, for postMessage's transfer list */
+export const transferOf = (a: SurfaceArrays): ArrayBuffer[] =>
+  [a.position, a.normal, a.color, a.skinIndex, a.skinWeight, ...(a.aFur ? [a.aFur] : [])].map((x) => x.buffer as ArrayBuffer);
+
+export function geometryOf(a: SurfaceArrays): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(a.position, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(a.normal, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(a.color, 3));
+  if (a.aFur) geo.setAttribute('aFur', new THREE.BufferAttribute(a.aFur, 1));
+  geo.setAttribute('skinIndex', new THREE.BufferAttribute(a.skinIndex, 4));
+  geo.setAttribute('skinWeight', new THREE.BufferAttribute(a.skinWeight, 4));
+  return geo;
+}
+
 /** The skinned surface at a grid resolution: positions, normals, region colours, the two nearest bones' weights. */
 export function surface(body: Body, segs: Seg[], res: number): THREE.BufferGeometry {
+  return geometryOf(surfaceArrays(body, segs, res));
+}
+
+export function surfaceArrays(body: Body, segs: Seg[], res: number): SurfaceArrays {
   const B = body.box;
   const cx = (B.min[0] + B.max[0]) / 2, cy = (B.min[1] + B.max[1]) / 2, cz = (B.min[2] + B.max[2]) / 2;
   const hx = (B.max[0] - B.min[0]) / 2, hy = (B.max[1] - B.min[1]) / 2, hz = (B.max[2] - B.min[2]) / 2;
@@ -118,14 +141,10 @@ export function surface(body: Body, segs: Seg[], res: number): THREE.BufferGeome
     col[v * 3] = c.r * v1; col[v * 3 + 1] = c.g * v1; col[v * 3 + 2] = c.b * v1;
   }
   mc.geometry.dispose();
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  let aFur: Float32Array | undefined;
   if (body.fur) {
-    const fl = new Float32Array(count);
-    for (let v = 0; v < count; v++) fl[v] = body.furLen ? body.furLen(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!) : 1;
-    geo.setAttribute('aFur', new THREE.BufferAttribute(fl, 1));
+    aFur = new Float32Array(count);
+    for (let v = 0; v < count; v++) aFur[v] = body.furLen ? body.furLen(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!) : 1;
   }
   const idx = new Uint16Array(count * 4), wts = new Float32Array(count * 4);
   const segList = segs.map((sg, i) => ({ i, a: sg.a, b: sg.b, reach: sg.reach ?? Infinity, name: sg.name }));
@@ -150,10 +169,11 @@ export function surface(body: Body, segs: Seg[], res: number): THREE.BufferGeome
     idx[v * 4] = i0; idx[v * 4 + 1] = i1;
     wts[v * 4] = w0 / sum; wts[v * 4 + 1] = w1 / sum;
   }
-  geo.setAttribute('skinIndex', new THREE.BufferAttribute(idx, 4));
-  geo.setAttribute('skinWeight', new THREE.BufferAttribute(wts, 4));
-  return geo;
+  return { position: pos, normal: nor, color: col, skinIndex: idx, skinWeight: wts, aFur };
 }
+
+/** the resolutions a character is built at: its body, and its fur's coarser shell */
+export const resOf = (def: CharacterDef, res = def.res ?? 88) => ({ body: res, fur: Math.max(32, Math.round(res * 0.6)) });
 
 /** The bones, one per segment, positioned at their `a` ends relative to their parent, identity rotations. */
 export function skeleton(segs: Seg[]): { bones: Map<string, THREE.Bone>; root: THREE.Bone } {
@@ -175,14 +195,16 @@ export function skeleton(segs: Seg[]): { bones: Map<string, THREE.Bone>; root: T
   return { bones, root: root! };
 }
 
-export function buildCharacter(def: CharacterDef, res = def.res ?? 88): Built {
+/** `pre`: the surfaces already computed (by the worker); without, they are computed here */
+export function buildCharacter(def: CharacterDef, res = def.res ?? 88, pre?: { body: SurfaceArrays; fur: SurfaceArrays | null }): Built {
   const t0 = performance.now();
+  const R = resOf(def, res);
   const { bones, root } = skeleton(def.segs);
   let top: THREE.Object3D;
   let fur: THREE.SkinnedMesh[] = [];
   if (def.body) {
     const body = def.body;
-    const geo = surface(body, def.segs, res);
+    const geo = pre ? geometryOf(pre.body) : surface(body, def.segs, R.body);
     const surf = body.surface === 'scales' ? undefined : body.surface === 'fur' ? undefined : body.surface;
     const mesh = new THREE.SkinnedMesh(geo, createKaijuMaterial(!!body.fur || body.surface === 'fur', surf));
     mesh.castShadow = true;
@@ -190,7 +212,7 @@ export function buildCharacter(def: CharacterDef, res = def.res ?? 88): Built {
     mesh.frustumCulled = false;
     mesh.add(root);
     mesh.bind(new THREE.Skeleton(def.segs.map((s) => bones.get(s.name)!)));
-    if (body.fur && (def.furShells ?? 10) > 0) fur = addFur(mesh, surface(body, def.segs, Math.max(32, Math.round(res * 0.6))), body.fur, def.furShells ?? 10);
+    if (body.fur && (def.furShells ?? 10) > 0) fur = addFur(mesh, pre?.fur ? geometryOf(pre.fur) : surface(body, def.segs, R.fur), body.fur, def.furShells ?? 10);
     top = mesh;
   } else {
     const g = new THREE.Group();

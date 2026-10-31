@@ -109,6 +109,29 @@ in `src/main.ts`.
   cover-fitted; a selfie mirrors the whole world group (`scale.x = −1`), not
   the data — mirrored landmarks would describe a different-handed person.
 
+## Smooth, always
+
+Founder: "everything should be smooth and pro. No jumpies, no jiggles." What
+that means here, and where each lives:
+
+- **No freezes.** Costumes are made in a Web Worker
+  (`characters/build.worker.ts`), all of them in the background from Start;
+  the main thread only assembles meshes. A costume asked for before it is
+  ready jumps the queue; the old one stays on until the new one is ready.
+- **No pops.** A costume change crossfades (0.35 s, `stage.ts sync`); a party
+  preset change crossfades (0.45 s, the old preset drawn alongside); a mode
+  change or camera flip dips to black and back; people fade in and out.
+- **No jiggle.** Measured, not guessed: a noisy still replayed through the
+  tracker at 30 fps (`scripts/jitter-probe.mjs` records, `scripts/jitter-sim.test.ts`
+  replays). Raw: hips' depth 1.0 cm, upper arm 0.80°, head 1.19°, pelvis
+  1.13° (s.d.). The torso and face are smoothed twice as hard as the limbs
+  (`TUNE.tauCore` 90 ms vs 45 ms): head 0.51°, pelvis 0.56°, arms 0.50°, depth
+  0.3 cm. The noise was synthetic (σ 14 on 8 bits); a phone at night will be
+  noisier. Visibility is smoothed on its own slow clock (250 ms) so a limb at
+  the frame's edge does not flicker between pose and rest. The camera's light
+  glides (~0.6 s); party masks are smoothed (~40 ms) so edges do not shimmer;
+  the pyramid's layout glides (~150 ms).
+
 ## Decisions (and what was rejected)
 
 | Choice | Over | Why |

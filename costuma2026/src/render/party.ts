@@ -277,7 +277,8 @@ const BLUR_FRAG = /* glsl */ `
 
 const FINAL_FRAG = /* glsl */ `
   varying vec2 vUv;
-  uniform sampler2D uScene, uBloom1, uBloom2;
+  uniform sampler2D uScene, uBloom1, uBloom2, uOld;
+  uniform float uMix;
   #ifdef FG
   uniform sampler2D uMask;
   uniform vec4 uOn;
@@ -289,6 +290,7 @@ const FINAL_FRAG = /* glsl */ `
     vec2 d = vUv - 0.5;
     float ca = 0.006 + 0.012 * uBeat;
     vec3 c = vec3(texture2D(uScene, vUv + d * ca).r, texture2D(uScene, vUv).g, texture2D(uScene, vUv - d * ca).b);
+    if (uMix < 1.0) c = mix(texture2D(uOld, vUv).rgb, c, uMix);
     c += texture2D(uBloom1, vUv).rgb * 0.75 + texture2D(uBloom2, vUv).rgb * 0.9;
     vec2 v = d * vec2(1.0, 1.15);
     c *= 1.0 - 0.55 * dot(v, v);
@@ -314,7 +316,19 @@ export class Party {
    * that dance behind them (insertion by draw order, no depth needed)
    */
   readonly foreground: THREE.ShaderMaterial;
-  preset: Preset = PRESETS[0]!;
+  private _preset: Preset = PRESETS[0]!;
+  /** a change of preset crossfades (the old one drawn alongside for a moment), never a cut */
+  get preset(): Preset { return this._preset; }
+  set preset(p: Preset) {
+    if (p === this._preset) return;
+    this.fromCode = this._preset.code;
+    this.xfade = this.started ? 0 : 1;
+    this._preset = p;
+  }
+  private fromCode = 0;
+  private xfade = 1;
+  private started = false;
+  private rtOld: THREE.WebGLRenderTarget | null = null;
   /** how many people to cut out (the nearest) */
   subjects = 2;
   /** the bass's envelope, 0..1 (audio/beat.ts); 0 without the microphone */
@@ -378,6 +392,7 @@ export class Party {
         uCrop: shared.uCrop, uMirror: shared.uMirror,
         uScene: { value: null }, uBloom1: { value: null }, uBloom2: { value: null },
         uTime: { value: 0 }, uBeat: { value: 0 }, uFlash: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) },
+        uOld: { value: null }, uMix: { value: 1 },
       },
     });
     this.foreground = new THREE.ShaderMaterial({
@@ -402,7 +417,9 @@ export class Party {
   }
 
   /** the subjects this frame, their masks into the textures, the distance field, the trails, the box (step 1) */
+  private frameDt = 1 / 30;
   update(tracks: Track[], dt: number, t: number, aspect: number, ground?: Ground, K?: Intrinsics): void {
+    this.frameDt = dt;
     const u = this.scene.uniforms;
     u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code; u.uBeat!.value = this.beat; u.uClones!.value = this.clones ? 1 : 0;
     this.material.uniforms.uTime!.value = t; this.material.uniforms.uBeat!.value = this.beat;
@@ -418,15 +435,19 @@ export class Party {
       if (m) {
         if (m.w !== this.mw || m.h !== this.mh) this.resizeMask(m.w, m.h);
         let buf = this.chanMask[c];
-        if (!buf || buf.length !== m.data.length) buf = this.chanMask[c] = new Float32Array(m.data.length);
-        buf.set(m.data);
+        if (!buf || buf.length !== m.data.length) { buf = this.chanMask[c] = new Float32Array(m.data.length); buf.set(m.data); }
+        else {
+          // ~40 ms: the mask's frame-to-frame noise at the edge (a shimmer) goes, a moving arm keeps up
+          const k = 1 - Math.exp(-dt / 0.04), d = m.data;
+          for (let i = 0; i < d.length; i++) buf[i] = buf[i]! + (d[i]! - buf[i]!) * k;
+        }
       }
     }
     const on = [0, 0, 0, 0];
     for (let c = 0; c < 4; c++) { const id = this.chans[c]; if (id !== null && this.chanMask[c]) on[c] = tracks.find((k) => k.id === id)?.presence ?? 0; }
     this.uOn.set(on[0]!, on[1]!, on[2]!, on[3]!);
     this.fx(dt, t, on);
-    this.layPyramid(live[0], ground, K);
+    this.layPyramid(live[0], ground, K, dt);
     if (!this.mw) return;
     const n = this.mw * this.mh, md = this.maskData;
     for (let c = 0; c < 4; c++) {
@@ -442,14 +463,18 @@ export class Party {
    * clone's feet projected through the camera, its scale the ratio of depths (so the floor's perspective decides how
    * small and how high the back rows are), sorted back to front.
    */
-  private layPyramid(subject: Track | undefined, ground?: Ground, K?: Intrinsics): void {
+  private readonly cloneSm = Array.from({ length: 9 }, () => new THREE.Vector4());
+  private cloneSmN = 0;
+  private layPyramid(subject: Track | undefined, ground?: Ground, K?: Intrinsics, dt = 1 / 30): void {
     const u = this.scene.uniforms;
-    if (!subject || !ground || !K) { u.uCloneN!.value = 0; return; }
+    if (!subject || !ground || !K) { u.uCloneN!.value = 0; this.cloneSmN = 0; return; }
     const hip = new THREE.Vector3(subject.T.x, subject.T.y, subject.T.z);
     const foot = ground.foot(hip), H = Math.max(1.2, Math.min(2.2, ground.height(hip) * 1.9));
     const { back, side } = ground.axes();
-    const fp = project(foot, K);
-    (u.uFoot!.value as THREE.Vector2).set(fp.x, 1 - fp.y);
+    const fp = project(foot, K), kk = 1 - Math.exp(-dt / 0.15);
+    // the layout glides: the clones' places follow the subject's feet over ~0.15 s, never in a jump
+    const uf = u.uFoot!.value as THREE.Vector2;
+    if (this.cloneSmN === 0) uf.set(fp.x, 1 - fp.y); else uf.lerp(new THREE.Vector2(fp.x, 1 - fp.y), kk);
     u.uFootW!.value = Math.max(0.05, this.box.z - this.box.x);
     const list: { v: THREE.Vector4; depth: number }[] = [];
     for (let r = 1; r <= 3; r++) for (let j = 0; j <= r; j++) {
@@ -461,7 +486,8 @@ export class Party {
     }
     list.sort((a, b) => b.depth - a.depth);
     const arr = u.uClone!.value as THREE.Vector4[];
-    list.forEach((c, i) => arr[i]!.copy(c.v));
+    list.forEach((c, i) => { const sm = this.cloneSm[i]!; if (this.cloneSmN !== list.length) sm.copy(c.v); else sm.lerp(c.v, kk); sm.w = c.v.w; arr[i]!.copy(sm); });
+    this.cloneSmN = list.length;
     u.uCloneN!.value = list.length;
   }
 
@@ -532,7 +558,7 @@ export class Party {
     const key = `${w}x${h}`;
     if (key === this.sizeKey) return;
     this.sizeKey = key;
-    for (const r of [...this.rtScene, this.rtB1a, this.rtB1b, this.rtB2a, this.rtB2b]) r?.dispose();
+    for (const r of [...this.rtScene, this.rtB1a, this.rtB1b, this.rtB2a, this.rtB2b, this.rtOld]) r?.dispose();
     this.hist?.dispose();
     // half float when the phone can draw into it (lasers and neon past white feed the bloom); bytes otherwise
     const ext = renderer.extensions;
@@ -540,6 +566,7 @@ export class Party {
     const opt = { type: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType, depthBuffer: false, magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter } as const;
     this.bright.uniforms.uThreshold!.value = hdr ? 0.72 : 0.62;
     this.rtScene = [new THREE.WebGLRenderTarget(w, h, opt), new THREE.WebGLRenderTarget(w, h, opt)];
+    this.rtOld = new THREE.WebGLRenderTarget(w, h, opt);
     const w1 = Math.max(16, Math.round(w / 4)), h1 = Math.max(16, Math.round(h / 4));
     const w2 = Math.max(8, Math.round(w / 16)), h2 = Math.max(8, Math.round(h / 16));
     this.rtB1a = new THREE.WebGLRenderTarget(w1, h1, opt); this.rtB1b = new THREE.WebGLRenderTarget(w1, h1, opt);
@@ -570,6 +597,19 @@ export class Party {
     this.flip = 1 - this.flip;
     this.scene.uniforms.uPrev!.value = prev.texture;
     this.pass(renderer, this.scene, cur);
+    // a preset changing: the old one drawn too, for the grade to cross from (0.45 s)
+    this.started = true;
+    const f = this.material.uniforms;
+    if (this.xfade < 1) {
+      this.xfade = Math.min(1, this.xfade + this.frameDt / 0.45);
+      const code = this.scene.uniforms.uPreset!.value;
+      this.scene.uniforms.uPreset!.value = this.fromCode;
+      this.pass(renderer, this.scene, this.rtOld);
+      this.scene.uniforms.uPreset!.value = code;
+      f.uOld!.value = this.rtOld!.texture;
+    }
+    const e = this.xfade;
+    f.uMix!.value = e * e * (3 - 2 * e);
     // 4: bloom
     const b = this.bright.uniforms, bl = this.blur.uniforms;
     b.uSrc!.value = cur.texture; (b.uTexel!.value as THREE.Vector2).set(1 / cur.width, 1 / cur.height);
@@ -588,7 +628,6 @@ export class Party {
     b.uThreshold!.value = th;
     blur2(this.rtB2a!, this.rtB2b!, 2);
     renderer.setRenderTarget(prevTarget);
-    const f = this.material.uniforms;
     f.uScene!.value = cur.texture; f.uBloom1!.value = this.rtB1a!.texture; f.uBloom2!.value = this.rtB2a!.texture;
   }
 }

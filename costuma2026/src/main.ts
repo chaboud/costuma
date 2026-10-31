@@ -67,16 +67,15 @@ function castOf(trackId: number): string {
   return m;
 }
 
-// costumes are built on first use (marching cubes: up to a second or two on a phone), one at a time, after a paint
-const building = new Set<string>();
+// costumes are made in a worker (stage.prepare): all of them, in the background, from the start; one asked for before
+// it is ready jumps the queue. The picture never stops while one is made.
+const asked = new Set<string>();
 function ensureBuilt(id: string, quiet = false): void {
-  if (stage.hasTemplate(id) || building.has(id)) return;
-  building.add(id);
-  if (!quiet) toast(`Dressing up as ${byId(id).name}…`, 1800);
-  requestAnimationFrame(() => setTimeout(() => {
-    try { stage.template(id); } catch (e) { console.error('build failed', id, e); toast(`${byId(id).name} failed to build`); }
-    building.delete(id);
-  }, 20));
+  if (stage.hasTemplate(id)) return;
+  const first = !asked.has(id);
+  asked.add(id);
+  if (!quiet && first) toast(`Dressing up as ${byId(id).name}…`, 1800);
+  if (first || !quiet) void stage.prepare(id, true).catch((e) => { console.error('build failed', id, e); toast(`${byId(id).name} failed to build`); });
 }
 
 // ── HUD ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -163,6 +162,13 @@ function chooseEffect(id: string): void {
   persist();
   markPicker();
   toast(p.name, 800);
+}
+
+/** fade to black, do `fn` while dark, fade back */
+function dip(fn: () => void | Promise<void>): void {
+  const d = $('dip');
+  d.classList.add('on');
+  setTimeout(async () => { try { await fn(); } finally { requestAnimationFrame(() => requestAnimationFrame(() => d.classList.remove('on'))); } }, 190);
 }
 
 /** costumes, or party mode; party asks the pose model for each person's cut-out mask */
@@ -521,7 +527,10 @@ async function start(): Promise<void> {
     void motionAsk;
     status.textContent = `Dressing up as ${byId(settings.costume).name}…`;
     await new Promise((r) => setTimeout(r, 30));
-    stage.template(settings.mode === 'one' ? settings.costume : ROSTER[0]!.id);
+    const first = settings.mode === 'one' ? settings.costume : ROSTER[0]!.id;
+    await stage.prepare(first, true);
+    // the rest in the background, in picker order
+    for (const d of ROSTER) void stage.prepare(d.id);
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
     setScene(settings.scene);
@@ -546,11 +555,11 @@ function boot(): void {
   $('btn-gear').onclick = () => { buildSettings(); openModal('settings'); readout(); };
   $('btn-flip').onclick = async () => {
     if (SYNTH) return;
-    try { await camera.flip(); stage.setVideo(video); tracker.clear(); overrides.clear(); mixed.clear(); } catch (e) { toast(`Camera: ${(e as Error).message}`); }
+    dip(async () => { try { await camera.flip(); stage.setVideo(video); tracker.clear(); overrides.clear(); mixed.clear(); } catch (e) { toast(`Camera: ${(e as Error).message}`); } });
   };
   $('btn-snap').onclick = () => { snapWanted = true; const f = $('stage'); f.style.filter = 'brightness(1.8)'; setTimeout(() => (f.style.filter = ''), 120); };
   $('btn-rec').onclick = toggleRecording;
-  for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) b.onclick = () => setScene(b.dataset.scene as Settings['scene']);
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) b.onclick = () => { if (b.dataset.scene !== settings.scene) dip(() => setScene(b.dataset.scene as Settings['scene'])); };
   const cast = $('start-cast');
   for (const d of ROSTER.slice(0, 6)) { const i = new Image(); i.src = thumbUrl(d.id); i.alt = d.name; i.onerror = () => i.remove(); cast.appendChild(i); }
   buildPicker();

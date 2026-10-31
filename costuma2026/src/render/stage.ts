@@ -3,7 +3,7 @@
 // pose solve used — so the costume lands on the person whatever the focal length guess (pose/solve.ts).
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { buildCharacter, type Built, type CharacterDef } from '../characters/build';
+import { buildCharacter, type Built, type CharacterDef, type SurfaceArrays } from '../characters/build';
 import { byId } from '../characters/roster';
 import { Rig, poseFromLandmarks } from '../pose/rig';
 import type { Track } from '../pose/tracker';
@@ -18,6 +18,9 @@ interface Wearer {
   rig: Rig;
   mats: THREE.Material[];
   fade: number;
+  /** 0..1: how far this costume has faded in (new) or, leaving, how much is left */
+  life: number;
+  leaving: boolean;
   /** the bones in a fixed order, and a ring of their past poses (the pyramid's canon) */
   boneList: THREE.Bone[];
   hist: Float32Array[];
@@ -67,6 +70,9 @@ export class Stage {
   private videoTex: THREE.VideoTexture | null = null;
   private readonly templates = new Map<string, Built>();
   private readonly wearers = new Map<number, Wearer>();
+  /** costumes fading off people who changed into another (never a pop) */
+  private leaving: Wearer[] = [];
+  private lastT = -1;
   /** the dance pyramid in 3D: each wearer's costume cloned behind and above them, dancing their moves late (party) */
   pyramid = false;
   /** the wearers themselves undressed (party's "behind you": only their pyramid shows, and they stay in front) */
@@ -129,13 +135,69 @@ export class Stage {
     if (m) this.fg.material = m;
   }
 
-  /** build (once) and keep a character; slow (marching cubes), so call it while showing something */
+  /** build (once) and keep a character; slow (marching cubes) — prefer prepare(), which does the slow part off thread */
   template(id: string): Built {
     let b = this.templates.get(id);
     if (!b) { b = buildCharacter(byId(id)); this.templates.set(id, b); }
     return b;
   }
   hasTemplate(id: string): boolean { return this.templates.has(id); }
+
+  // costumes made in a worker, one at a time, in the order asked (a re-ask moves one to the front)
+  private worker: Worker | null = null;
+  private queue: string[] = [];
+  private busy: string | null = null;
+  private waiting = new Map<string, ((b: Built) => void)[]>();
+  workerMs = new Map<string, number>();
+
+  /** a costume ready to wear, made off the main thread; `urgent` puts it at the head of the queue */
+  prepare(id: string, urgent = false): Promise<Built> {
+    const have = this.templates.get(id);
+    if (have) return Promise.resolve(have);
+    const p = new Promise<Built>((r) => { const l = this.waiting.get(id) ?? []; l.push(r); this.waiting.set(id, l); });
+    if (this.busy !== id) {
+      this.queue = this.queue.filter((q) => q !== id);
+      if (urgent) this.queue.unshift(id); else this.queue.push(id);
+    }
+    this.pump();
+    return p;
+  }
+  isPreparing(id: string): boolean { return this.busy === id || this.queue.includes(id); }
+
+  private pump(): void {
+    if (this.busy || !this.queue.length) return;
+    if (!this.worker) {
+      try {
+        this.worker = new Worker(new URL('../characters/build.worker.ts', import.meta.url), { type: 'module' });
+        this.worker.onmessage = (e: MessageEvent<{ id: string; body: SurfaceArrays | null; fur: SurfaceArrays | null; ms: number }>) => {
+          const { id, body, fur, ms } = e.data;
+          this.workerMs.set(id, ms);
+          const b = buildCharacter(byId(id), undefined, body ? { body, fur } : undefined);
+          this.finish(id, b);
+        };
+        this.worker.onerror = (e) => { console.warn('costume worker failed; building on the main thread', e); this.worker = null; this.workerDead = true; this.fallback(); };
+      } catch { this.workerDead = true; }
+    }
+    if (this.workerDead) { this.fallback(); return; }
+    this.busy = this.queue.shift()!;
+    this.worker!.postMessage({ id: this.busy });
+  }
+  private workerDead = false;
+  /** no worker (an old browser): build on the main thread, one a frame */
+  private fallback(): void {
+    const id = this.busy ?? this.queue.shift();
+    if (!id) return;
+    this.busy = id;
+    setTimeout(() => this.finish(id, buildCharacter(byId(id))), 16);
+  }
+  private finish(id: string, b: Built): void {
+    if (!this.templates.has(id)) this.templates.set(id, b);
+    const done = this.templates.get(id)!;
+    for (const r of this.waiting.get(id) ?? []) r(done);
+    this.waiting.delete(id);
+    this.busy = null;
+    this.pump();
+  }
 
   /** fit the camera and the background to the canvas and the video (cover), with the solve's intrinsics */
   layout(K: Intrinsics, mirror: boolean): void {
@@ -159,17 +221,29 @@ export class Stage {
 
   /** dress the tracked people: `cast(trackId)` says which character each wears */
   sync(tracks: Track[], cast: (trackId: number) => string, t: number): void {
+    const dt = this.lastT < 0 ? 1 / 30 : Math.min(0.1, Math.max(0, t - this.lastT));
+    this.lastT = t;
     const keep = new Set<number>();
     for (const tr of tracks) {
       const id = cast(tr.id);
-      if (!this.templates.has(id)) continue; // being built; dressed next frame
-      keep.add(tr.id);
       let w = this.wearers.get(tr.id);
-      if (w && w.def.id !== id) { this.drop(w); w = undefined; }
+      // a change of costume: the old one fades off the person while the new one fades on (the new one may still be
+      // in the making: the old one stays until it is ready)
+      if (w && w.def.id !== id && this.templates.has(id)) { w.leaving = true; this.leaving.push(w); this.wearers.delete(tr.id); w = undefined; }
+      if (!w && !this.templates.has(id)) continue;
+      keep.add(tr.id);
       if (!w) w = this.dress(tr.id, id);
+      w.life = Math.min(1, w.life + dt / 0.35);
       this.pose(w, tr, t);
     }
     for (const [id, w] of this.wearers) if (!keep.has(id)) this.drop(w);
+    this.leaving = this.leaving.filter((w) => {
+      w.life -= dt / 0.35;
+      if (w.life <= 0) { this.drop(w); return false; }
+      const tr = tracks.find((k) => k.id === w.trackId);
+      if (tr) this.pose(w, tr, t);
+      return true;
+    });
   }
 
   private dress(trackId: number, id: string): Wearer {
@@ -196,7 +270,7 @@ export class Stage {
       m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material);
     });
     const boneList = tpl.def.segs.map((sg) => bones.get(sg.name)!).filter(Boolean);
-    const w: Wearer = { trackId, def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], fade: 0,
+    const w: Wearer = { trackId, def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], fade: 0, life: 0, leaving: false,
       boneList, hist: Array.from({ length: POSE_HIST }, () => new Float32Array(boneList.length * 7)), histHead: 0, clones: [] };
     this.world.add(root);
     this.wearers.set(trackId, w);
@@ -207,7 +281,7 @@ export class Stage {
     this.world.remove(w.root);
     for (const c of w.clones) this.world.remove(c.root, c.shadow);
     for (const m of w.mats) m.dispose();
-    this.wearers.delete(w.trackId);
+    if (this.wearers.get(w.trackId) === w) this.wearers.delete(w.trackId);
   }
 
   private pose(w: Wearer, tr: Track, t: number): void {
@@ -225,7 +299,8 @@ export class Stage {
     rig.apply(p, t, def.idle?.tail ?? 0);
     w.root.position.set(tr.T.x, tr.T.y, tr.T.z);
     w.root.scale.setScalar(s);
-    const fade = tr.presence * tr.presence * (3 - 2 * tr.presence);
+    const f0 = tr.presence * Math.max(0, Math.min(1, w.life));
+    const fade = f0 * f0 * (3 - 2 * f0);
     if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade; w.fade = fade; }
     w.root.visible = fade > 0.01 && !this.hideWearers;
     def.tick?.(w.root, t);

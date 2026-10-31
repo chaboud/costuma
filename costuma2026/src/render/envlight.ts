@@ -30,7 +30,9 @@ export const LIGHT_TUNE = {
    * a dim frame is brightened toward this mean (linear) for the costume's light, never darkened, by at most `maxGain`:
    * a camera's auto-exposure already lifts a dark room, but a costume lit at a dark street's level reads as mud
    */
-  targetMean: 0.2, maxGain: 2.6,
+  targetMean: 0.22, maxGain: 2.8,
+  /** a little neutral light always: a costume's colours must still read in a dark street (a costume, not a forensic match) */
+  fill: 0.35,
 };
 
 const srgbToLin = new Float32Array(256).map((_, i) => { const c = i / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
@@ -43,6 +45,11 @@ export class CameraLight {
   private readonly lin = new Float32Array(SW * SH * 3);
   private readonly blur = new Float32Array(BW * BH * 3);
   private readonly data = new Uint16Array(EW * EH * 4);
+  /** the environment's radiance, smoothed over time (an EMA per texel): a step in the frame is a glide in the light */
+  private readonly smooth = new Float32Array(EW * EH * 3);
+  private primed = false;
+  private readonly keyDir = new THREE.Vector3(0, 1, 1).normalize();
+  private keyI = 0;
   private readonly tex: THREE.DataTexture;
   private readonly pmrem: THREE.PMREMGenerator;
   private rt: THREE.WebGLRenderTarget | null = null;
@@ -129,6 +136,11 @@ export class CameraLight {
           R = this.blur[i]! * LIGHT_TUNE.back; G = this.blur[i + 1]! * LIGHT_TUNE.back; B = this.blur[i + 2]! * LIGHT_TUNE.back;
         }
         R *= gain; G *= gain; B *= gain;
+        // ~0.6 s to follow a change (updates come every few frames)
+        const si = (r * EW + c) * 3, kk = this.primed ? 0.28 : 1;
+        R = this.smooth[si] = this.smooth[si]! + (R - this.smooth[si]!) * kk;
+        G = this.smooth[si + 1] = this.smooth[si + 1]! + (G - this.smooth[si + 1]!) * kk;
+        B = this.smooth[si + 2] = this.smooth[si + 2]! + (B - this.smooth[si + 2]!) * kk;
         const k = (r * EW + c) * 4;
         this.data[k] = THREE.DataUtils.toHalfFloat(R); this.data[k + 1] = THREE.DataUtils.toHalfFloat(G);
         this.data[k + 2] = THREE.DataUtils.toHalfFloat(B); this.data[k + 3] = THREE.DataUtils.toHalfFloat(1);
@@ -137,6 +149,7 @@ export class CameraLight {
         sx += w * dx; sy += w * cy; sz += w * dz; tot += w;
       }
     }
+    this.primed = true;
     this.tex.needsUpdate = true;
     this.rt = this.pmrem.fromEquirectangular(this.tex, this.rt);
     this.scene.environment = this.rt.texture;
@@ -144,11 +157,14 @@ export class CameraLight {
     // the key: from the environment's brightest direction, as strong as the light is lopsided
     const len = Math.hypot(sx, sy, sz);
     this.share = tot > 0 ? len / tot : 0;
-    if (len > 1e-6) this.dir.set(sx / len, sy / len, sz / len);
+    if (len > 1e-6) this.keyDir.lerp(new THREE.Vector3(sx / len, sy / len, sz / len), 0.25).normalize();
+    this.dir.copy(this.keyDir);
     // a key from straight below reads as a horror torch; keep it at least a little above the horizon
     if (this.dir.y < 0.15) { this.dir.y = 0.15; this.dir.normalize(); }
-    this.key.intensity = LIGHT_TUNE.key * this.share * (tot / (EW * EH)) * 2;
-    this.fill.intensity = 0;
+    const ki = LIGHT_TUNE.key * this.share * (tot / (EW * EH)) * 2;
+    this.keyI += (ki - this.keyI) * (this.keyI === 0 ? 1 : 0.25);
+    this.key.intensity = this.keyI;
+    this.fill.intensity = LIGHT_TUNE.fill;
     this.key.position.copy(this.target).addScaledVector(this.dir, 4);
   }
 
