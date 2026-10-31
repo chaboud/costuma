@@ -39,7 +39,7 @@ const party = new Party(stage.bgUniforms, BG_VERT);
 const beat = new Beat();
 if (q.get('scene') === 'party' || q.get('scene') === 'costume') settings.scene = q.get('scene') as Settings['scene'];
 if (q.get('fx')) settings.effect = q.get('fx')!;
-if (q.get('pc')) settings.partyCostumes = q.get('pc') === '1';
+if (q.get('pc')) settings.partyCostumes = q.get('pc') === 'behind' ? 'behind' : q.get('pc') === '1' || q.get('pc') === 'on' ? 'on' : 'off';
 party.preset = PRESETS.find((p) => p.id === settings.effect) ?? PRESETS[0]!;
 const camera = new Camera(video, (q.get('facing') as 'user' | 'environment' | null) ?? undefined);
 let detector: Detector | null = null;
@@ -244,7 +244,7 @@ function buildSettings(): void {
     if (v) beat.start().then(() => toast('Listening for the beat', 1200)).catch(() => { settings.music = false; persist(); toast('No microphone'); });
     else beat.stop();
   }));
-  row('Costumes in party mode', 'Wear your costume while the room parties', sw(() => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
+  row('Costumes in party mode', 'Behind you: you stay yourself, a pyramid of your costume dances behind you', seg<Settings['partyCostumes']>([['off', 'Off'], ['behind', 'Behind'], ['on', 'On you']], () => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
   row('Show the skeleton', 'What the pose tracker sees', sw(() => settings.debug, (v) => { settings.debug = v; }));
 }
 
@@ -309,7 +309,7 @@ function screenOf(t: Track): { x: number; y: number } {
 }
 canvas.addEventListener('click', (e) => {
   if (!started) return;
-  if (settings.scene === 'party' && !settings.partyCostumes) {
+  if (settings.scene === 'party' && settings.partyCostumes === 'off') {
     const i = PRESETS.findIndex((p) => p.id === settings.effect);
     chooseEffect(PRESETS[(i + 1) % PRESETS.length]!.id);
     return;
@@ -360,12 +360,17 @@ function loop(now: number): void {
     try { dets = detector.detect(detectionInput(), now); } catch (e) { console.error(e); }
   }
   if (dets) tracker.update(dets.slice(0, settings.people), now, K);
-  if (settings.scene === 'costume' || settings.partyCostumes) for (const t of tracker.tracks) ensureBuilt(castOf(t.id), true);
+  const costumed = settings.scene === 'costume' || settings.partyCostumes !== 'off';
+  if (costumed) for (const t of tracker.tracks) ensureBuilt(castOf(t.id), true);
   const tSec = (now - t0) / 1000, dt = Math.min(0.25, (now - lastNow) / 1000);
   lastNow = now;
-  const dressing = settings.scene === 'costume' || settings.partyCostumes;
-  // the pyramid with costumes on: the costumes clone in 3D, not the people in 2D
-  stage.pyramid = settings.scene === 'party' && settings.partyCostumes && party.preset.id === 'pyramid';
+  const dressing = costumed;
+  // costumes in the party: on you (and in Pyramid, cloned in 3D behind you), or only behind you, with you cut out
+  // and drawn over them; either way the costumes clone, not the people in 2D
+  const partying = settings.scene === 'party', behind = partying && settings.partyCostumes === 'behind';
+  stage.pyramid = behind || (partying && settings.partyCostumes === 'on' && party.preset.id === 'pyramid');
+  stage.hideWearers = behind;
+  stage.setForeground(behind ? party.foreground : null);
   party.clones = !stage.pyramid;
   stage.stageLights(settings.scene === 'party', tSec, beat.env);
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);

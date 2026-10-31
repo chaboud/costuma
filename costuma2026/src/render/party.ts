@@ -275,6 +275,10 @@ const BLUR_FRAG = /* glsl */ `
 const FINAL_FRAG = /* glsl */ `
   varying vec2 vUv;
   uniform sampler2D uScene, uBloom1, uBloom2;
+  #ifdef FG
+  uniform sampler2D uMask;
+  uniform vec4 uOn;
+  #endif
   uniform float uTime, uBeat, uFlash;
   uniform vec2 uRes;
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -290,12 +294,23 @@ const FINAL_FRAG = /* glsl */ `
     vec3 hi = max(c - 0.8, 0.0);
     c = min(c, 0.8) + 0.2 * (1.0 - exp(-hi * 3.0)) + hi * 0.05;
     c += (hash(vUv * uRes + fract(uTime * 7.31) * 100.0) - 0.5) * 0.04;
+    #ifdef FG
+    // the subjects again, over whatever the 3D scene drew: the same grade, only where they stand
+    vec4 m = smoothstep(0.3, 0.7, texture2D(uMask, vec2(vUv.x, 1.0 - vUv.y))) * uOn;
+    gl_FragColor = vec4(c, max(max(m.r, m.g), max(m.b, m.a)));
+    #else
     gl_FragColor = vec4(c, 1.0);
+    #endif
   }`;
 
 export class Party {
   /** the background quad's material while party mode is on: the grade (step 5) */
   readonly material: THREE.ShaderMaterial;
+  /**
+   * the same grade drawn after the 3D scene with the subjects' mask as its alpha: the people stay in front of costumes
+   * that dance behind them (insertion by draw order, no depth needed)
+   */
+  readonly foreground: THREE.ShaderMaterial;
   preset: Preset = PRESETS[0]!;
   /** how many people to cut out (the nearest) */
   subjects = 2;
@@ -360,6 +375,10 @@ export class Party {
         uScene: { value: null }, uBloom1: { value: null }, uBloom2: { value: null },
         uTime: { value: 0 }, uBeat: { value: 0 }, uFlash: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) },
       },
+    });
+    this.foreground = new THREE.ShaderMaterial({
+      ...common, vertexShader, fragmentShader: FINAL_FRAG, transparent: true, defines: { FG: 1 },
+      uniforms: { ...this.material.uniforms, uMask: this.scene.uniforms.uMask!, uOn: this.scene.uniforms.uOn! },
     });
     this.quad.frustumCulled = false;
     this.quadScene.add(this.quad);

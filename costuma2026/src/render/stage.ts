@@ -60,6 +60,10 @@ export class Stage {
   private readonly wearers = new Map<number, Wearer>();
   /** the dance pyramid in 3D: each wearer's costume cloned behind and above them, dancing their moves late (party) */
   pyramid = false;
+  /** the wearers themselves undressed (party's "behind you": only their pyramid shows, and they stay in front) */
+  hideWearers = false;
+  /** drawn after everything: the cut-out people over the costumes (party.ts foreground) */
+  private readonly fg: THREE.Mesh<THREE.PlaneGeometry, THREE.Material>;
   /** party mode's stage lights on the costumes: two coloured rims from behind, pulsing with the beat */
   readonly rims = [new THREE.DirectionalLight(0xff2d95, 0), new THREE.DirectionalLight(0x2ee6ff, 0)];
   opts: StageOptions = { size: 1, shadows: true, envLight: true, pixelRatio: Math.min(window.devicePixelRatio || 1, 2) };
@@ -79,9 +83,14 @@ export class Stage {
       uniforms: this.bgUniforms,
     });
     this.bg = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.plainBg);
+    this.fg = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.plainBg);
+    this.fg.frustumCulled = false;
+    this.fg.renderOrder = 1000;
+    this.fg.visible = false;
     this.bg.frustumCulled = false;
     this.bg.renderOrder = -1000;
     this.scene.add(this.bg);
+    this.scene.add(this.fg);
     this.scene.add(this.world);
     this.scene.add(this.camera);
     this.light = new CameraLight(this.renderer, this.scene, this.world);
@@ -102,6 +111,11 @@ export class Stage {
   /** the background's look: the camera frame as it is, or another material on the same uniforms (party mode) */
   setBackground(m: THREE.ShaderMaterial | null): void {
     this.bg.material = m ?? this.plainBg;
+  }
+  /** a full-screen layer over the 3D scene (or none) */
+  setForeground(m: THREE.ShaderMaterial | null): void {
+    this.fg.visible = !!m;
+    if (m) this.fg.material = m;
   }
 
   /** build (once) and keep a character; slow (marching cubes), so call it while showing something */
@@ -202,7 +216,7 @@ export class Stage {
     w.root.scale.setScalar(s);
     const fade = tr.presence * tr.presence * (3 - 2 * tr.presence);
     if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade; w.fade = fade; }
-    w.root.visible = fade > 0.01;
+    w.root.visible = fade > 0.01 && !this.hideWearers;
     def.tick?.(w.root, t);
     // the pose into the ring
     w.histHead = (w.histHead + 1) % POSE_HIST;
@@ -239,10 +253,9 @@ export class Stage {
       c.bones.forEach((b, i) => { b.quaternion.fromArray(h, i * 7); b.position.fromArray(h, i * 7 + 4); });
       c.root.position.set(w.root.position.x + fj * height * 0.62, w.root.position.y + c.row * height * 0.3, w.root.position.z - c.row * height * 0.9);
       c.root.scale.copy(w.root.scale);
-      c.root.visible = w.root.visible;
+      c.root.visible = fade > 0.01;
       w.def.tick?.(c.root, t - delay / 30);
     }
-    void fade;
   }
 
   /** the party's rim lights: `on`, their colours along the show's palette, a kick on the beat */

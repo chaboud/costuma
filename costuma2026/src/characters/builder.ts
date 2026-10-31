@@ -185,7 +185,8 @@ function dress(d: Dresser): void {
   };
   const mesh = (g: THREE.BufferGeometry, m: THREE.Material, name = '') => { made.add(g); const o = new THREE.Mesh(g, m); o.name = name; return o; };
 
-  const skin = d.std({ color: 0xf2c193, roughness: 0.6 });
+  // a faint glow of its own: in its hole, under the hat, the face is in the tree's shade, and it is the one thing to read
+  const skin = d.std({ color: 0xf2c193, emissive: 0xf2c193, emissiveIntensity: 0.18, roughness: 0.6 });
   const ink = d.std({ color: 0x15110f, roughness: 0.35 });
   const brownHair = d.std({ color: 0x5b3a20, roughness: 0.8 });
   const blush = d.std({ color: 0xf29a8e, roughness: 0.7 });
@@ -272,7 +273,7 @@ function dress(d: Dresser): void {
 
   // ---- the face, through its hole: a soft oval just behind the tree's surface, a rim of needles round it ----
   const ft = TIERS.find((t) => t.hole)!, faceR = tierR(ft, tierF(ft, FACE.y));
-  const FZ = faceR - 0.72, FRX = 1.5, FRY = 1.32, FRZ = 0.55;
+  const FZ = faceR - 0.6, FRX = 1.5, FRY = 1.32, FRZ = 0.55;
   /** the face's front at (x, y), so its features sit on it */
   const faceZ = (x: number, y: number) => FZ + FRZ * Math.sqrt(Math.max(0, 1 - (x / FRX) ** 2 - ((y - FACE.y) / FRY) ** 2));
   const faceM = mesh(new THREE.SphereGeometry(1, 24, 16), skin); faceM.scale.set(FRX, FRY, FRZ); hang(faceM, 'head', 0, FACE.y, FZ);
@@ -333,6 +334,8 @@ function dress(d: Dresser): void {
     const m = new THREE.Mesh(g, b.mat);
     m.name = b.name;
     d.at(m, b.bone, a[0], a[1], a[2]);
+    // the face takes no shadow: the hat and the rim put it in the dark in the app, where it is what people look for
+    if (b.mat === skin || b.mat === ink || b.mat === blush || b.mat === brownHair) m.receiveShadow = false;
   }
   for (const g of made) g.dispose();
 }
