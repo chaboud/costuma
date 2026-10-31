@@ -111,7 +111,15 @@ export function attachFaces(tracks: Track[], faces: FaceDet[] | null, aspect: nu
     if (!ft) {
       ft = t.face = { jaw: 0, blinkL: 0, blinkR: 0, smile: 0, pucker: 0, browUp: 0, eyes: fresh.eyes.map((e) => ({ ...e })), mouth: { ...fresh.mouth }, read: !!f, seen: now };
     }
-    // where: eyes and mouth glide (a read face and the pose's points differ by a little: never a jump between them)
+    // where: what the eyes and mouth do together (a hand-held camera shaking the face) is followed at once; what each
+    // does alone glides (a read face and the pose's points differ by a little: never a jump between them)
+    {
+      const pts = [...fresh.eyes, fresh.mouth], old = [...ft.eyes, ft.mouth];
+      let dx = 0, dy = 0;
+      pts.forEach((p, i) => { dx += p.x - old[i]!.x; dy += p.y - old[i]!.y; });
+      dx /= pts.length; dy /= pts.length;
+      for (const o of old) { o.x += dx; o.y += dy; }
+    }
     fresh.eyes.forEach((e, i) => { const o = ft!.eyes[i]!; o.x = ema(o.x, e.x, dt, FACE_TUNE.tauPlace); o.y = ema(o.y, e.y, dt, FACE_TUNE.tauPlace); o.r = ema(o.r, e.r, dt, FACE_TUNE.tauPlace * 3); });
     ft.mouth.x = ema(ft.mouth.x, fresh.mouth.x, dt, FACE_TUNE.tauPlace); ft.mouth.y = ema(ft.mouth.y, fresh.mouth.y, dt, FACE_TUNE.tauPlace);
     ft.mouth.w = ema(ft.mouth.w, fresh.mouth.w, dt, FACE_TUNE.tauPlace * 3);

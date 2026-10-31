@@ -158,16 +158,25 @@ export class Rig {
     return q;
   }
 
+  /** seconds: the bones' turns glide this much toward their targets (0: none); set per apply by its dt */
+  private glide = 0;
+  private readonly primed = new Set<string>();
   private set(name: string, local: THREE.Quaternion, parentQm: THREE.Quaternion | null): THREE.Quaternion {
     const b = this.bones.get(name);
-    if (b) b.quaternion.copy(local);
+    if (b) {
+      // outputs smoothed a little too (~25 ms): what the input filter leaves as a flicker does not reach the costume
+      if (this.glide > 0 && this.primed.has(name)) local = b.quaternion.clone().slerp(local, this.glide);
+      b.quaternion.copy(local);
+      this.primed.add(name);
+    }
     const m = parentQm ? parentQm.clone().multiply(local) : local.clone();
     this.qm.set(name, m);
     return m;
   }
 
-  /** pose the bones; `t` seconds drives the idle sway (tail) */
-  apply(p: BodyPose, t = 0, tailAmp = 0): void {
+  /** pose the bones; `t` seconds drives the idle sway (tail); `dt` > 0 glides the turns (~25 ms) */
+  apply(p: BodyPose, t = 0, tailAmp = 0, dt = 0): void {
+    this.glide = dt > 0 ? 1 - Math.exp(-dt / 0.025) : 0;
     const pel = this.set('pelvis', p.pelvis, null);
     // the pelvis pivots at its own joint; place it so the hip centre sits at the root's origin
     const hipOff = this.hipRest.clone().sub(this.pelvisA).applyQuaternion(p.pelvis);

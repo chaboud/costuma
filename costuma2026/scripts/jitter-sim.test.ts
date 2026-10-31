@@ -47,7 +47,7 @@ describe.skipIf(!file)('jitter (replay)', () => {
     };
     run('tracker (current)', {});
     run('limbs ×1, core ×2 (shipped?)', { tauCore: 0.09 });
-    run('tracker ×2 taus', { tauWorld: TUNE.tauWorld * 2, tauImage: TUNE.tauImage * 2, tauXY: TUNE.tauXY * 2, tauZ: TUNE.tauZ * 2 });
-    run('tracker ×3 taus', { tauWorld: TUNE.tauWorld * 3, tauImage: TUNE.tauImage * 3, tauXY: TUNE.tauXY * 3, tauZ: TUNE.tauZ * 3 });
+    run('tracker ×2 taus', { tauWorld: TUNE.tauWorld * 2, tauImage: TUNE.tauImage * 2, tauZ: TUNE.tauZ * 2 });
+    run('tracker ×3 taus', { tauWorld: TUNE.tauWorld * 3, tauImage: TUNE.tauImage * 3, tauZ: TUNE.tauZ * 3 });
   });
 });

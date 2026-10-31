@@ -133,6 +133,12 @@ that means here, and where each lives:
 - **No pops.** A costume change crossfades (0.35 s, `stage.ts sync`); a party
   preset change crossfades (0.45 s, the old preset drawn alongside); a mode
   change or camera flip dips to black and back; people fade in and out.
+- **No trembling hand-held.** A phone held at arm's length shakes the whole person in the frame; an EMA lags that and
+  the costume shivered against them (1.6 px measured under a simulated 5–9 Hz tremor, `scripts/shake-sim.test.ts`).
+  Now what the torso's points do together is followed at once and only each point's own wobble is smoothed
+  (`tracker.ts shiftTogether`); the hips are re-solved from the smoothed picture, their depth smoothed along the
+  same ray so the costume does not move on screen: 0.6 px, below the unsmoothed 0.7, with the limbs and head as
+  steady as before. Faces do the same for googly eyes. The bones' turns glide ~25 ms on top (`rig.apply` dt).
 - **No jiggle.** Measured, not guessed: a noisy still replayed through the
   tracker at 30 fps (`scripts/jitter-probe.mjs` records, `scripts/jitter-sim.test.ts`
   replays). Raw: hips' depth 1.0 cm, upper arm 0.80°, head 1.19°, pelvis
@@ -195,6 +201,13 @@ phone" as this app means it.
 - **A pipe hides the exit code** (Strollzilla learned it too): a check piped
   through `grep` reported a failing test and the commit and deploy went ahead.
   Write checks to a log and read `$?`.
+
+## To do (founder's list)
+
+- **Better fur and feather detail** (2026-10-31). The shells (Strollzilla's `fur.ts`) read as fur from a few metres but
+  smear on a raised arm and look coarse up close: more shells near the camera, strand thickness by screen size, a
+  feather's own shape and sheen, and clumping by a noise field. Settle by: a face close-up of Jimothy, Howler and
+  Violet holding up beside a photo at phone distance.
 
 ## Open questions
 

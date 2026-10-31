@@ -31,7 +31,7 @@ export interface Settings {
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', v: 2 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', v: 3 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
@@ -46,6 +46,8 @@ export function loadSettings(): Settings {
     else if (pc !== 'behind' && pc !== 'on') s.partyCostumes = 'off';
     // v2 (2026-10-31): party mode's default is In Situ, with skeletons dancing behind you — for everyone, once
     if (v < 2) { s.effect = 'insitu'; s.partyCostumes = 'behind'; s.partyCast = 'skeleton'; }
+    // v3 (2026-10-31): the full pose model by default (founder: "default to the higher quality tracker")
+    if (v < 3) s.model = 'full';
     s.v = DEFAULTS.v;
     return s;
   } catch { return { ...DEFAULTS }; }

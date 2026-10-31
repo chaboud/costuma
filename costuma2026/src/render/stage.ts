@@ -76,6 +76,7 @@ export class Stage {
   /** costumes fading off people who changed into another (never a pop) */
   private leaving: Wearer[] = [];
   private lastT = -1;
+  private frameDt = 0;
   /** the dance pyramid in 3D: each wearer's costume cloned behind and above them, dancing their moves late (party) */
   pyramid = false;
   /** the wearers themselves undressed (party's "behind you": only their pyramid shows, and they stay in front) */
@@ -256,6 +257,7 @@ export class Stage {
   sync(tracks: Track[], cast: (trackId: number) => string, t: number): void {
     const dt = this.lastT < 0 ? 1 / 30 : Math.min(0.1, Math.max(0, t - this.lastT));
     this.lastT = t;
+    this.frameDt = dt;
     const keep = new Set<number>();
     for (const tr of tracks) {
       const id = cast(tr.id);
@@ -329,7 +331,7 @@ export class Stage {
     for (const side of ['L', 'R']) { fitLen('arm' + side, tr.len.upperArm); fitLen('thigh' + side, tr.len.thigh); fitLen('shin' + side, tr.len.shin); }
     const kn = rig.neckFit(tr.len.neck / s);
     rig.setNeck(1 + (Math.min(1.25, Math.max(0.45, kn)) - 1) * (def.fit?.head ?? 0.85));
-    rig.apply(p, t, def.idle?.tail ?? 0);
+    rig.apply(p, t, def.idle?.tail ?? 0, this.frameDt);
     // the wearer's mouth opens the costume's (face tracking)
     if (def.face?.jaw) rig.setJaw((tr.face?.jaw ?? 0) * def.face.jaw);
     w.root.position.set(tr.T.x, tr.T.y, tr.T.z);

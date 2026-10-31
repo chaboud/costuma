@@ -13,10 +13,13 @@ describe('settings', () => {
   it('moves settings from before v2 to the new party default, once', () => {
     store({ effect: 'pop', partyCostumes: false, people: 3 });
     const s = loadSettings();
-    expect([s.effect, s.partyCostumes, s.partyCast, s.people, s.v]).toEqual(['insitu', 'behind', 'skeleton', 3, 2]);
-    // already v2: a choice made since stays
-    store({ effect: 'pop', partyCostumes: 'off', v: 2 });
-    expect([loadSettings().effect, loadSettings().partyCostumes]).toEqual(['pop', 'off']);
+    expect([s.effect, s.partyCostumes, s.partyCast, s.people, s.v, s.model]).toEqual(['insitu', 'behind', 'skeleton', 3, 3, 'full']);
+    // already v2: a party choice made since stays, but the model moves to full (v3)
+    store({ effect: 'pop', partyCostumes: 'off', model: 'lite', v: 2 });
+    expect([loadSettings().effect, loadSettings().partyCostumes, loadSettings().model]).toEqual(['pop', 'off', 'full']);
+    // v3: the lite model, chosen since, stays
+    store({ model: 'lite', v: 3 });
+    expect(loadSettings().model).toBe('lite');
   });
   it('a first visit gets In Situ with skeletons behind', () => {
     store({}); const s = loadSettings();

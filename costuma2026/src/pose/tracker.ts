@@ -30,8 +30,8 @@ export interface Track {
 }
 
 export const TUNE = {
-  /** seconds: world landmarks (shape), image landmarks, lateral position, depth, body lengths */
-  tauWorld: 0.045, tauImage: 0.035, tauXY: 0.05, tauZ: 0.14, tauLen: 1.5,
+  /** seconds: world landmarks (shape), image landmarks (what is left after the shared shake), depth, body lengths */
+  tauWorld: 0.045, tauImage: 0.035, tauZ: 0.14, tauLen: 1.5,
   /** visibility decides pose-or-rest per limb: slow, or a limb at the frame's edge flickers between the two */
   tauVis: 0.25,
   /**
@@ -68,6 +68,21 @@ function blendLM(out: LM[], inp: LM[], k: number, kv: number, kCore = k): void {
 }
 const copyLM = (a: LM[]): LM[] => a.map((p) => ({ ...p }));
 
+/** the points the shared shift is read from: the torso and the face, steady and usually seen */
+const STEADY = [L.nose, L.eyeL, L.eyeR, L.earL, L.earR, L.shL, L.shR, L.hipL, L.hipR];
+/** move every smoothed point by how far the steady ones moved together (visibility-weighted mean of their change) */
+function shiftTogether(out: LM[], inp: LM[]): void {
+  let dx = 0, dy = 0, w = 0;
+  for (const i of STEADY) {
+    const o = out[i]!, p = inp[i]!, k = Math.min(o.v, p.v);
+    if (k < 0.5) continue;
+    dx += (p.x - o.x) * k; dy += (p.y - o.y) * k; w += k;
+  }
+  if (w < 1.5) return;
+  dx /= w; dy /= w;
+  for (const o of out) { o.x += dx; o.y += dy; }
+}
+
 export class Tracker {
   tracks: Track[] = [];
   private nextId = 1;
@@ -98,9 +113,20 @@ export class Tracker {
       const snap = t.lost;
       const kv = snap ? 1 : kOf(dt, TUNE.tauVis);
       blendLM(t.world, p.d.world, snap ? 1 : kOf(dt, TUNE.tauWorld), kv, snap ? 1 : kOf(dt, TUNE.tauCore));
+      // what moves together is followed at once, what jitters alone is smoothed: a hand-held camera shakes the whole
+      // person in the frame, and an EMA on that lags it (measured: the costume trembled 1.6 px against the person
+      // under a simulated tremor, 0.7 px unsmoothed). The torso's shared shift moves every smoothed point first; only
+      // what is left over — each point's own noise — goes through the EMA.
+      if (!snap) shiftTogether(t.image, p.d.image);
       blendLM(t.image, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage), kv);
-      const kxy = snap ? 1 : kOf(dt, TUNE.tauXY), kz = snap ? 1 : kOf(dt, TUNE.tauZ);
-      t.T = { x: ema(t.T.x, p.T!.x, kxy), y: ema(t.T.y, p.T!.y, kxy), z: ema(t.T.z, p.T!.z, kz) };
+      // the hips from the smoothed shape and the smoothed (shake-following) picture; their depth smoothed again on its
+      // own, keeping where they land on screen (x and y scale with depth along the same ray)
+      const Ts = solveTranslation(t.world, t.image, K) ?? p.T!;
+      if (snap) t.T = { ...Ts };
+      else {
+        const z = ema(t.T.z, Ts.z, kOf(dt, TUNE.tauZ)), r = z / Ts.z;
+        t.T = { x: Ts.x * r, y: Ts.y * r, z };
+      }
       const nl = bodyLengths(t.world), kl = kOf(dt, TUNE.tauLen);
       for (const key of Object.keys(nl) as (keyof typeof nl)[]) t.len[key] = ema(t.len[key], nl[key], kl);
       t.seen = now;
