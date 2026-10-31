@@ -534,6 +534,7 @@ function readout(): void {
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `people ${tracker.tracks.filter((t) => !t.lost).length} · dressed ${stage.count}`,
     `pixels ×${stage.opts.pixelRatio.toFixed(2)} · shadows ${stage.opts.shadows ? 'on' : 'off'}`,
+    `face light ${stage.light.faceConf > 0.05 ? `${stage.light.faceLum.toFixed(3)} from (${stage.light.faceDir.x.toFixed(2)}, ${stage.light.faceDir.y.toFixed(2)}) ×${stage.light.faceConf.toFixed(2)}` : '—'}`,
     `light mean ${stage.light.mean.toFixed(3)} × ${stage.light.gain.toFixed(2)} · key share ${stage.light.share.toFixed(2)} · every ${LIGHT_TUNE.every} frames`,
   ].join('\n');
 }

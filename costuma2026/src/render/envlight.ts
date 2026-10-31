@@ -12,13 +12,15 @@
 import * as THREE from 'three';
 import type { Intrinsics } from '../pose/solve';
 
-const EW = 64, EH = 32;  // equirect
-const SW = 48, SH = 36;  // the sampled frame
-const BW = 12, BH = 9;   // its blurred copy (the unseen side)
+const EW = 128, EH = 64; // equirect: 32-texel cube faces after PMREM, sharp enough for a glossy reflection
+const SW = 96, SH = 72;  // the sampled frame
+const BW = 12, BH = 9;   // its blurred copy (past the frame's edge, and the unseen side)
+const FW = 24;           // a face's crop, for reading how it is lit
 
 export const LIGHT_TUNE = {
-  /** how much wider than the lens the frame is spread over the scene side */
-  spread: 1.6,
+  /** how much wider than the lens the frame is spread over the scene side (1: exactly as the lens saw it, so a reflection
+   *  lines up with the picture behind it; past the frame's edge the picture blurs out) */
+  spread: 1.0,
   /** the unseen side's brightness relative to the seen */
   back: 0.9,
   envIntensity: 1.15,
@@ -59,6 +61,19 @@ export class CameraLight {
   gain = 1;
   /** In Situ: light the costumes as the room is lit (no lifting a dark room; the club's spots give the punch) */
   realism = false;
+  /**
+   * The light read off the people in view (stage.ts sets it each frame): the largest read face's probe points (forehead,
+   * chin, their left cheek, right cheek, nose) in image coordinates and its width (a share of the image's). A face is a
+   * light meter the camera carries for free: its sides say where the light on people comes from — including from behind
+   * the camera, which the frame cannot show — and its brightness how strong it is.
+   */
+  face: { probe: { x: number; y: number }[]; w: number } | null = null;
+  /** read-outs: the face's verdict (direction in display space, irradiance proxy, confidence) */
+  faceDir = new THREE.Vector3(0, 0, 1);
+  faceLum = 0;
+  faceConf = 0;
+  private readonly fcv: HTMLCanvasElement;
+  private readonly fctx: CanvasRenderingContext2D;
   dir = new THREE.Vector3(0, 1, 1).normalize();
   private target = new THREE.Vector3(0, 0, -2);
 
@@ -66,6 +81,9 @@ export class CameraLight {
     this.cv = document.createElement('canvas');
     this.cv.width = SW; this.cv.height = SH;
     this.ctx = this.cv.getContext('2d', { willReadFrequently: true })!;
+    this.fcv = document.createElement('canvas');
+    this.fcv.width = this.fcv.height = FW;
+    this.fctx = this.fcv.getContext('2d', { willReadFrequently: true })!;
     this.tex = new THREE.DataTexture(this.data, EW, EH, THREE.RGBAFormat, THREE.HalfFloatType);
     this.tex.mapping = THREE.EquirectangularReflectionMapping;
     this.tex.colorSpace = THREE.LinearSRGBColorSpace;
@@ -105,6 +123,7 @@ export class CameraLight {
     this.mean = mean / (SW * SH);
     this.gain = Math.min(this.realism ? 1.25 : LIGHT_TUNE.maxGain, Math.max(1, LIGHT_TUNE.targetMean / Math.max(this.mean, 1e-3)));
     const gain = this.gain;
+    this.readFace(video, mirror);
     // the blurred copy: box means
     this.blur.fill(0);
     const fx = SW / BW, fy = SH / BH;
@@ -115,6 +134,15 @@ export class CameraLight {
     for (let i = 0; i < this.blur.length; i++) this.blur[i] = this.blur[i]! / (fx * fy);
     // fold into the equirect (three's convention: u = atan(z, x)/2π + .5, v = asin(y)/π + .5, row 0 at the bottom)
     const fxn = K.f / K.w, fyn = K.f / K.h;
+    // the unseen side (behind the camera, what lights people's fronts) is the frame mirrored and blurred — a guess; a
+    // face in view measures it: its brightness against the guess's scales the unseen side, as far as we trust the face
+    let backMean = 0;
+    for (let i = 0; i < BW * BH; i++) backMean += 0.2126 * this.blur[i * 3]! + 0.7152 * this.blur[i * 3 + 1]! + 0.0722 * this.blur[i * 3 + 2]!;
+    backMean /= BW * BH;
+    // a face of albedo ~0.35 under irradiance E reads E·0.35/π·π… as a ratio: what the face says the front gets over
+    // what the mirror guessed, clamped (skin's albedo varies two-fold; this is a nudge, not a measurement)
+    const faceBack = this.faceConf > 0 ? Math.min(2.5, Math.max(0.4, (this.faceLum / 0.35) / Math.max(backMean * 2.2, 1e-3))) : 1;
+    const backK = LIGHT_TUNE.back * (1 + (faceBack - 1) * this.faceConf);
     let sx = 0, sy = 0, sz = 0, tot = 0;
     for (let r = 0; r < EH; r++) {
       const lat = ((r + 0.5) / EH - 0.5) * Math.PI;
@@ -126,16 +154,20 @@ export class CameraLight {
         // the env is built in the displayed (mirrored) world, sampled from the camera's own frame
         const sxDir = mirror ? -dx : dx;
         const seen = dz < 0;
-        const depth = Math.max(Math.abs(dz), 0.08);
-        const u = Math.min(1, Math.max(0, 0.5 + (sxDir / depth) * fxn / LIGHT_TUNE.spread));
-        const v = Math.min(1, Math.max(0, 0.5 - (cy / depth) * fyn / LIGHT_TUNE.spread));
+        const depth = Math.max(Math.abs(dz), 0.05);
+        const u0 = 0.5 + (sxDir / depth) * fxn / LIGHT_TUNE.spread, v0 = 0.5 - (cy / depth) * fyn / LIGHT_TUNE.spread;
+        const u = Math.min(1, Math.max(0, u0)), v = Math.min(1, Math.max(0, v0));
+        const bi = (Math.min(BH - 1, Math.floor(v * BH)) * BW + Math.min(BW - 1, Math.floor(u * BW))) * 3;
         let R: number, G: number, B: number;
         if (seen) {
+          // inside the frame exactly as filmed; past its edge the edge's colour, blurring out (not stretched streaks)
           const i = (Math.min(SH - 1, Math.floor(v * SH)) * SW + Math.min(SW - 1, Math.floor(u * SW))) * 3;
-          R = this.lin[i]!; G = this.lin[i + 1]!; B = this.lin[i + 2]!;
+          const over = Math.max(Math.abs(u0 - 0.5) - 0.5, Math.abs(v0 - 0.5) - 0.5, 0), b = Math.min(1, over / 0.4);
+          R = this.lin[i]! + (this.blur[bi]! - this.lin[i]!) * b;
+          G = this.lin[i + 1]! + (this.blur[bi + 1]! - this.lin[i + 1]!) * b;
+          B = this.lin[i + 2]! + (this.blur[bi + 2]! - this.lin[i + 2]!) * b;
         } else {
-          const i = (Math.min(BH - 1, Math.floor(v * BH)) * BW + Math.min(BW - 1, Math.floor(u * BW))) * 3;
-          R = this.blur[i]! * LIGHT_TUNE.back; G = this.blur[i + 1]! * LIGHT_TUNE.back; B = this.blur[i + 2]! * LIGHT_TUNE.back;
+          R = this.blur[bi]! * backK; G = this.blur[bi + 1]! * backK; B = this.blur[bi + 2]! * backK;
         }
         R *= gain; G *= gain; B *= gain;
         // ~0.6 s to follow a change (updates come every few frames)
@@ -159,16 +191,57 @@ export class CameraLight {
     // the key: from the environment's brightest direction, as strong as the light is lopsided
     const len = Math.hypot(sx, sy, sz);
     this.share = tot > 0 ? len / tot : 0;
-    if (len > 1e-6) this.keyDir.lerp(new THREE.Vector3(sx / len, sy / len, sz / len), 0.25).normalize();
+    // the key: the environment's brightest direction, turned toward where the faces say the light comes from
+    const envDir = len > 1e-6 ? new THREE.Vector3(sx / len, sy / len, sz / len) : this.keyDir.clone();
+    const want = envDir.clone().lerp(this.faceDir, 0.65 * this.faceConf).normalize();
+    this.keyDir.lerp(want, 0.25).normalize();
     this.dir.copy(this.keyDir);
     // a key from straight below reads as a horror torch; keep it at least a little above the horizon
     if (this.dir.y < 0.15) { this.dir.y = 0.15; this.dir.normalize(); }
-    const ki = LIGHT_TUNE.key * this.share * (tot / (EW * EH)) * 2;
+    // a face lit hard from one side (its sides differ a lot) asks for a stronger key than a flat-lit one
+    const faceShare = this.faceConf > 0 ? Math.min(1, this.faceDir.clone().setZ(0).length() * 1.4) : this.share;
+    const ki = LIGHT_TUNE.key * (this.share + (faceShare - this.share) * this.faceConf * 0.6) * (tot / (EW * EH)) * 2;
     this.keyI += (ki - this.keyI) * (this.keyI === 0 ? 1 : 0.25);
     this.key.intensity = this.keyI;
     // the neutral fill is for dark streets only: in a bright room it lifts the costumes to milk
     this.fill.intensity = LIGHT_TUNE.fill * (this.realism ? 0.25 : 1) * Math.min(1, Math.max(0, 1 - this.mean / 0.22));
     this.key.position.copy(this.target).addScaledVector(this.dir, 4);
+  }
+
+  /** read the largest face's light: its probes' brightness from a small crop of the frame (image space → display) */
+  private readFace(video: HTMLVideoElement, mirror: boolean): void {
+    const f = this.face;
+    if (!f || f.w < 0.04) { this.faceConf *= 0.9; return; }
+    const xs = f.probe.map((p) => p.x), ys = f.probe.map((p) => p.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const pad = 0.15, w = (x1 - x0) * (1 + pad * 2), h = (y1 - y0) * (1 + pad * 2);
+    const cx0 = x0 - (x1 - x0) * pad, cy0 = y0 - (y1 - y0) * pad;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (w <= 0 || h <= 0 || !vw) return;
+    this.fctx.drawImage(video, cx0 * vw, cy0 * vh, w * vw, h * vh, 0, 0, FW, FW);
+    const px = this.fctx.getImageData(0, 0, FW, FW).data;
+    // each probe: the mean of a 3×3 patch round it
+    const lum = f.probe.map((p) => {
+      const gx = Math.round(((p.x - cx0) / w) * (FW - 1)), gy = Math.round(((p.y - cy0) / h) * (FW - 1));
+      let s = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const x = Math.min(FW - 1, Math.max(0, gx + dx)), y = Math.min(FW - 1, Math.max(0, gy + dy)), k = (y * FW + x) * 4;
+        s += 0.2126 * srgbToLin[px[k]!]! + 0.7152 * srgbToLin[px[k + 1]!]! + 0.0722 * srgbToLin[px[k + 2]!]!; n++;
+      }
+      return s / n;
+    });
+    const [fore, chin, left, right, nose] = lum as [number, number, number, number, number];
+    const mean = (fore + chin + left + right + nose) / 5;
+    // the person's left cheek is on the image's right (+x, unmirrored); a brighter forehead means light from above
+    const gx = (left - right) / Math.max(left + right, 1e-4), gy = (fore - chin) / Math.max(fore + chin, 1e-4);
+    // up/down is read weakly and leans above: the chin's probe sits by collars, beards and a smile's teeth (a test
+    // portrait lit from above read as lit from below, 2026-10-31), and real light comes from below only on a stage
+    const d = new THREE.Vector3(gx * 2.2 * (mirror ? -1 : 1), Math.max(0.1, gy * 1.0 + 0.35), 0.75).normalize();
+    // trust grows with the face's size in the frame (small faces are a few pixels of noise)
+    const conf = Math.min(1, Math.max(0, (f.w - 0.04) / 0.08));
+    this.faceDir.lerp(d, 0.3).normalize();
+    this.faceLum += (mean - this.faceLum) * 0.3;
+    this.faceConf += (conf - this.faceConf) * 0.3;
   }
 
   /** the shadow box round the people (they stand 1–6 m off; costumes are ~2 m) */

@@ -16,6 +16,9 @@ export interface FaceTrack extends FaceState {
   /** the person's left and right eye: centre and radius (radius as a share of the image width) */
   eyes: { x: number; y: number; r: number }[];
   mouth: { x: number; y: number; w: number };
+  /** where to read how the face is lit (render/envlight.ts): forehead, chin, the person's left cheek, right cheek, nose
+   *  — only from a read face */
+  probe?: { x: number; y: number }[];
   /** whether the face model read this face lately (else: the pose model's face points only) */
   read: boolean;
   seen: number;
@@ -73,6 +76,7 @@ function readFace(f: FaceDet, aspect: number) {
     eyes: [eye(263, 362), eye(33, 133)],
     mouth: { ...mid(p[13]!, p[14]!), w: dist(p[61]!, p[291]!, aspect) / aspect },
     nose: p[1]!,
+    probe: [p[151]!, p[152]!, p[425]!, p[205]!, p[1]!].map((q) => ({ x: q.x, y: q.y })),
     jaw: Math.min(1, s('jawOpen') * 1.4), blinkL: s('eyeBlinkLeft'), blinkR: s('eyeBlinkRight'),
     smile: (s('mouthSmileLeft') + s('mouthSmileRight')) / 2, pucker: s('mouthPucker'), browUp: s('browInnerUp'),
   };
@@ -129,6 +133,10 @@ export function attachFaces(tracks: Track[], faces: FaceDet[] | null, aspect: nu
     ft.blinkL = ema(ft.blinkL, g.blinkL, dt, FACE_TUNE.tauBlink); ft.blinkR = ema(ft.blinkR, g.blinkR, dt, FACE_TUNE.tauBlink);
     ft.smile = ema(ft.smile, g.smile, dt, FACE_TUNE.tauShape); ft.pucker = ema(ft.pucker, g.pucker, dt, FACE_TUNE.tauShape);
     ft.browUp = ema(ft.browUp, g.browUp, dt, FACE_TUNE.tauShape);
-    if (f) { ft.read = true; ft.seen = now; } else if (now - ft.seen > FACE_TUNE.forgetMs) ft.read = false;
+    if (f) {
+      if (!ft.probe) ft.probe = f.probe.map((q) => ({ ...q }));
+      else f.probe.forEach((q, i) => { const o = ft!.probe![i]!; o.x = ema(o.x, q.x, dt, FACE_TUNE.tauPlace); o.y = ema(o.y, q.y, dt, FACE_TUNE.tauPlace); });
+      ft.read = true; ft.seen = now;
+    } else if (now - ft.seen > FACE_TUNE.forgetMs) { ft.read = false; ft.probe = undefined; }
   }
 }

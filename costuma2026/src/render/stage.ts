@@ -290,14 +290,15 @@ export class Stage {
     const copies = new Map<THREE.Material, THREE.Material>();
     root.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
+      if (!m.isMesh && !(o as THREE.Sprite).isSprite) return;
       const swap = (mat: THREE.Material) => {
         let c = copies.get(mat);
         if (!c) {
           c = mat.clone();
           c.onBeforeCompile = mat.onBeforeCompile;
           c.customProgramCacheKey = mat.customProgramCacheKey;
-          c.alphaHash = true;
+          // an additive glow fades by its opacity; anything else by dithering (no sorting needed)
+          if (mat.userData.keepBlend) c.userData.baseOpacity = mat.opacity; else c.alphaHash = true;
           copies.set(mat, c);
         }
         return c;
@@ -338,7 +339,7 @@ export class Stage {
     w.root.scale.setScalar(s);
     const f0 = tr.presence * Math.max(0, Math.min(1, w.life));
     const fade = f0 * f0 * (3 - 2 * f0);
-    if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade; w.fade = fade; }
+    if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade * ((m.userData.baseOpacity as number | undefined) ?? 1); w.fade = fade; }
     w.root.visible = fade > 0.01 && !this.hideWearers;
     def.tick?.(w.root, t, tr.face ?? null);
     // the pose into the ring
@@ -445,6 +446,10 @@ export class Stage {
       if (mouth && f) mouths.push({ id: tr.id, ...mouth, open: f.jaw * tr.presence, colors: undefined });
     }
     this.googly.update(people, this.ground.n, dt, this.googlyOn);
+    // the light meter: the largest read face in view (render/envlight.ts readFace)
+    let big: Track | null = null;
+    for (const tr of tracks) if (!tr.lost && tr.face?.read && tr.face.probe && (!big || tr.face.mouth.w > big.face!.mouth.w)) big = tr;
+    this.light.face = big ? { probe: big.face!.probe!, w: big.face!.mouth.w * 2.4 } : null;
     const h = this.renderer.getDrawingBufferSize(new THREE.Vector2()).y;
     this.breath.update(mouths, dt, h / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)), this.breathOn);
   }

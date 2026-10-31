@@ -72,7 +72,13 @@ in `src/main.ts`.
   materials take their diffuse and reflections from the room; the
   environment's brightest direction becomes a shadow-casting key light. Dim
   frames are lifted (×2.6 at most) so a costume on a dark street still reads.
-  The unseen hemisphere is a guess, not a measurement.
+  The unseen hemisphere is a guess, not a measurement — nudged by a measurement where there is one: the largest read
+  face is a light meter (five probes: forehead, chin, cheeks, nose). Its left–right difference turns the key light
+  toward the side lighting people (including from behind the camera), up–down is read weakly and leans above (the
+  chin's probe sits by collars, beards and teeth), and its brightness against the mirror's guess scales the unseen
+  side. Trust grows with the face's size. The environment is 128×64, exact inside the frame (a reflection lines up with
+  the picture) and blurring out past its edge. Checked on one frontal test portrait: it read the face, its brightness
+  and a side; nothing on a phone yet.
 - **Party** (`src/render/party.ts`): the pose model's per-person cut-out
   masks (`outputSegmentationMasks`), so "cut out one or several" is a count:
   the N nearest tracked people take channels of one RGBA mask texture and keep

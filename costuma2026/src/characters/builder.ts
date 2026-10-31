@@ -171,6 +171,56 @@ const BALLS: [number, number, number, number][] = [
 ];
 const BALL_COLOURS = [0xd8262e, 0x2b4fd6, 0x8a3fd0, 0xe04aa8, 0xf07a1a];
 
+/**
+ * The ornaments are lights (founder, 2026-10-31: "make the ornaments volumetric lighting sources"): each bulb glows and
+ * twinkles by its colour, wears a soft additive halo in the air round it, and lights the needles near it — the tree's
+ * material adds every ornament's light with its distance (`litByOrnaments`), from where it hangs this frame.
+ */
+const ORNS = BALLS.map(([ti, tooth, len, ci]) => {
+  const t = TIERS[ti]!, [x, z] = ring(t.r0 * 0.99, ((tooth % SIDES) + SIDES) % SIDES), top = t.y0 - DROP * 0.55;
+  return { bone: t.bone, p: [x, top - len * 1.2 - 0.3, z] as [number, number, number], ci };
+});
+const NORN = ORNS.length;
+/** per material copy (each wearer has its own): the ornaments' world positions and light, as the shader's uniforms */
+const ornUniforms = new WeakMap<THREE.Material, { uOrnPos: { value: THREE.Vector3[] }; uOrnCol: { value: THREE.Color[] }; uOrnR: { value: number } }>();
+const ornU = (m: THREE.Material) => {
+  let u = ornUniforms.get(m);
+  if (!u) { u = { uOrnPos: { value: ORNS.map(() => new THREE.Vector3(0, -1e4, 0)) }, uOrnCol: { value: ORNS.map(() => new THREE.Color(0, 0, 0)) }, uOrnR: { value: 0.2 } }; ornUniforms.set(m, u); }
+  return u;
+};
+/** the needles lit by the ornaments: their light added as emission, falling off with distance (a point light's, softened) */
+function litByOrnaments(m: THREE.MeshStandardMaterial): void {
+  m.name = 'lime';
+  m.onBeforeCompile = function (this: THREE.Material, shader) {
+    Object.assign(shader.uniforms, ornU(this));
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\n varying vec3 vOrnW;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\n vOrnW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vOrnW; uniform vec3 uOrnPos[${NORN}]; uniform vec3 uOrnCol[${NORN}]; uniform float uOrnR;`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        for (int i = 0; i < ${NORN}; i++) {
+          vec3 dv = vOrnW - uOrnPos[i];
+          float q = dot(dv, dv) / (uOrnR * uOrnR);
+          totalEmissiveRadiance += uOrnCol[i] * diffuseColor.rgb * (1.0 / (1.0 + q * 2.5)) * smoothstep(9.0, 2.0, q);
+        }`);
+  };
+  m.customProgramCacheKey = () => 'builder-lime-ornaments-v1';
+}
+
+/** a soft round glow, for the halos (made once, on the page: the costume worker never dresses) */
+let haloTex: THREE.Texture | null = null;
+function haloTexture(): THREE.Texture {
+  if (haloTex) return haloTex;
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d')!, r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.18, 'rgba(255,255,255,0.75)'); r.addColorStop(0.45, 'rgba(255,255,255,0.22)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  haloTex = new THREE.CanvasTexture(c); haloTex.colorSpace = THREE.SRGBColorSpace;
+  return haloTex;
+}
+
 function dress(d: Dresser): void {
   // Parts are gathered per (bone, material) and merged: a draw call per part would be many per wearer on a phone that is
   // also running pose detection. The face's moving parts (eyes, brows, mouth) stay their own meshes, for tick.
@@ -200,7 +250,9 @@ function dress(d: Dresser): void {
   const head = d.std({ color: 0xc4c1d0, emissive: 0xc4c1d0, emissiveIntensity: 0.05, roughness: 0.75 });
   const ink = d.std({ color: 0x141216, roughness: 0.5 });
   const string = d.std({ color: 0x222222, roughness: 0.8 });
-  const ballMats = BALL_COLOURS.map((c) => d.std({ color: c, roughness: 0.35, metalness: 0.15 }));
+  // the bulbs glow (their brightness twinkles in tick); one material per colour, so a colour twinkles together
+  const ballMats = BALL_COLOURS.map((c, i) => { const m = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 1.2, roughness: 0.3, metalness: 0.1 }); m.name = `orn-${i}`; return m; });
+  litByOrnaments(lime);
   const black = d.std({ color: 0x1e1e22, roughness: 0.45, metalness: 0.1 });
   const orange = d.std({ color: 0xf0861c, roughness: 0.45, metalness: 0.05 });
   const gold = d.std({ color: 0xe8b83a, emissive: 0xffb81a, emissiveIntensity: 0.25, roughness: 0.25, metalness: 0.85 });
@@ -211,7 +263,18 @@ function dress(d: Dresser): void {
   for (const [ti, tooth, len, ci] of BALLS) {
     const t = TIERS[ti]!, [x, z] = ring(t.r0 * 0.99, ((tooth % SIDES) + SIDES) % SIDES), top = t.y0 - DROP * 0.55;
     const L = len * 1.2, s = mesh(strG, string); s.scale.y = L; hang(s, t.bone, x, top - L / 2, z);
-    hang(mesh(ballG, ballMats[ci]!), t.bone, x, top - L - 0.3, z);
+    hang(mesh(ballG, ballMats[ci]!, `orn-${ci}`), t.bone, x, top - L - 0.3, z);
+  }
+  // the halos: soft additive glows in the air round each bulb (drawn after the tree, not written to depth; the stage fades
+  // them by opacity, not by dithering: `keepBlend`)
+  const haloMats = BALL_COLOURS.map((c, i) => {
+    const m = new THREE.SpriteMaterial({ map: haloTexture(), color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.85, toneMapped: false });
+    m.name = `halo-${i}`; m.userData.keepBlend = true; return m;
+  });
+  for (const o of ORNS) {
+    const sp = new THREE.Sprite(haloMats[o.ci]!);
+    sp.name = `halo-${o.ci}`; sp.scale.setScalar(3.2); sp.renderOrder = 5;
+    d.at(sp, o.bone, ...o.p);
   }
 
   // ---- the face: a pale block, a hair behind the hole's edge; small eyes under grumpy brows, a flat mouth ----
@@ -277,20 +340,57 @@ function dress(d: Dresser): void {
 }
 
 /** per root: the face's moving parts and their rest poses, found once (a WeakMap, not userData: clone JSON-copies it) */
-interface Parts { eyes: THREE.Object3D[]; brows: { o: THREE.Object3D; y: number; z: number }[]; mouth: THREE.Object3D | null }
+interface Parts {
+  eyes: THREE.Object3D[]; brows: { o: THREE.Object3D; y: number; z: number }[]; mouth: THREE.Object3D | null;
+  balls: THREE.MeshStandardMaterial[]; halos: THREE.SpriteMaterial[]; lime: THREE.Material | null;
+  /** each ornament's bone and its place in the bone's frame */
+  orn: { bone: THREE.Object3D; local: THREE.Vector3; ci: number }[];
+}
 const found = new WeakMap<THREE.Object3D, Parts>();
 
 /** the wearer's face moves the costume's: brows lift, the mouth opens and widens, the eyes blink (face tracking on) */
-function tick(root: THREE.Object3D, _t: number, face?: FaceState | null): void {
+const TWINKLE = BALL_COLOURS.map((_, i) => ({ rate: 1.3 + 0.37 * i, ph: i * 1.9 }));
+function tick(root: THREE.Object3D, t: number, face?: FaceState | null): void {
   let p = found.get(root);
   if (!p) {
-    const q: Parts = { eyes: [], brows: [], mouth: null };
+    const q: Parts = { eyes: [], brows: [], mouth: null, balls: [], halos: [], lime: null, orn: [] };
+    const balls = new Map<number, THREE.MeshStandardMaterial>(), halos = new Map<number, THREE.SpriteMaterial>();
     root.traverse((o) => {
       if (o.name === 'eyeL' || o.name === 'eyeR') q.eyes.push(o);
       else if (o.name === 'browL' || o.name === 'browR') q.brows.push({ o, y: o.position.y, z: o.rotation.z });
       else if (o.name === 'mouth') q.mouth = o;
+      const mat = (o as THREE.Mesh).material as THREE.Material | undefined;
+      if (mat && !Array.isArray(mat)) {
+        const m = /^orn-(\d)$/.exec(mat.name), h = /^halo-(\d)$/.exec(mat.name);
+        if (m) balls.set(Number(m[1]), mat as THREE.MeshStandardMaterial);
+        if (h) halos.set(Number(h[1]), mat as THREE.SpriteMaterial);
+        if (mat.name === 'lime') q.lime = mat;
+      }
     });
+    q.balls = BALL_COLOURS.map((_, i) => balls.get(i)!).filter(Boolean);
+    q.halos = BALL_COLOURS.map((_, i) => halos.get(i)!).filter(Boolean);
+    const bones = new Map<string, THREE.Object3D>();
+    root.traverse((o) => { if ((o as THREE.Bone).isBone) bones.set(o.name, o); });
+    for (const o of ORNS) {
+      const b = bones.get(o.bone), a = BUILDER_SEGMENTS.find((sg) => sg.name === o.bone)!.a;
+      if (b) q.orn.push({ bone: b, local: new THREE.Vector3(o.p[0] - a[0], o.p[1] - a[1], o.p[2] - a[2]), ci: o.ci });
+    }
     found.set(root, p = q);
+  }
+  // twinkle: each colour on its own slow breath, a sparkle now and then
+  const k = TWINKLE.map((w) => 0.55 + 0.45 * Math.sin(t * w.rate + w.ph) + 0.6 * Math.max(0, Math.sin(t * w.rate * 3.1 + w.ph * 2) - 0.85) * 6);
+  p.balls.forEach((m, i) => { m.emissiveIntensity = 0.6 + 1.6 * k[i]!; });
+  p.halos.forEach((m, i) => { m.color.setHex(BALL_COLOURS[i]!).multiplyScalar(0.35 + 0.9 * k[i]!); });
+  // the needles round each bulb take its light, from where it hangs now (world space, as the shader reads it)
+  if (p.lime && p.orn.length) {
+    const u = ornU(p.lime);
+    root.updateMatrixWorld(true);
+    const sc = new THREE.Vector3().setFromMatrixScale(root.matrixWorld);
+    u.uOrnR.value = 2.4 * Math.abs(sc.y);
+    p.orn.forEach((o, i) => {
+      u.uOrnPos.value[i]!.copy(o.local).applyMatrix4(o.bone.matrixWorld);
+      u.uOrnCol.value[i]!.setHex(BALL_COLOURS[o.ci]!).multiplyScalar(1.3 * k[o.ci]!);
+    });
   }
   const f = face ?? null;
   for (const e of p.eyes) e.scale.y = 1.45 * (1 - 0.88 * (f ? (e.name === 'eyeL' ? f.blinkL : f.blinkR) : 0));
