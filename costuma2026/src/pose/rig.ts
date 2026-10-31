@@ -29,6 +29,7 @@ export interface BodyPose {
 export const HEAD_PITCH = 0.32;
 
 const V = (p: LM) => new THREE.Vector3(p.x, p.y, p.z);
+const X_AXIS = new THREE.Vector3(1, 0, 0), Y_AXIS = new THREE.Vector3(0, 1, 0);
 const smooth = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 /** rotation whose +x is `xAxis` and +y as near `yHint` as orthogonality allows (z = x × y: forward) */
@@ -205,9 +206,12 @@ export class Rig {
     }
   }
 
-  /** open the jaw by `angle` radians about its own x (positive: its tip goes down); call after apply() */
-  setJaw(angle: number): void {
-    this.bones.get('jaw')?.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), angle);
+  /** open the jaw by `angle` radians about its own x (positive: its tip goes down), and swing it sideways by `side`
+   *  (-1..1, + toward the character's left: a turn about its up); call after apply() */
+  setJaw(angle: number, side = 0): void {
+    const j = this.bones.get('jaw');
+    if (!j) return;
+    j.quaternion.setFromAxisAngle(Y_AXIS, side * 0.16).multiply(new THREE.Quaternion().setFromAxisAngle(X_AXIS, angle));
   }
 
   /** a bone's model-space direction after the last apply (tests) */

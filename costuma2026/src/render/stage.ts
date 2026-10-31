@@ -337,10 +337,12 @@ export class Stage {
   private pose(w: Wearer, tr: Track, t: number): void {
     const def = w.def, rig = w.rig;
     const p = poseFromLandmarks(tr.world);
+    // the head turns as the face mesh says (pose/face.ts), finer than the pose model's ears and nose
+    if (tr.face) { p.head.copy(tr.face.head); p.headVis = Math.max(p.headVis, tr.face.headW); }
     const s = this.fit(rig, def, tr.len);
     rig.apply(p, t, def.idle?.tail ?? 0, this.frameDt);
-    // the wearer's mouth opens the costume's (face tracking)
-    if (def.face?.jaw) rig.setJaw((tr.face?.jaw ?? 0) * def.face.jaw);
+    // the wearer's mouth opens the costume's (face tracking), and shifts it sideways
+    if (def.face?.jaw) rig.setJaw((tr.face?.jaw ?? 0) * def.face.jaw, tr.face?.jawSide ?? 0);
     w.root.position.set(tr.T.x, tr.T.y, tr.T.z);
     w.root.scale.setScalar(s);
     const f0 = tr.presence * Math.max(0, Math.min(1, w.life));
@@ -446,7 +448,7 @@ export class Stage {
       const f = tr.face;
       const w = this.wearers.get(tr.id);
       const worn = w && w.root.visible && !this.hideWearers ? w : null;
-      const head = poseFromLandmarks(tr.world).head;
+      const head = tr.face?.head ?? poseFromLandmarks(tr.world).head;
       const ax = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).applyQuaternion(head);
       const nose = new THREE.Vector3(tr.T.x + tr.world[L.nose]!.x, tr.T.y + tr.world[L.nose]!.y, tr.T.z + tr.world[L.nose]!.z);
       const d = Math.max(0.3, -nose.z);

@@ -80,8 +80,38 @@ export interface CharacterDef {
   };
 }
 
-/** the wearer's face this frame, 0..1 each (MediaPipe's blendshapes, smoothed): for jaws, eyelids, mouths in ticks */
-export interface FaceState { jaw: number; blinkL: number; blinkR: number; smile: number; pucker: number; browUp: number }
+/**
+ * The wearer's face this frame (MediaPipe's blendshapes, smoothed), 0..1 each unless said: for jaws, eyelids, brows,
+ * pupils and mouths in ticks. "L" is the wearer's own left (measured: an eye painted shut on a photo), which is the
+ * costume's left (+x on its head bone) too. Signed values: + toward the wearer's left, + up.
+ */
+export interface FaceState {
+  jaw: number; blinkL: number; blinkR: number; smile: number; pucker: number; browUp: number;
+  smileL: number; smileR: number; frown: number;
+  /** brows: down (a scowl) and the outer ends up, per side; browUp above is the inner ends together */
+  browDownL: number; browDownR: number; browOuterL: number; browOuterR: number;
+  squintL: number; squintR: number; wideL: number; wideR: number;
+  /** where the eyes look, -1..1: + toward the wearer's left, + up (the eyes together) */
+  lookX: number; lookY: number;
+  /** the jaw shifted sideways, -1..1, + toward the wearer's left */
+  jawSide: number;
+  /** cheeks puffed, lips pushed into an "o" (funnel), nose wrinkled */
+  puff: number; funnel: number; sneer: number;
+}
+export const NEUTRAL_FACE: Readonly<FaceState> = {
+  jaw: 0, blinkL: 0, blinkR: 0, smile: 0, pucker: 0, browUp: 0, smileL: 0, smileR: 0, frown: 0,
+  browDownL: 0, browDownR: 0, browOuterL: 0, browOuterR: 0, squintL: 0, squintR: 0, wideL: 0, wideR: 0,
+  lookX: 0, lookY: 0, jawSide: 0, puff: 0, funnel: 0, sneer: 0,
+};
+/** "jaw:1,blinkL:1,lookX:-0.5" (the lab's and the headless app's ?face=) onto a neutral face */
+export function parseFace(spec: string | null, base: Partial<FaceState> = {}): FaceState {
+  const f: FaceState = { ...NEUTRAL_FACE, ...base };
+  for (const kv of (spec ?? '').split(',')) {
+    const [k, v] = kv.split(':');
+    if (k && k in f && v !== undefined && Number.isFinite(Number(v))) (f as unknown as Record<string, number>)[k] = Number(v);
+  }
+  return f;
+}
 
 export interface Built {
   def: CharacterDef;

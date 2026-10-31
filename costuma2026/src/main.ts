@@ -15,7 +15,7 @@ import { Motion } from './platform/motion';
 import { FaceTracker, attachFaces, type FaceDet } from './pose/face';
 import { LIGHT_TUNE } from './render/envlight';
 import { DEFAULT_CAST, ROSTER, byId } from './characters/roster';
-import type { CharacterDef } from './characters/build';
+import { parseFace, type CharacterDef } from './characters/build';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { ICONS } from './ui/icons';
 import { pageUrl, qrSvg } from './ui/qr';
@@ -349,7 +349,7 @@ function buildSettings(): void {
     i.oninput = () => { set(Number(i.value)); persist(); };
     return i;
   };
-  row(settings.scene === 'party' ? 'Subjects' : 'People', settings.scene === 'party' ? 'How many people to cut out (the nearest)' : 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); void faceTracker?.setFaces(v); }));
+  row(settings.scene === 'party' ? 'Subjects' : 'People', settings.scene === 'party' ? 'How many people to cut out (the nearest)' : 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); }));
   row('Costume size', 'Bigger hides more of the person', range(0.8, 1.5, 0.01, () => settings.size, (v) => { settings.size = v; stage.opts.size = v; }));
   row('Pose model', 'Accurate is steadier, slower to load and run', seg<'lite' | 'full'>([['lite', 'Fast'], ['full', 'Accurate']], () => settings.model, (v) => { settings.model = v; void reloadDetector(); }));
   row('Light from the camera', 'The costume is lit by the room it stands in', sw(() => settings.envLight, (v) => { settings.envLight = v; stage.opts.envLight = v; }));
@@ -506,14 +506,14 @@ function loop(now: number): void {
     try { dets = detector.detect(detectionInput(), now); } catch (e) { console.error(e); }
   }
   if (dets) tracker.update(dets.slice(0, settings.people), now, K);
-  // faces on the frame the bodies came from (the full frame: a face is small); joined to the people just tracked
+  // faces from the full-resolution frame, each read from a crop round a person's head (pose/face.ts)
   if (dets) {
-    let faces: FaceDet[] | null = null;
-    if (faceTracker && settings.faces && !SYNTH) { try { faces = faceTracker.detect(video, now); } catch (e) { console.error(e); } }
-    attachFaces(tracker.tracks, faces, K.w / K.h, now, lastFaceNow < 0 ? 1 / 30 : Math.min(0.25, (now - lastFaceNow) / 1000));
+    let faces: Map<number, FaceDet> | null = null;
+    if (faceTracker && settings.faces && !SYNTH) { try { faces = faceTracker.detect(video, tracker.tracks, K); } catch (e) { console.error(e); } }
+    attachFaces(tracker.tracks, faces, K, now, lastFaceNow < 0 ? 1 / 30 : Math.min(0.25, (now - lastFaceNow) / 1000));
     lastFaceNow = now;
-    // headless runs open the mouths by hand (?jaw=0..1)
-    if (SYNTH && q.get('jaw')) for (const t of tracker.tracks) if (t.face) t.face.jaw = Number(q.get('jaw'));
+    // headless runs set the faces by hand (?jaw=0..1, ?face=blinkL:1,smile:1,lookX:-0.5)
+    if (SYNTH && (q.get('jaw') || q.get('face'))) for (const t of tracker.tracks) if (t.face) Object.assign(t.face, parseFace(q.get('face'), { jaw: Number(q.get('jaw') ?? 0) }));
   }
   stage.ground.update(tracker.tracks, SYNTH ? null : motion.upInCamera(camera.facing), Math.min(0.25, (now - lastNow) / 1000));
   const costumed = settings.scene === 'costume' || settings.partyCostumes !== 'off';
@@ -628,6 +628,10 @@ function readout(): void {
     `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'}`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `people ${tracker.tracks.filter((t) => !t.lost).length} · dressed ${stage.count}`,
+    ...tracker.tracks.filter((t) => !t.lost && t.face).map((t) => {
+      const f = t.face!, e = new THREE.Euler().setFromQuaternion(f.head, 'YXZ'), d = (r: number) => Math.round(THREE.MathUtils.radToDeg(r));
+      return `face ${t.id}: ${f.read ? 'read' : 'pose only'} · trust ${f.trust.toFixed(2)} · head yaw ${d(e.y)} nod ${d(e.x)} tilt ${d(e.z)} · jaw ${f.jaw.toFixed(2)} blink ${f.blinkL.toFixed(2)}/${f.blinkR.toFixed(2)} look ${f.lookX.toFixed(2)},${f.lookY.toFixed(2)}`;
+    }),
     `pixels ×${stage.opts.pixelRatio.toFixed(2)} · shadows ${stage.opts.shadows ? 'on' : 'off'}`,
     `face light ${stage.light.faceConf > 0.05 ? `${stage.light.faceLum.toFixed(3)} from (${stage.light.faceDir.x.toFixed(2)}, ${stage.light.faceDir.y.toFixed(2)}) ×${stage.light.faceConf.toFixed(2)}` : '—'}`,
     `light mean ${stage.light.mean.toFixed(3)} × ${stage.light.gain.toFixed(2)} · key share ${stage.light.share.toFixed(2)} · every ${LIGHT_TUNE.every} frames`,
@@ -650,7 +654,7 @@ async function reloadDetector(): Promise<void> {
 async function loadFaces(): Promise<void> {
   if (faceTracker || SYNTH || !settings.faces) return;
   const f = new FaceTracker();
-  try { await f.load(settings.people); faceTracker = f; } catch (e) { console.warn('face model failed', e); }
+  try { await f.load(); faceTracker = f; } catch (e) { console.warn('face model failed', e); }
 }
 
 /** a stand-in room for camera-free test runs: a dim wall, a bright window to the left, a floor */

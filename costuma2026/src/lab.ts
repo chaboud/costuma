@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { ROSTER } from './characters/roster';
-import { buildCharacter } from './characters/build';
+import { buildCharacter, parseFace } from './characters/build';
 import { Rig, demoPose } from './pose/rig';
 
 const q = new URLSearchParams(location.search);
@@ -39,11 +39,16 @@ const res = q.get('res') ? Number(q.get('res')) : undefined;
 const built = buildCharacter(def, res);
 const rig = new Rig(def.segs, built.bones);
 const pose = demoPose(q.get('pose') ?? 'rest');
+// ?head=yaw,pitch,roll in degrees (yaw + toward the character's left, pitch + nose down, roll + its left ear down)
+if (q.get('head')) { const [hy, hp, hr] = q.get('head')!.split(',').map((n) => THREE.MathUtils.degToRad(Number(n) || 0)); pose.head = new THREE.Quaternion().setFromEuler(new THREE.Euler(hp, hy, hr, 'YXZ')); }
 rig.apply(pose, 0.6, def.idle?.tail ?? 0);
 // ?jaw=0..1: the mouth opened that far (face tracking's jawOpen), at the character's own full angle
 const jaw = Number(q.get('jaw') ?? 0);
-if (jaw > 0) rig.setJaw(jaw * (def.face?.jaw ?? 0.4));
-def.tick?.(built.root, Number(q.get("t") ?? 0.6), jaw > 0 ? { jaw, blinkL: 0, blinkR: 0, smile: 0, pucker: 0, browUp: 0 } : null);
+const side = Number(new URLSearchParams((q.get('face') ?? '').replace(/,/g, '&').replace(/:/g, '=')).get('jawSide') ?? 0);
+if (jaw > 0 || side) rig.setJaw(jaw * (def.face?.jaw ?? 0.4), side);
+// ?face=blinkL:1,smileR:0.8,lookX:-0.6 — any FaceState fields (build.ts), on top of ?jaw
+const faceSpec = q.get('face');
+def.tick?.(built.root, Number(q.get("t") ?? 0.6), jaw > 0 || faceSpec ? parseFace(faceSpec, { jaw }) : null);
 // standing: the root at the rest hip height, so the feet are near the floor in the rest pose
 const s = 0.1;
 built.root.scale.setScalar(s);
