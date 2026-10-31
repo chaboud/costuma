@@ -72,7 +72,12 @@ export interface CharacterDef {
    * own x at a fully open mouth (positive opens: the bone's tip goes down); `eyes` where googly eyes are glued on, as
    * [x, y, z, radius] in model coordinates on the head bone (its two eyes, the character's left first).
    */
-  face?: { jaw?: number; eyes?: [number, number, number, number][] };
+  face?: {
+    jaw?: number; eyes?: [number, number, number, number][];
+    /** what an open mouth breathes (render/breath.ts): its colours, and how much more of it, how fast, how big (1 = the
+     *  default sparks); a kaiju's atomic breath is a lot more, faster and blue */
+    breath?: { colors: number[]; rate?: number; speed?: number; size?: number };
+  };
 }
 
 /** the wearer's face this frame, 0..1 each (MediaPipe's blendshapes, smoothed): for jaws, eyelids, mouths in ticks */

@@ -30,10 +30,12 @@ export interface Settings {
   partyCast: string;
   /** the dance pyramid (clones behind the dancers) in every party mode */
   pyramid: boolean;
+  /** the characters in the rotation: the picker, Mix and the party's dancers (roster.ts DEFAULT_CAST; more from "More") */
+  cast: string[];
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', pyramid: true, v: 4 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 5 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
@@ -52,6 +54,9 @@ export function loadSettings(): Settings {
     if (v < 3) s.model = 'full';
     // v4: the pyramid is a toggle on every party mode, not a mode of its own
     if (v < 4) { if ((s.effect as string) === 'pyramid') s.effect = 'insitu'; s.pyramid = true; }
+    // v5: a rotation of seven by default; the rest wait under "More" (founder, 2026-10-31)
+    if (v < 5) s.cast = [...DEFAULTS.cast];
+    if (!Array.isArray(s.cast) || !s.cast.length) s.cast = [...DEFAULTS.cast];
     // Violet took the Valkyrie's place: whoever wore the Valkyrie wears Violet
     if (s.costume === 'valkyrie') s.costume = 'violet';
     if (s.partyCast === 'valkyrie') s.partyCast = 'violet';

@@ -27,7 +27,7 @@ const FRAG = /* glsl */ `
 
 const NEON = [0xff2994, 0xb3ff29, 0xffe029, 0x29e0ff, 0x8c2eff].map((h) => new THREE.Color(h));
 
-export interface Mouth { id: number; p: THREE.Vector3; dir: THREE.Vector3; open: number; scale: number; colors?: THREE.Color[] }
+export interface Mouth { id: number; p: THREE.Vector3; dir: THREE.Vector3; open: number; scale: number; colors?: THREE.Color[]; rate?: number; speed?: number; size?: number }
 
 export class Breath {
   readonly points: THREE.Points;
@@ -62,7 +62,7 @@ export class Breath {
     for (const m of mouths) {
       // from a third open to fully open: none to ~110 a second
       const k = Math.min(1, Math.max(0, (m.open - 0.3) / 0.45));
-      let owe = (this.owed.get(m.id) ?? 0) + k * k * 110 * dt;
+      let owe = (this.owed.get(m.id) ?? 0) + k * k * 110 * (m.rate ?? 1) * dt;
       const pal = m.colors?.length ? m.colors : NEON;
       while (owe >= 1) {
         owe -= 1;
@@ -72,12 +72,12 @@ export class Breath {
         const side = new THREE.Vector3(1, 0, 0).cross(m.dir); if (side.lengthSq() < 1e-4) side.set(0, 1, 0); side.normalize();
         const up = new THREE.Vector3().crossVectors(m.dir, side).normalize();
         const d = m.dir.clone().addScaledVector(side, Math.cos(a) * s).addScaledVector(up, Math.sin(a) * s - 0.15).normalize();
-        const speed = (1.1 + Math.random() * 1.1) * m.scale;
+        const speed = (1.1 + Math.random() * 1.1) * m.scale * (m.speed ?? 1);
         this.pos[i * 3] = m.p.x; this.pos[i * 3 + 1] = m.p.y; this.pos[i * 3 + 2] = m.p.z;
         this.vel[i * 3] = d.x * speed; this.vel[i * 3 + 1] = d.y * speed; this.vel[i * 3 + 2] = d.z * speed;
         const c = pal[Math.floor(Math.random() * pal.length)]!;
         this.col[i * 3] = c.r; this.col[i * 3 + 1] = c.g; this.col[i * 3 + 2] = c.b;
-        this.size[i] = (0.025 + Math.random() * 0.045) * m.scale;
+        this.size[i] = (0.025 + Math.random() * 0.045) * m.scale * (m.size ?? 1);
         this.span[i] = 0.9 + Math.random() * 0.6;
         this.life[i] = 1;
       }

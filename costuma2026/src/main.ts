@@ -14,7 +14,8 @@ import { Beat } from './audio/beat';
 import { Motion } from './platform/motion';
 import { FaceTracker, attachFaces, type FaceDet } from './pose/face';
 import { LIGHT_TUNE } from './render/envlight';
-import { ROSTER, byId } from './characters/roster';
+import { DEFAULT_CAST, ROSTER, byId } from './characters/roster';
+import type { CharacterDef } from './characters/build';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { ICONS } from './ui/icons';
 import { pageUrl, qrSvg } from './ui/qr';
@@ -39,7 +40,7 @@ const octx = overlay.getContext('2d')!;
 const stage = new Stage(canvas);
 stage.opts.size = settings.size; stage.opts.shadows = settings.shadows; stage.opts.envLight = settings.envLight;
 const party = new Party(stage.bgUniforms, BG_VERT);
-stage.cloneCast = (wearerId, i) => settings.scene === 'party' && settings.partyCast === 'mix' ? rosterAt(ROSTER.findIndex((d) => d.id === wearerId) + 1 + i + mixShift) : wearerId;
+stage.cloneCast = (wearerId, i) => settings.scene === 'party' && settings.partyCast === 'mix' ? rosterAt(rotationIndex(wearerId) + 1 + i + mixShift) : wearerId;
 const beat = new Beat();
 const motion = new Motion();
 let faceTracker: FaceTracker | null = null;
@@ -61,7 +62,13 @@ const mixed = new Map<number, string>();
 let mixNext = 0;
 /** a re-tap of Mix moves everyone along: who wears what is shuffled by this */
 let mixShift = 0;
-const rosterAt = (i: number) => ROSTER[((i % ROSTER.length) + ROSTER.length) % ROSTER.length]!.id;
+/** the characters in the rotation, in roster order (never empty: the default seven if all were taken out) */
+function rotation(): CharacterDef[] {
+  const on = ROSTER.filter((d) => settings.cast.includes(d.id));
+  return on.length ? on : ROSTER.filter((d) => DEFAULT_CAST.includes(d.id));
+}
+const rosterAt = (i: number) => { const r = rotation(); return r[((i % r.length) + r.length) % r.length]!.id; };
+const rotationIndex = (id: string) => Math.max(0, rotation().findIndex((d) => d.id === id));
 function castOf(trackId: number): string {
   const o = overrides.get(trackId);
   if (o) return o;
@@ -75,8 +82,7 @@ function castOf(trackId: number): string {
   if (settings.mode === 'one') return settings.costume;
   let m = mixed.get(trackId);
   if (!m) {
-    const start = ROSTER.findIndex((d) => d.id === settings.costume);
-    m = rosterAt(start + mixShift + mixNext++);
+    m = rosterAt(rotationIndex(settings.costume) + mixShift + mixNext++);
     mixed.set(trackId, m);
   }
   return m;
@@ -144,7 +150,13 @@ function buildPicker(): void {
     el.appendChild(b);
   };
   card('mix', 'Mix', 'mix');
-  for (const d of ROSTER) card(d.id, d.name);
+  for (const d of rotation()) card(d.id, d.name);
+  // the rest of the cast, and who is in the rotation
+  const more = document.createElement('button');
+  more.className = 'card more';
+  more.innerHTML = '<div class="thumb">+</div><div class="name">More</div>';
+  more.onclick = openMore;
+  el.appendChild(more);
   markPicker();
 }
 /**
@@ -200,12 +212,13 @@ function choose(id: string): void {
   markPicker();
 }
 
-/** the party's dancers, in the order a re-tap walks them: every costume, then a mix */
-const DANCERS = [...ROSTER.map((d) => d.id), 'mix'];
+/** the party's dancers, in the order a re-tap walks them: every costume in the rotation, then a mix */
+const dancers = () => [...rotation().map((d) => d.id), 'mix'];
 function chooseEffect(id: string): void {
   const p = PRESETS.find((x) => x.id === id) ?? PRESETS[0]!;
   if (settings.effect === p.id && party.preset.id === p.id) {
     // the same effect again: the next set of dancers (and a mix reshuffles each time round)
+    const DANCERS = dancers();
     const i = DANCERS.indexOf(settings.partyCast);
     settings.partyCast = DANCERS[(i + 1) % DANCERS.length]!;
     if (settings.partyCast === 'mix') mixShift++;
@@ -243,6 +256,40 @@ function setScene(scene: Settings['scene']): void {
     b.setAttribute('aria-selected', String(on));
   }
   buildPicker();
+}
+
+/** "More characters": every character, a ✓/✕ each for the rotation (the picker, Mix and the party's dancers) */
+function openMore(): void {
+  const body = $('more-body');
+  body.innerHTML = '';
+  const extra = ROSTER.filter((d) => !DEFAULT_CAST.includes(d.id));
+  const section = (title: string, list: CharacterDef[]) => {
+    const h = document.createElement('h3'); h.textContent = title; body.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'more-grid';
+    for (const d of list) {
+      const b = document.createElement('button');
+      b.className = 'more-card';
+      b.innerHTML = '<div class="thumb"></div><div class="name"></div><div class="tick"></div>';
+      const img = new Image(); img.alt = ''; img.draggable = false; img.src = thumbUrl(d.id); img.onerror = () => img.remove();
+      b.querySelector('.thumb')!.appendChild(img);
+      b.querySelector('.name')!.textContent = d.name;
+      const mark = () => { const on = settings.cast.includes(d.id); b.classList.toggle('on', on); b.querySelector('.tick')!.textContent = on ? '✓' : '✕'; b.setAttribute('aria-pressed', String(on)); };
+      mark();
+      b.onclick = () => {
+        const on = settings.cast.includes(d.id);
+        if (on && settings.cast.length <= 1) { toast('Keep at least one'); return; }
+        settings.cast = on ? settings.cast.filter((x) => x !== d.id) : [...settings.cast, d.id];
+        if (!on) ensureBuilt(d.id, true);
+        mixed.clear(); mixNext = 0;
+        persist(); mark(); buildPicker();
+      };
+      grid.appendChild(b);
+    }
+    body.appendChild(grid);
+  };
+  section('The usual crowd', ROSTER.filter((d) => DEFAULT_CAST.includes(d.id)));
+  section('Advanced & trash', extra);
+  openModal('more');
 }
 
 function openModal(id: string): void { $(id).classList.remove('hidden'); }
@@ -316,7 +363,7 @@ function buildSettings(): void {
   {
     const sel = document.createElement('select');
     sel.className = 'pick';
-    for (const d of ROSTER) { const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; sel.appendChild(o); }
+    for (const d of rotation()) { const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; sel.appendChild(o); }
     { const o = document.createElement('option'); o.value = 'mix'; o.textContent = 'A mix'; sel.appendChild(o); }
     sel.value = settings.partyCast;
     sel.onchange = () => { settings.partyCast = sel.value; overrides.clear(); mixed.clear(); persist(); if (sel.value !== 'mix') ensureBuilt(sel.value); };
@@ -420,8 +467,8 @@ canvas.addEventListener('click', (e) => {
     if (d < bd) { bd = d; best = t; }
   }
   if (!best || bd > Math.max(innerWidth, innerHeight) * 0.3) return;
-  const cur = castOf(best.id), i = ROSTER.findIndex((d) => d.id === cur);
-  const next = ROSTER[(i + 1) % ROSTER.length]!.id;
+  const cur = castOf(best.id);
+  const next = rosterAt(rotationIndex(cur) + 1);
   overrides.set(best.id, next);
   ensureBuilt(next);
   toast(byId(next).name, 900);
@@ -478,7 +525,6 @@ function loop(now: number): void {
   // and drawn over them; either way the costumes clone, not the people in 2D
   const partying = settings.scene === 'party', behind = partying && settings.partyCostumes === 'behind';
   stage.pyramid = partying && settings.pyramid && settings.partyCostumes !== 'off';
-  stage.backup = behind;
   stage.hideWearers = behind;
   party.pyramid = settings.pyramid;
   stage.setForeground(behind ? party.foreground : null);
@@ -651,7 +697,7 @@ async function start(): Promise<void> {
     const first = settings.mode === 'one' ? settings.costume : ROSTER[0]!.id;
     await stage.prepare(first, true);
     // the rest in the background, in picker order; the face model too
-    for (const d of ROSTER) void stage.prepare(d.id);
+    for (const d of rotation()) void stage.prepare(d.id);
     void loadFaces();
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
@@ -700,7 +746,7 @@ function boot(): void {
   $('btn-rec').onclick = toggleRecording;
   for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) b.onclick = () => { if (b.dataset.scene !== settings.scene) dip(() => setScene(b.dataset.scene as Settings['scene'])); };
   const cast = $('start-cast');
-  for (const d of ROSTER.slice(0, 6)) { const i = new Image(); i.src = thumbUrl(d.id); i.alt = d.name; i.onerror = () => i.remove(); cast.appendChild(i); }
+  for (const d of rotation().slice(0, 6)) { const i = new Image(); i.src = thumbUrl(d.id); i.alt = d.name; i.onerror = () => i.remove(); cast.appendChild(i); }
   buildPicker();
   scrollablePicker($('picker'));
   requestAnimationFrame(loop);

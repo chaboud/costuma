@@ -19,6 +19,16 @@ await page.screenshot({ path: path.join(out, 'qr.png') });
 await page.click('#qr [data-close]');
 await page.goto(`${server.url}index.html?test=1&synth=1&c=builder`);
 await page.waitForFunction(() => window.__costuma?.started && window.__costuma.stage.count > 0, null, { timeout: 240000 });
+// the controls fade when left alone (headless frames are slow enough for that): a touch brings them back first
+const wake = async () => { await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointerdown'))); await page.waitForTimeout(600); };
+await wake();
+await page.screenshot({ path: path.join(out, 'picker.png'), timeout: 120000 });
+await wake();
+await page.click('.card.more');
+await page.waitForTimeout(800);
+await page.screenshot({ path: path.join(out, 'more.png'), timeout: 120000 });
+await page.click('#more [data-close]');
+await wake();
 await page.click('#btn-gear');
 await page.waitForTimeout(1500);
 await page.screenshot({ path: path.join(out, 'settings.png'), timeout: 120000 });

@@ -191,7 +191,8 @@ const SCENE_FRAG = /* glsl */ `
       float band = fract(k);
       bg = neon(floor(k) * 0.17 + t * 0.02) * (0.25 + 1.1 * smoothstep(0.0, 0.08, band) * smoothstep(0.32, 0.12, band));
       bg *= 0.3 + 0.9 * exp(-dist * 1.4);
-      fg = vid + halo;
+      // a lit edge only: the halo (bright where dist is 0) belongs outside — inside, it washed the person to a ghost
+      fg = vid + hue * rim * 1.2;
     } else if (uPreset == 6) {
       bg = vid * 0.25 * vec3(0.7, 0.75, 1.0);
       bg = mix(bg, neon(stamp) * 1.3, clamp(trail, 0.0, 1.0) * 0.85);

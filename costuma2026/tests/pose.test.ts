@@ -120,4 +120,8 @@ describe('tracker', () => {
 
 describe('roster', () => {
   it('ids.ts matches roster.ts', () => { expect(ROSTER.map((d) => d.id)).toEqual(ROSTER_IDS); });
+  it('the default rotation is in the roster, first', async () => {
+    const { DEFAULT_CAST } = await import('../src/characters/roster');
+    expect(ROSTER.slice(0, DEFAULT_CAST.length).map((d) => d.id)).toEqual(DEFAULT_CAST);
+  });
 });

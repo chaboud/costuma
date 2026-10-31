@@ -13,7 +13,7 @@ describe('settings', () => {
   it('moves settings from before v2 to the new party default, once', () => {
     store({ effect: 'pop', partyCostumes: false, people: 3 });
     const s = loadSettings();
-    expect([s.effect, s.partyCostumes, s.partyCast, s.people, s.v, s.model]).toEqual(['insitu', 'behind', 'skeleton', 3, 4, 'full']);
+    expect([s.effect, s.partyCostumes, s.partyCast, s.people, s.v, s.model]).toEqual(['insitu', 'behind', 'skeleton', 3, 5, 'full']);
     // already v2: a party choice made since stays, but the model moves to full (v3)
     store({ effect: 'pop', partyCostumes: 'off', model: 'lite', v: 2 });
     expect([loadSettings().effect, loadSettings().partyCostumes, loadSettings().model]).toEqual(['pop', 'off', 'full']);
@@ -26,6 +26,14 @@ describe('settings', () => {
     expect([loadSettings().effect, loadSettings().pyramid]).toEqual(['insitu', true]);
     store({ effect: 'lasers', pyramid: false, v: 4 });
     expect([loadSettings().effect, loadSettings().pyramid]).toEqual(['lasers', false]);
+  });
+  it('the rotation: the usual seven by default; a chosen one stays', () => {
+    store({ v: 4 });
+    expect(loadSettings().cast).toEqual(['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume']);
+    store({ cast: ['kaiju', 'ghost'], v: 5 });
+    expect(loadSettings().cast).toEqual(['kaiju', 'ghost']);
+    store({ cast: [], v: 5 });
+    expect(loadSettings().cast.length).toBe(7);
   });
   it('whoever wore the Valkyrie wears Violet', () => {
     store({ costume: 'valkyrie', partyCast: 'valkyrie', v: 3 });

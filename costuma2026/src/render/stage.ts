@@ -89,8 +89,6 @@ export class Stage {
   pyramid = false;
   /** the wearers themselves undressed (party's "behind you": only their pyramid shows, and they stay in front) */
   hideWearers = false;
-  /** with no pyramid, "behind you" still has two backup dancers (a row of two) */
-  backup = false;
   /** which character dances at place `i` of a wearer's pyramid (a mix gives each its own); default: the wearer's */
   cloneCast: (wearerId: string, i: number) => string = (id) => id;
   /** the floor (pose/ground.ts): the pyramid stands on it */
@@ -382,7 +380,8 @@ export class Stage {
    * dance, so the triangle count stays a phone's.
    */
   private posePyramid(w: Wearer, s: number, fade: number, t: number): void {
-    const rows = this.pyramid ? (this.wearers.size > 1 ? 2 : 3) : this.backup ? 1 : 0;
+    // pyramid off is no dancers at all (founder: dancers still showed with it off, when "behind you" kept two)
+    const rows = this.pyramid ? (this.wearers.size > 1 ? 2 : 3) : 0;
     const want: { row: number; col: number; id: string }[] = [];
     for (let r = 1; r <= rows; r++) for (let j = 0; j <= r; j++) want.push({ row: r, col: j, id: this.cloneCast(w.def.id, want.length) });
     // a place whose dancer changed (a new mix, another cast) gets the new one once it is made; the old dances till then
@@ -481,7 +480,8 @@ export class Stage {
       }
       if (!mouth && f) mouth = { p: at(f.mouth.x, f.mouth.y, 0.03), dir: ax(0, -0.2, 1).normalize(), scale: 1 };
       people.push({ id: tr.id, eyes, show: tr.presence });
-      if (mouth && f) mouths.push({ id: tr.id, ...mouth, open: f.jaw * tr.presence, colors: undefined });
+      const br = worn?.def.face?.breath;
+      if (mouth && f) mouths.push({ id: tr.id, ...mouth, open: f.jaw * tr.presence, colors: br?.colors.map((c) => new THREE.Color(c)), rate: br?.rate, speed: br?.speed, size: br?.size });
     }
     this.googly.update(people, this.ground.n, dt, this.googlyOn);
     // the light meter: the largest read face in view (render/envlight.ts readFace)
