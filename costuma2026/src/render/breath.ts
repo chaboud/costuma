@@ -7,21 +7,25 @@ const MAX = 900;
 const VERT = /* glsl */ `
   attribute float aSize; attribute float aLife; attribute vec3 aColor;
   uniform float uScale;
-  varying float vLife; varying vec3 vColor;
+  varying float vLife; varying vec3 vColor; varying float vNear;
   void main() {
     vLife = aLife; vColor = aColor;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = aLife > 0.0 ? aSize * uScale / max(-mv.z, 0.05) : 0.0;
+    // a spark flying at the lens fades out and never grows past a tenth of the frame (it would be a white disc)
+    float z = max(-mv.z, 0.05);
+    vNear = smoothstep(0.2, 0.55, z);
+    gl_PointSize = aLife > 0.0 ? min(aSize * uScale / z, uScale * 0.1) : 0.0;
   }`;
 const FRAG = /* glsl */ `
-  varying float vLife; varying vec3 vColor;
+  varying float vLife; varying vec3 vColor; varying float vNear;
   void main() {
     vec2 c = gl_PointCoord - 0.5;
     float d = length(c) * 2.0;
     if (d > 1.0 || vLife <= 0.0) discard;
     float core = exp(-d * d * 5.0), halo = exp(-d * d * 1.6) * 0.45;
-    float fade = smoothstep(0.0, 0.25, vLife) * smoothstep(1.0, 0.85, vLife);
+    // in quickly (a fast spark is metres out by a slow fade-in's end), out slowly
+    float fade = smoothstep(0.0, 0.25, vLife) * smoothstep(1.0, 0.95, vLife) * vNear;
     gl_FragColor = vec4(vColor * (core * 1.6 + halo) * fade, 1.0);
   }`;
 

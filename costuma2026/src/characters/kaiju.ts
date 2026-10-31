@@ -13,8 +13,8 @@
 // to one side, so the camera sees it past a leg.
 //
 // - The body (skull and upper jaw included) is one SDF, skinned. The lower jaw is its own small SDF mesh, rigid on the
-//   `jaw` bone, so an open mouth is a clean gap (a skinned jaw stretches a sheet across it); the palate and the throat
-//   behind it are coloured as a mouth, and a glow core sits at the back of it, hidden while the jaw is shut.
+//   `jaw` bone, so an open mouth is a clean gap (a skinned jaw stretches a sheet across it); the palate and the tongue
+//   are coloured as a mouth, the throat behind them dark, and a glow core sits in it, hidden while the jaw is shut.
 // - The plates are rigid meshes, merged per bone with one material per bone, so `tick` can light them bone by bone.
 //   Their roots are sunk into the body; the SDF has only a low ridge under them.
 // Frame (build.ts): metres for a ~19-unit figure on y = 0, +z its snout, +x its own left.
@@ -198,7 +198,7 @@ export function kaijuBodySDF(x: number, y: number, z: number): number {
   return Math.max(d, -y);
 }
 
-const C = { skin: 0x45484d, belly: 0x6f6a61, ridge: 0x2a2c2f, claw: 0xe2dccb, mouth: 0x4a1418, bone: 0xc9c2b0 };
+const C = { skin: 0x60646b, belly: 0x86806f, ridge: 0x2a2c2f, claw: 0xe2dccb, mouth: 0x4a1418, bone: 0xc9c2b0 };
 const PALETTE = [C.skin, C.belly, C.ridge, C.claw, C.mouth];
 
 /** 0 skin, 1 belly, 2 ridge, 3 claw, 4 mouth */
@@ -228,7 +228,7 @@ function kaijuTint(r: number, x: number, y: number, z: number, c: THREE.Color): 
   } else if (r === 0) {
     // darker along the back and the tail's top, the belly's tone bleeding a little into the skin round it
     const back = sstep(0.0, -2.5, z) * sstep(6.5, 12, y) + (z < -3 ? sstep(-0.5, 1.0, y - (9.4 + z * 0.62)) : 0);
-    c.multiplyScalar(1 - 0.3 * Math.min(1, back));
+    c.multiplyScalar(1 - 0.22 * Math.min(1, back));
     const bx = Math.abs(x) / 2.05, by = (y - 11.1) / 3.4, e = bx * bx + by * by;
     if (z > 0.6 && e < 1.5) c.lerp(BELLY, 0.35 * sstep(1.5, 1.0, e));
   }
