@@ -39,6 +39,7 @@ const party = new Party(stage.bgUniforms, BG_VERT);
 const beat = new Beat();
 if (q.get('scene') === 'party' || q.get('scene') === 'costume') settings.scene = q.get('scene') as Settings['scene'];
 if (q.get('fx')) settings.effect = q.get('fx')!;
+if (q.get('pc')) settings.partyCostumes = q.get('pc') === '1';
 party.preset = PRESETS.find((p) => p.id === settings.effect) ?? PRESETS[0]!;
 const camera = new Camera(video, (q.get('facing') as 'user' | 'environment' | null) ?? undefined);
 let detector: Detector | null = null;
@@ -363,6 +364,10 @@ function loop(now: number): void {
   const tSec = (now - t0) / 1000, dt = Math.min(0.25, (now - lastNow) / 1000);
   lastNow = now;
   const dressing = settings.scene === 'costume' || settings.partyCostumes;
+  // the pyramid with costumes on: the costumes clone in 3D, not the people in 2D
+  stage.pyramid = settings.scene === 'party' && settings.partyCostumes && party.preset.id === 'pyramid';
+  party.clones = !stage.pyramid;
+  stage.stageLights(settings.scene === 'party', tSec, beat.env);
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
   beat.update(dt, now);
   if (settings.scene === 'party') {

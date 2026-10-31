@@ -17,7 +17,15 @@ interface Wearer {
   rig: Rig;
   mats: THREE.Material[];
   fade: number;
+  /** the bones in a fixed order, and a ring of their past poses (the pyramid's canon) */
+  boneList: THREE.Bone[];
+  hist: Float32Array[];
+  histHead: number;
+  clones: { root: THREE.Object3D; bones: THREE.Bone[]; row: number; col: number }[];
 }
+
+/** past poses kept per wearer; the back row of the pyramid dances this many frames late at most */
+const POSE_HIST = 12;
 
 export const BG_VERT = /* glsl */ `
   varying vec2 vUv;
@@ -50,6 +58,10 @@ export class Stage {
   private videoTex: THREE.VideoTexture | null = null;
   private readonly templates = new Map<string, Built>();
   private readonly wearers = new Map<number, Wearer>();
+  /** the dance pyramid in 3D: each wearer's costume cloned behind and above them, dancing their moves late (party) */
+  pyramid = false;
+  /** party mode's stage lights on the costumes: two coloured rims from behind, pulsing with the beat */
+  readonly rims = [new THREE.DirectionalLight(0xff2d95, 0), new THREE.DirectionalLight(0x2ee6ff, 0)];
   opts: StageOptions = { size: 1, shadows: true, envLight: true, pixelRatio: Math.min(window.devicePixelRatio || 1, 2) };
   /** where the video falls on the canvas: scale (canvas px per video px) and the visible crop, for the debug overlay */
   cover = { s: 1, ox: 0, oy: 0, vw: 1, vh: 1, cw: 1, ch: 1, mirror: false };
@@ -73,6 +85,9 @@ export class Stage {
     this.scene.add(this.world);
     this.scene.add(this.camera);
     this.light = new CameraLight(this.renderer, this.scene, this.world);
+    // behind the people, either side and above: they edge the costumes in colour (no shadows: a rim, not a key)
+    this.rims[0]!.position.set(-3, 2.5, -6); this.rims[1]!.position.set(3, 2.5, -6);
+    for (const r of this.rims) { r.target.position.set(0, 0, -3); this.scene.add(r, r.target); }
   }
 
   setVideo(video: HTMLVideoElement): void {
@@ -155,7 +170,9 @@ export class Stage {
       };
       m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material);
     });
-    const w: Wearer = { trackId, def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], fade: 0 };
+    const boneList = tpl.def.segs.map((sg) => bones.get(sg.name)!).filter(Boolean);
+    const w: Wearer = { trackId, def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], fade: 0,
+      boneList, hist: Array.from({ length: POSE_HIST }, () => new Float32Array(boneList.length * 7)), histHead: 0, clones: [] };
     this.world.add(root);
     this.wearers.set(trackId, w);
     return w;
@@ -163,6 +180,7 @@ export class Stage {
 
   private drop(w: Wearer): void {
     this.world.remove(w.root);
+    for (const c of w.clones) this.world.remove(c.root);
     for (const m of w.mats) m.dispose();
     this.wearers.delete(w.trackId);
   }
@@ -186,6 +204,56 @@ export class Stage {
     if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade; w.fade = fade; }
     w.root.visible = fade > 0.01;
     def.tick?.(w.root, t);
+    // the pose into the ring
+    w.histHead = (w.histHead + 1) % POSE_HIST;
+    const h = w.hist[w.histHead]!;
+    w.boneList.forEach((b, i) => { b.quaternion.toArray(h, i * 7); b.position.toArray(h, i * 7 + 4); });
+    this.posePyramid(w, s, fade, t);
+  }
+
+  /**
+   * Rows behind and above the wearer, each one more than the last, each row later: a canon. In camera space: back is
+   * away from the camera, up is up; perspective makes the back rows smaller on its own. Fewer rows when several people
+   * dance, so the triangle count stays a phone's.
+   */
+  private posePyramid(w: Wearer, s: number, fade: number, t: number): void {
+    const rows = this.pyramid ? (this.wearers.size > 1 ? 2 : 3) : 0;
+    const want: [number, number][] = [];
+    for (let r = 1; r <= rows; r++) for (let j = 0; j <= r; j++) want.push([r, j]);
+    while (w.clones.length > want.length) this.world.remove(w.clones.pop()!.root);
+    while (w.clones.length < want.length) {
+      const root = SkeletonUtils.clone(w.root);
+      // the clone shares the wearer's (fading) materials; SkeletonUtils.clone already does, and drops its own clones
+      root.traverse((o) => { o.castShadow = false; });
+      const bones = new Map<string, THREE.Bone>();
+      root.traverse((o) => { if ((o as THREE.Bone).isBone) bones.set(o.name, o as THREE.Bone); });
+      const [row, col] = want[w.clones.length]!;
+      w.clones.push({ root, bones: w.def.segs.map((sg) => bones.get(sg.name)!).filter(Boolean), row, col });
+      this.world.add(root);
+    }
+    const height = w.rig.torso * s * 3.2; // about the costume's height, metres
+    for (const c of w.clones) {
+      const fj = c.col - c.row / 2;
+      const delay = Math.round(c.row * 3 + Math.abs(fj) * 1.5);
+      const h = w.hist[(w.histHead - delay + POSE_HIST * 4) % POSE_HIST]!;
+      c.bones.forEach((b, i) => { b.quaternion.fromArray(h, i * 7); b.position.fromArray(h, i * 7 + 4); });
+      c.root.position.set(w.root.position.x + fj * height * 0.62, w.root.position.y + c.row * height * 0.3, w.root.position.z - c.row * height * 0.9);
+      c.root.scale.copy(w.root.scale);
+      c.root.visible = w.root.visible;
+      w.def.tick?.(c.root, t - delay / 30);
+    }
+    void fade;
+  }
+
+  /** the party's rim lights: `on`, their colours along the show's palette, a kick on the beat */
+  stageLights(on: boolean, t: number, beat: number): void {
+    const pal = [0xff2994, 0xb3ff29, 0xffe029, 0x29e0ff, 0x8c2eff];
+    this.rims.forEach((r, i) => {
+      // intensity always set (a light that comes and goes would recompile every lit shader: Strollzilla's lesson)
+      r.intensity = on ? 2.2 + 3.0 * beat : 0;
+      const k = (t * 0.12 + i * 0.4) % 1 * pal.length, a = Math.floor(k), f = k - a;
+      r.color.setHex(pal[a % pal.length]!).lerp(new THREE.Color(pal[(a + 1) % pal.length]!), f);
+    });
   }
 
   /** hip centres of the dressed people (for the light's shadow box) */

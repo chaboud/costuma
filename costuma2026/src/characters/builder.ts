@@ -225,13 +225,15 @@ function dress(d: Dresser): void {
   // ---- the tree ----
   for (const [ti, t] of [...TIERS, ...boughs(1), ...boughs(-1)].entries()) {
     hang(mesh(tierGeo(t), pine), t.bone);
-    const ok = (p: THREE.Vector3) => !t.hole || !inHole(t.hole, p.x, p.y, p.z, RIM + 0.45);
+    // nothing on the head's tiers hangs over the face (the tip's baubles reached its rim)
+    const ok = (p: THREE.Vector3) => t.bone !== 'head' || !inHole(FACE, p.x, p.y, p.z, RIM + 0.5);
     // baubles hang from alternate points of the hem, the tiers turned against each other so they don't stack
     if (t.baubles) {
       const step = (Math.PI * 2) / t.n, s = Math.min(1.25, 0.75 + t.r0 * 0.1);
       for (let k = ti % 2; k < t.n; k += 2) {
         const th = k * step + (t.turn ?? 0), r = t.r0 * 1.05 + 0.1 * s, y = t.y0 - (t.drop ?? DROP) - 0.36 * s;
-        bauble(t.bone, new THREE.Vector3(Math.sin(th) * r, y, Math.cos(th) * r), s);
+        const p = new THREE.Vector3(Math.sin(th) * r, y, Math.cos(th) * r);
+        if (ok(p)) bauble(t.bone, p, s);
       }
     }
     // the garland: one gold turn round the tier, low at the hem to high under the next tier's hem, so the turns read as
@@ -307,7 +309,7 @@ function dress(d: Dresser): void {
   // its crown, as a man lifts his hat to say "good day"; the tip of the tree stays under it. Its brim is a ring and its
   // inside a dark lining: a solid brim, tipped toward the camera, read as a yellow disc ----
   const HS = 1.2, hatG = new THREE.Group();
-  const dome = mesh(new THREE.SphereGeometry(1, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2), hat); dome.scale.set(1.66 * HS, 1.22 * HS, 1.72 * HS); hatG.add(dome);
+  const dome = mesh(new THREE.SphereGeometry(1, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2), hat); dome.scale.set(1.66 * HS, 1.42 * HS, 1.72 * HS); hatG.add(dome);
   const crest = mesh(new THREE.TorusGeometry(1, 0.11, 6, 20, Math.PI), hat); crest.rotation.y = Math.PI / 2; crest.scale.copy(dome.scale); hatG.add(crest);
   const brimG = new THREE.LatheGeometry([new THREE.Vector2(0.8, 0), new THREE.Vector2(1, 0), new THREE.Vector2(1, 0.09), new THREE.Vector2(0.8, 0.09), new THREE.Vector2(0.8, 0)], 32);
   const brim = mesh(brimG, hat); brim.scale.set(2.05 * HS, 1, 2.2 * HS); brim.position.set(0, -0.02, 0.22 * HS); hatG.add(brim);
@@ -317,9 +319,9 @@ function dress(d: Dresser): void {
   hatG.position.set(0, 0, -back);
   const tipG = new THREE.Group();
   tipG.add(hatG);
-  // ~34° in all, split between back and to the side: tipped straight back, from the front it showed only its brim and
-  // lining; to the side as well, the crown keeps its profile
-  tipG.rotation.set(-0.45, 0, 0.4, 'ZXY');
+  // ~33° in all, mostly to the side and a little back: tipped straight back, from the front (where the camera is) it
+  // showed only its brim and lining, a halo; canted to the side, the crown keeps its profile and reads as a jaunty tip
+  tipG.rotation.set(-0.26, 0, 0.5, 'ZXY');
   hang(tipG, 'head', 0, 19.65, back);
 
   for (const b of buckets.values()) {

@@ -85,7 +85,7 @@ const SCENE_FRAG = /* glsl */ `
   varying vec2 vUv;
   uniform sampler2D uTex, uMask, uFx, uPrev;
   uniform highp sampler2DArray uHist;
-  uniform float uHead, uTime, uAspect, uBeat, uLevel;
+  uniform float uHead, uTime, uAspect, uBeat, uLevel, uClones;
   uniform int uPreset;
   uniform vec4 uOn, uBox;
   uniform vec3 uPal[16];
@@ -189,6 +189,7 @@ const SCENE_FRAG = /* glsl */ `
       float W = max(uBox.z - uBox.x, 0.08), H = max(uBox.w - uBox.y, 0.12);
       vec3 col = bg;
       for (int r = 3; r >= 1; r--) {
+        if (uClones < 0.5) break;
         float fr = float(r), s = pow(0.74, fr);
         for (int j = 0; j <= 3; j++) {
           if (j > r) break;
@@ -300,6 +301,8 @@ export class Party {
   subjects = 2;
   /** the bass's envelope, 0..1 (audio/beat.ts); 0 without the microphone */
   beat = 0;
+  /** the pyramid clones the people (off when the costumes make their own pyramid in 3D) */
+  clones = true;
   private maskTex: THREE.DataTexture;
   private maskData = new Uint8Array(4);
   private mw = 0;
@@ -344,7 +347,7 @@ export class Party {
       ...common, vertexShader: QUAD_VERT, fragmentShader: SCENE_FRAG,
       uniforms: {
         uTex: shared.uTex, uMask: { value: this.maskTex }, uFx: { value: this.fxTex }, uPrev: { value: null }, uHist: { value: null },
-        uHead: { value: 0 }, uTime: { value: 0 }, uAspect: { value: 1 }, uBeat: { value: 0 }, uLevel: { value: 0 }, uPreset: { value: 0 },
+        uHead: { value: 0 }, uClones: { value: 1 }, uTime: { value: 0 }, uAspect: { value: 1 }, uBeat: { value: 0 }, uLevel: { value: 0 }, uPreset: { value: 0 },
         uOn: { value: this.uOn }, uBox: { value: this.box }, uPal: { value: PALETTES.flat().map((h) => new THREE.Color(h)) },
       },
     });
@@ -378,7 +381,7 @@ export class Party {
   /** the subjects this frame, their masks into the textures, the distance field, the trails, the box (step 1) */
   update(tracks: Track[], dt: number, t: number, aspect: number): void {
     const u = this.scene.uniforms;
-    u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code; u.uBeat!.value = this.beat;
+    u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code; u.uBeat!.value = this.beat; u.uClones!.value = this.clones ? 1 : 0;
     this.material.uniforms.uTime!.value = t; this.material.uniforms.uBeat!.value = this.beat;
     const fw = aspect >= 1 ? 160 : Math.max(48, Math.round(160 * aspect)), fh = aspect >= 1 ? Math.max(48, Math.round(160 / aspect)) : 160;
     if (fw !== this.fw || fh !== this.fh) this.resizeFx(fw, fh);
