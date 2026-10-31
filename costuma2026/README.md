@@ -3,9 +3,11 @@
 3D costumes that move with you. Point a phone at people (up to four), pick who
 to be, and each person is drawn over as a code-built 3D character posed by
 their own skeleton, lit by the room the camera sees. **Party mode** cuts the
-nearest one to four people out of the frame and rebuilds the room round them
-(pop art, a Warhol 2×2, solarize, neon outlines, contour rings, echo trails,
-disco). Photo and clip capture; a QR button shares the page.
+nearest one to four people out of the frame and rebuilds the room round them,
+graded like a concert's screens: the dance pyramid (clones in rows behind,
+dancing late — in 3D with costumes on), a feedback tunnel, lasers, a
+kaleidoscope, contour rings, neon, pop art, a Warhol 2×2, echo trails, disco,
+solarize; optionally on the beat (microphone). Photo and clip capture; a QR button shares the page.
 
 Static files only; everything is computed on the phone. Nothing is uploaded.
 
@@ -79,7 +81,14 @@ in `src/main.ts`.
   cannot do — distance to the nearest subject (rings, neon glow) and where
   they have been (echo trails) — runs on the CPU on a 160-px grid (a two-pass
   chamfer distance, a decaying max) and is drawn smooth by the texture filter.
-  Presets are branches of one fragment shader. A tap cycles the preset.
+  Then on the GPU: a cut-out pass into a 12-deep history (the pyramid's
+  clones read it a few frames late), the scene pass in half float (a branch per
+  preset; the tunnel reads the previous scene), a two-level bloom, and the
+  grade as the background quad (chromatic split, vignette, grain, a highlight
+  roll-off). With costumes on, Pyramid clones the costumes in 3D from a ring of
+  past poses instead (`stage.ts posePyramid`), and two rim lights edge them in
+  the show's colours. The microphone (`audio/beat.ts`, off by default) turns
+  bass onsets into `uBeat`. A tap cycles the preset.
 - **Stage** (`src/render/stage.ts`): the video is a full-screen background,
   cover-fitted; a selfie mirrors the whole world group (`scale.x = −1`), not
   the data — mirrored landmarks would describe a different-handed person.
