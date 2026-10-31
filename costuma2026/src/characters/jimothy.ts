@@ -37,7 +37,7 @@ const HIP: V3 = [1.95, 6.0, 0.2], KNEE: V3 = [LX, 3.4, 0.55], ANKLE: V3 = [LX, 1
 // the arms rest out, nearly level and a little forward: hanging, they would lie in the ball, the marching cubes would
 // join them to it, and the join would tear when the arm lifts. Lower (25° under level was tried) and the arm's underside
 // ran along the ball, so the ball's side was in the arm's seam and a cheer lifted it into a web down to the waist
-const SHOULDER: V3 = [2.9, 11.0, 0.8], ELBOW: V3 = [4.99, 10.54, 1.28], WRIST: V3 = [6.76, 10.06, 1.79];
+const SHOULDER: V3 = [2.9, 11.0, 0.8], ELBOW: V3 = [4.38, 9.47, 1.36], WRIST: V3 = [5.57, 8.09, 1.88];
 const TAIL: V3[] = [[0, 6.6, -2.6], [0.5, 4.6, -4.4], [1.6, 2.4, -5.3], [3.0, 1.1, -5.2], [4.5, 0.85, -4.1]];
 const TAIL_R = [1.15, 1.45, 1.4, 1.2, 0.75];
 /** the skull's centre: everything on the head is placed from it */
@@ -237,7 +237,9 @@ export function jimothyFurLength(x: number, y: number, z: number): number {
  * Who may skin a vertex: a bone takes its own part's vertices and a seam SEAM wide where its part meets another. Asked
  * for every bone of every vertex (2.5M times a build), so the bone's part is a table lookup, not string tests.
  */
-const SEAM = 0.25;
+// measured (scratchpad stretch probe, share of the surface past 4x in a cheer): 0.95 % at 0.8, 0.62 % at 0.4, 0.52 % at
+// 0.12; at 0 the whole jump in weight sits in one row of triangles, a crease
+const SEAM = 0.15;
 const enum G { Body, Neck, Head, ArmL, ArmR, LegL, LegR, Tail }
 const GROUP = new Map<string, G>([
   ['pelvis', G.Body], ['spine1', G.Body], ['spine2', G.Body], ['neck', G.Neck], ['head', G.Head], ['jaw', G.Head],
@@ -249,9 +251,11 @@ const jimothyCapture: Capture = (sg, x, y, z) => {
   const q = parts(x, y, z), lim = q.min + SEAM;
   switch (GROUP.get(sg.name)) {
     case G.Body: return q.body <= lim;
-    // the neck is the band between the ball and the skull; above it the head is one rigid piece
-    case G.Neck: return (q.body <= lim || q.head <= lim) && y > 10.6 && y < SK[1] - 1.0;
-    case G.Head: return q.head <= lim && y > SK[1] - 2.1;
+    // the neck takes the ball's top and the skull's underside, and the head the neck's ruff, so a turn of the head (the
+    // neck bone never twists) is spread down the ruff instead of torn at the skull's rim; above the cheeks the head is
+    // one rigid piece
+    case G.Neck: return y > 10.6 && ((q.body <= lim && Math.abs(x) < 2.4) || (q.head <= lim && y < SK[1] - 1.6));
+    case G.Head: return (q.head <= lim && y > SK[1] - 2.1) || (q.body <= lim && y > 12.0 && Math.abs(x) < 2.0);
     case G.ArmL: return q.arm <= lim && x > 0.5;
     case G.ArmR: return q.arm <= lim && x < -0.5;
     case G.LegL: return q.leg <= lim && x > 0.2;

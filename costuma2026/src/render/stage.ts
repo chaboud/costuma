@@ -19,7 +19,7 @@ interface Wearer {
   fade: number;
 }
 
-const BG_VERT = /* glsl */ `
+export const BG_VERT = /* glsl */ `
   varying vec2 vUv;
   uniform vec4 uCrop; // u0, v0, du, dv of the video shown
   uniform float uMirror;
@@ -44,6 +44,9 @@ export class Stage {
   readonly world = new THREE.Group();
   readonly light: CameraLight;
   private readonly bg: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  /** the background's shared uniforms: any background material (party.ts) takes these same objects */
+  readonly bgUniforms = { uTex: { value: null as THREE.Texture | null }, uCrop: { value: new THREE.Vector4(0, 0, 1, 1) }, uMirror: { value: 0 } };
+  private readonly plainBg: THREE.ShaderMaterial;
   private videoTex: THREE.VideoTexture | null = null;
   private readonly templates = new Map<string, Built>();
   private readonly wearers = new Map<number, Wearer>();
@@ -59,10 +62,11 @@ export class Stage {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setPixelRatio(this.opts.pixelRatio);
-    this.bg = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+    this.plainBg = new THREE.ShaderMaterial({
       vertexShader: BG_VERT, fragmentShader: BG_FRAG, depthTest: false, depthWrite: false, toneMapped: false,
-      uniforms: { uTex: { value: null }, uCrop: { value: new THREE.Vector4(0, 0, 1, 1) }, uMirror: { value: 0 } },
-    }));
+      uniforms: this.bgUniforms,
+    });
+    this.bg = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.plainBg);
     this.bg.frustumCulled = false;
     this.bg.renderOrder = -1000;
     this.scene.add(this.bg);
@@ -77,7 +81,12 @@ export class Stage {
     t.colorSpace = THREE.NoColorSpace; // shown exactly as the camera gave it
     t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter; t.generateMipmaps = false;
     this.videoTex = t;
-    this.bg.material.uniforms.uTex!.value = t;
+    this.bgUniforms.uTex.value = t;
+  }
+
+  /** the background's look: the camera frame as it is, or another material on the same uniforms (party mode) */
+  setBackground(m: THREE.ShaderMaterial | null): void {
+    this.bg.material = m ?? this.plainBg;
   }
 
   /** build (once) and keep a character; slow (marching cubes), so call it while showing something */
@@ -99,8 +108,8 @@ export class Stage {
     const visW = cw / s, visH = ch / s;
     const u0 = (K.w - visW) / 2 / K.w, v0 = (K.h - visH) / 2 / K.h;
     // texture v runs bottom-up while the video's rows run top-down; VideoTexture's flipY makes v=1 the top row
-    this.bg.material.uniforms.uCrop!.value.set(u0, v0, visW / K.w, visH / K.h);
-    this.bg.material.uniforms.uMirror!.value = mirror ? 1 : 0;
+    this.bgUniforms.uCrop.value.set(u0, v0, visW / K.w, visH / K.h);
+    this.bgUniforms.uMirror.value = mirror ? 1 : 0;
     this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(visH / 2 / K.f));
     this.camera.aspect = cw / ch;
     this.camera.updateProjectionMatrix();

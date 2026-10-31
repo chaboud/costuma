@@ -11,6 +11,8 @@ export class Detector {
   private lastTs = -1;
   delegate: 'GPU' | 'CPU' = 'GPU';
   inferMs = 0;
+  /** cut-out masks per person (party mode): costs a GPU→CPU copy per person per frame */
+  masks = false;
   constructor(public model: ModelKind, public numPoses: number) {}
 
   async load(onStage?: (s: string) => void): Promise<void> {
@@ -25,6 +27,7 @@ export class Detector {
       minPoseDetectionConfidence: 0.5,
       minPosePresenceConfidence: 0.5,
       minTrackingConfidence: 0.5,
+      outputSegmentationMasks: this.masks,
     });
     onStage?.(`loading the ${this.model} pose model`);
     try {
@@ -37,8 +40,9 @@ export class Detector {
     }
   }
 
-  async setOptions(o: { numPoses?: number }): Promise<void> {
+  async setOptions(o: { numPoses?: number; masks?: boolean }): Promise<void> {
     if (o.numPoses) { this.numPoses = o.numPoses; await this.lm?.setOptions({ numPoses: o.numPoses }); }
+    if (o.masks !== undefined && o.masks !== this.masks) { this.masks = o.masks; await this.lm?.setOptions({ outputSegmentationMasks: o.masks }); }
   }
 
   /** run on a frame; `ts` ms, strictly increasing */
@@ -53,11 +57,15 @@ export class Detector {
     for (let i = 0; i < r.landmarks.length; i++) {
       const im = r.landmarks[i]!, w = r.worldLandmarks[i];
       if (!w) continue;
+      const m = r.segmentationMasks?.[i];
       out.push({
         image: im.map((p) => ({ x: p.x, y: p.y, z: p.z, v: p.visibility ?? 1 })),
         world: w.map(worldToThree),
+        // copied out: the task owns its masks and frees them with the result
+        mask: m ? { data: m.getAsFloat32Array().slice(), w: m.width, h: m.height } : undefined,
       });
     }
+    r.close();
     return out;
   }
 

@@ -10,8 +10,13 @@ export interface Settings {
   debug: boolean;
   mode: 'one' | 'mix';
   costume: string;
+  /** costumes over people, or party mode: people cut out and the frame rebuilt round them (render/party.ts) */
+  scene: 'costume' | 'party';
+  effect: string;
+  /** keep wearing costumes in party mode */
+  partyCostumes: boolean;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy' };
+export const DEFAULTS: Settings = { people: 2, model: 'lite', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'pop', partyCostumes: false };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {

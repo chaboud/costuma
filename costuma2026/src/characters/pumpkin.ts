@@ -69,7 +69,7 @@ function jackSDF(x: number, y: number, z: number): number {
       d = smin(d, sdCapsule(ax, y, z, 0, 15.0, -0.05, 2.15, 14.62, 0, 0.5, 0.56), 0.5);
       // the collar, a rolled ring round the neck, and the burlap neck the pumpkin sits on
       d = smin(d, Math.hypot(Math.hypot(x, (z + 0.02) * 1.15) - 0.78, y - 15.18) - 0.2, 0.12);
-      d = smin(d, sdCapsule(x, y, z, 0, 14.9, 0.05, 0, 16.4, 0.15, 0.62, 0.55), 0.2);
+      d = smin(d, sdCapsule(x, y, z, 0, 14.9, 0.05, 0, 15.6, 0.12, 0.62, 0.55), 0.2); // (its top stays in the shell's floor)
     }
     if (y < 11.6) d = smin(d, sdEllipsoid(x, y, z, 0, 10.05, 0.0, 1.78, 1.05, 1.15), 0.4);
   }
@@ -217,11 +217,14 @@ function pumpkinSDF(x: number, y: number, z: number): number {
   return d;
 }
 
-// the inside is dark under its glow: a pale flesh lit by the room adds to the emissive and tone-maps to peach
-const RIND = new THREE.Color(0xf07a12), GROOVE = new THREE.Color(0xa8460a), FLESH = new THREE.Color(0x7a3408);
+// On the rind the vertex colour is the rind's; where the shell glows (the cut walls, the inside) it is the glow's own
+// colour, hot yellow by the candle to deep orange under the lid, and the shader draws it as emissive only: a lit pale
+// flesh under a saturated emissive tone-maps to peach.
+const RIND = new THREE.Color(0xe8700e), GROOVE = new THREE.Color(0x9a4008);
+const HOT = new THREE.Color(0xffb43c), EMBER = new THREE.Color(0xff640a);
 function pumpkinColor(x: number, y: number, z: number, c: THREE.Color): void {
   const { d, groove } = pumpkinOuter(x, y, z);
-  if (d < -0.07) { c.copy(FLESH); return; }
+  if (d < -0.05) { c.copy(HOT).lerp(EMBER, Math.max(0, Math.min(1, (y - PC[1] - PH * 0.2) / (PH * 0.8)))); return; }
   c.copy(RIND).lerp(GROOVE, Math.min(1, groove * 1.3));
   // a little darker toward the stem and the base, as a real one ripens
   c.multiplyScalar(0.85 + 0.15 * (1 - Math.abs(y - PC[1]) / PH));
@@ -229,19 +232,21 @@ function pumpkinColor(x: number, y: number, z: number, c: THREE.Color): void {
 
 /**
  * The shell's material: rind lit by the room, with the emissive switched on per vertex by `aGlow` (0 on the rind, up
- * to 1 down the cut walls and over the inside), so a flicker of emissiveIntensity lights the carving from within.
+ * to 1 down the cut walls and over the inside) in the vertex colour's hue, and the lit part switched off there, so a
+ * flicker of emissiveIntensity lights the carving from within.
  */
 function shellMaterial(d: Dresser): THREE.MeshStandardMaterial {
-  const m = d.std({ color: 0xffffff, vertexColors: true, roughness: 0.5, metalness: 0, emissive: 0xff8418, emissiveIntensity: 1.8 });
+  const m = d.std({ color: 0xffffff, vertexColors: true, roughness: 0.5, metalness: 0, emissive: 0xffffff, emissiveIntensity: 1.0 });
   m.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\n attribute float aGlow; varying float vGlow;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n vGlow = aGlow;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n varying float vGlow;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance *= vGlow;');
+      .replace('#include <color_fragment>', '#include <color_fragment>\n vec3 glowHue = diffuseColor.rgb; diffuseColor.rgb *= 1.0 - 0.92 * vGlow;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance *= vGlow * glowHue;');
   };
-  m.customProgramCacheKey = () => 'jack-shell-v1';
+  m.customProgramCacheKey = () => 'jack-shell-v2';
   return m;
 }
 
@@ -309,16 +314,19 @@ function rope(curve: THREE.Curve<THREE.Vector3>, len: number, r: number, closed:
 function dress(d: Dresser): void {
   seed = 7;
   // --- the cloth: the skinned body's material swapped for the shader-patterned one, its weights per vertex
-  const body = d.bones.get('pelvis')!.parent as THREE.SkinnedMesh;
-  const pos = body.geometry.attributes.position!;
-  const k = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
-    const r = jackRegion(pos.getX(i), pos.getY(i), pos.getZ(i));
-    k[i * 3] = r === FLANNEL ? 1 : 0; k[i * 3 + 1] = r === DENIM ? 1 : 0; k[i * 3 + 2] = r === BURLAP ? 1 : 0;
+  // (build.ts adds the root bone to the skinned body before dressing; without it the palette colours stand in)
+  const body = d.bones.get('pelvis')!.parent as THREE.SkinnedMesh | null;
+  if (body?.isSkinnedMesh) {
+    const pos = body.geometry.attributes.position!;
+    const k = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const r = jackRegion(pos.getX(i), pos.getY(i), pos.getZ(i));
+      k[i * 3] = r === FLANNEL ? 1 : 0; k[i * 3 + 1] = r === DENIM ? 1 : 0; k[i * 3 + 2] = r === BURLAP ? 1 : 0;
+    }
+    body.geometry.setAttribute('aCloth', new THREE.BufferAttribute(k, 3));
+    (body.material as THREE.Material).dispose();
+    body.material = clothMaterial();
   }
-  body.geometry.setAttribute('aCloth', new THREE.BufferAttribute(k, 3));
-  (body.material as THREE.Material).dispose();
-  body.material = clothMaterial();
 
   const strawMat = d.std({ color: 0xffffff, vertexColors: true, roughness: 0.75, metalness: 0 });
   const ropeMat = d.std({ color: 0xffffff, vertexColors: true, roughness: 0.9, metalness: 0 });
@@ -340,10 +348,10 @@ function dress(d: Dresser): void {
   head.name = 'jack-pumpkin';
   d.at(head, 'head', 0, 0, 0);
 
-  const floor = PC[1] - PH + SHELL + 0.12;
-  const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.4, 10).translate(0, floor + 0.2, PC[2]), d.std({ color: 0xf2e6c8, roughness: 0.6, emissive: 0xffb050, emissiveIntensity: 0.25 }));
-  d.at(candle, 'head', 0, 0, 0);
-  // the flame scales about its own foot (the wick), so its group sits there
+  // the candle's flame on the shell's floor (raised by the dimple to ~0.55 over the bottom), seen through the grin and
+  // the nose; the candle itself is left out, a white block in the mouth read as a stray tooth. It scales about its
+  // own foot (the wick), so its group sits there
+  const floor = PC[1] - PH + SHELL + 0.3;
   const flame = new THREE.Group();
   flame.name = 'jack-flame';
   const fl = new THREE.Mesh(merge([
@@ -352,7 +360,7 @@ function dress(d: Dresser): void {
   ]), d.std({ color: 0x000000, emissive: 0xffc860, emissiveIntensity: 2.4 }));
   fl.name = 'jack-flamecore';
   flame.add(fl);
-  d.at(flame, 'head', 0, floor + 0.42, PC[2]);
+  d.at(flame, 'head', 0, floor, PC[2] - 0.15);
 
   const top = PC[1] + PH - 0.22;
   const stemGeo = new THREE.CylinderGeometry(0.16, 0.26, 1.5, 7, 8).translate(0, 0.75, 0);
@@ -385,8 +393,10 @@ function dress(d: Dresser): void {
   const band = new THREE.TorusGeometry(1.07, 0.08, 6, 28).rotateX(Math.PI / 2).scale(1, 2.4, 1).translate(0, 0.2, 0);
   const hat = new THREE.Group();
   hat.add(new THREE.Mesh(hatGeo, felt), new THREE.Mesh(band, d.std({ color: 0x1e1712, roughness: 0.8 })));
-  hat.rotation.set(-0.16, 0, -0.2);
-  d.at(hat, 'head', 0.08, PC[1] + PH - 0.36, PC[2] - 0.12);
+  // perched on the top: the crown's base (r 1.1) must clear the pumpkin's shoulder there (~0.25 under the top), or the
+  // lobes show through it from the side
+  hat.rotation.set(-0.08, 0, -0.2);
+  d.at(hat, 'head', 0.08, PC[1] + PH - 0.1, PC[2] - 0.1);
 
   // --- straw: round the collar, out of each cuff (the hand), out of each trouser leg over the boot
   const collar: THREE.BufferGeometry[] = [];
@@ -453,10 +463,16 @@ function dress(d: Dresser): void {
   d.at(new THREE.Mesh(merge(escaped), strawMat), 'spine2', 0, 0, 0);
 }
 
-/** a thigh keeps its own top, an arm only the sleeve (species.ts's rule for the upright plans, the arm set wider) */
+/**
+ * A thigh keeps its own top (species.ts's rule for the upright plans); an arm takes the sleeve and nothing else. The
+ * line runs in the gap between body and sleeve at each height: by the hips (≤ 2.0 wide) and the forearm's sleeve (≥ 2.4
+ * from the axis) at 2.2; by the shirt's side (≤ 1.75) and the upper sleeve's inside (≥ 2.0) at 1.88; over the shoulder,
+ * the sleeve's cap past 2.1. A sleeve vertex left to the spine stays behind when the arm goes up and draws a blade from
+ * the armpit; a hip vertex given to the forearm follows it up and draws one from the hip.
+ */
 const capture: Capture = (sg, x, y, z) => {
   if (sg.name.startsWith('thigh')) return z > -1.6 && y < sg.a[1]! + 0.8 && Math.abs(Math.abs(x) - Math.abs(sg.a[0]!)) < (y < sg.a[1]! + 0.3 ? 1.3 : 0.9);
-  if (sg.name.startsWith('arm') || sg.name.startsWith('forearm')) return Math.abs(x) > 2.1;
+  if (sg.name.startsWith('arm') || sg.name.startsWith('forearm')) return Math.abs(x) > (y < 12 ? 2.2 : y < 14.1 ? 1.88 : 2.1);
   return true;
 };
 
@@ -491,8 +507,9 @@ export const PUMPKIN: CharacterDef = {
     // a candle's flicker: a slow breath, a quicker waver and a sharp gutter now and then
     const f = 0.5 * Math.sin(t * 1.7) + 0.3 * Math.sin(t * 7.9 + 1.3) + 0.22 * Math.sin(t * 13.3 + 0.4) + 0.15 * Math.sin(t * 23.7 + 2.2);
     const gutter = Math.max(0, Math.sin(t * 0.83 + 0.5) - 0.92) * 6;
-    const k = Math.max(0.35, 1 + 0.28 * f - gutter);
-    for (const m of e.shell) m.emissiveIntensity = 1.8 * k;
+    // the shell's glow peaks near 1 so the tone mapper's shoulder does not flatten the flicker away
+    const k = Math.max(0.35, 1 + 0.36 * f - gutter);
+    for (const m of e.shell) m.emissiveIntensity = k;
     for (const m of e.core) m.emissiveIntensity = 2.4 * k;
     if (e.flame) { e.flame.scale.set(1 - 0.08 * f, k * (1 + 0.12 * Math.sin(t * 17.0)), 1 - 0.08 * f); e.flame.rotation.z = 0.12 * Math.sin(t * 5.3); }
   },

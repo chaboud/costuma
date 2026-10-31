@@ -2,8 +2,12 @@
 
 3D costumes that move with you. Point a phone at people (up to four), pick who
 to be, and each person is drawn over as a code-built 3D character posed by
-their own skeleton, lit by the room the camera sees. Photo and clip capture; a
-QR button shares the page.
+their own skeleton, lit by the room the camera sees. **Party mode** cuts the
+nearest one to four people out of the frame and rebuilds the room round them
+(pop art, a Warhol 2×2, solarize, neon outlines, contour rings, echo trails,
+disco). Photo and clip capture; a QR button shares the page.
+
+Static files only; everything is computed on the phone. Nothing is uploaded.
 
 Source here; the built page is `../2026/` (served by GitHub Pages at
 `chaboud.github.io/costuma/2026/` once on `main`). The 2024 app in `../site/`
@@ -67,6 +71,15 @@ in `src/main.ts`.
   environment's brightest direction becomes a shadow-casting key light. Dim
   frames are lifted (×2.6 at most) so a costume on a dark street still reads.
   The unseen hemisphere is a guess, not a measurement.
+- **Party** (`src/render/party.ts`): the pose model's per-person cut-out
+  masks (`outputSegmentationMasks`), so "cut out one or several" is a count:
+  the N nearest tracked people take channels of one RGBA mask texture and keep
+  them while they stay. Detection runs on a 480-px copy of the frame in this
+  mode (one GPU→CPU mask copy per person a frame). What a single shader pass
+  cannot do — distance to the nearest subject (rings, neon glow) and where
+  they have been (echo trails) — runs on the CPU on a 160-px grid (a two-pass
+  chamfer distance, a decaying max) and is drawn smooth by the texture filter.
+  Presets are branches of one fragment shader. A tap cycles the preset.
 - **Stage** (`src/render/stage.ts`): the video is a full-screen background,
   cover-fitted; a selfie mirrors the whole world group (`scale.x = −1`), not
   the data — mirrored landmarks would describe a different-handed person.
@@ -96,6 +109,18 @@ in `src/main.ts`.
 - **Strollzilla never raised its arms overhead**, so its arm capture rules let
   a raised arm drag the cape (Valkyrie) or the hips (Howler) up as a sheet;
   `species.ts` keeps arms off the back and gives the wolf's forearms a reach.
+
+## Depth on iPhone
+
+ARKit's LiDAR depth and body tracking are not reachable from a web page on an
+iPhone (checked 2026-10-31 against secondary sources, not WebKit release
+notes): iOS Safari ships no WebXR (`immersive-ar`), and the WebXR depth-sensing
+module is Chromium-only (Android ARCore). `getUserMedia` gives no depth track.
+AR Quick Look shows USDZ models, not camera depth. So depth here is what
+MediaPipe infers from the image. Real depth would need a native app or App
+Clip (ARKit's `sceneDepth` and `ARBodyTrackingConfiguration`), or Chrome on
+Android with WebXR depth sensing — both outside "static page, computed on the
+phone" as this app means it.
 
 ## Open questions
 

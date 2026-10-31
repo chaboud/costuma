@@ -5,9 +5,10 @@ import { Camera } from './camera';
 import { Detector } from './pose/detector';
 import { Tracker, type Detection, type Track } from './pose/tracker';
 import { guessIntrinsics, type Intrinsics } from './pose/solve';
-import { synthCrowd } from './pose/synth';
+import { synthCrowd, synthMask } from './pose/synth';
 import { BONES, L } from './pose/landmarks';
-import { Stage } from './render/stage';
+import { BG_VERT, Stage } from './render/stage';
+import { PRESETS, Party } from './render/party';
 import { LIGHT_TUNE } from './render/envlight';
 import { ROSTER, byId } from './characters/roster';
 import { loadSettings, saveSettings, type Settings } from './settings';
@@ -33,6 +34,10 @@ const overlay = $<HTMLCanvasElement>('overlay');
 const octx = overlay.getContext('2d')!;
 const stage = new Stage(canvas);
 stage.opts.size = settings.size; stage.opts.shadows = settings.shadows; stage.opts.envLight = settings.envLight;
+const party = new Party(stage.bgUniforms, BG_VERT);
+if (q.get('scene') === 'party' || q.get('scene') === 'costume') settings.scene = q.get('scene') as Settings['scene'];
+if (q.get('fx')) settings.effect = q.get('fx')!;
+party.preset = PRESETS.find((p) => p.id === settings.effect) ?? PRESETS[0]!;
 const camera = new Camera(video, (q.get('facing') as 'user' | 'environment' | null) ?? undefined);
 let detector: Detector | null = null;
 const tracker = new Tracker();
@@ -83,6 +88,21 @@ const thumbUrl = (id: string) => `${BASE}thumbs/${id}.png`;
 function buildPicker(): void {
   const el = $('picker');
   el.innerHTML = '';
+  if (settings.scene === 'party') {
+    for (const p of PRESETS) {
+      const b = document.createElement('button');
+      b.className = 'card fx';
+      b.dataset.id = p.id;
+      b.setAttribute('role', 'option');
+      b.innerHTML = `<div class="thumb"></div><div class="name"></div>`;
+      (b.querySelector('.thumb') as HTMLElement).style.background = p.swatch;
+      b.querySelector('.name')!.textContent = p.name;
+      b.onclick = () => chooseEffect(p.id);
+      el.appendChild(b);
+    }
+    markPicker();
+    return;
+  }
   const card = (id: string, name: string, cls = '') => {
     const b = document.createElement('button');
     b.className = `card ${cls}`;
@@ -108,7 +128,7 @@ function buildPicker(): void {
 }
 function markPicker(): void {
   for (const b of $('picker').querySelectorAll<HTMLButtonElement>('.card')) {
-    const on = settings.mode === 'mix' ? b.dataset.id === 'mix' : b.dataset.id === settings.costume;
+    const on = settings.scene === 'party' ? b.dataset.id === settings.effect : settings.mode === 'mix' ? b.dataset.id === 'mix' : b.dataset.id === settings.costume;
     b.classList.toggle('on', on);
     b.setAttribute('aria-selected', String(on));
     if (on) b.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
@@ -128,6 +148,29 @@ function choose(id: string): void {
   }
   persist();
   markPicker();
+}
+
+function chooseEffect(id: string): void {
+  const p = PRESETS.find((x) => x.id === id) ?? PRESETS[0]!;
+  settings.effect = p.id;
+  party.preset = p;
+  persist();
+  markPicker();
+  toast(p.name, 800);
+}
+
+/** costumes, or party mode; party asks the pose model for each person's cut-out mask */
+function setScene(scene: Settings['scene']): void {
+  settings.scene = scene;
+  persist();
+  stage.setBackground(scene === 'party' ? party.material : null);
+  void detector?.setOptions({ masks: scene === 'party' });
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) {
+    const on = b.dataset.scene === scene;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', String(on));
+  }
+  buildPicker();
 }
 
 function openModal(id: string): void { $(id).classList.remove('hidden'); }
@@ -187,12 +230,13 @@ function buildSettings(): void {
     i.oninput = () => { set(Number(i.value)); persist(); };
     return i;
   };
-  row('People', 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); }));
+  row(settings.scene === 'party' ? 'Subjects' : 'People', settings.scene === 'party' ? 'How many people to cut out (the nearest)' : 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); }));
   row('Costume size', 'Bigger hides more of the person', range(0.8, 1.5, 0.01, () => settings.size, (v) => { settings.size = v; stage.opts.size = v; }));
   row('Pose model', 'Accurate is steadier, slower to load and run', seg<'lite' | 'full'>([['lite', 'Fast'], ['full', 'Accurate']], () => settings.model, (v) => { settings.model = v; void reloadDetector(); }));
   row('Light from the camera', 'The costume is lit by the room it stands in', sw(() => settings.envLight, (v) => { settings.envLight = v; stage.opts.envLight = v; }));
   row('Shadows', 'Off is faster on older phones', sw(() => settings.shadows, (v) => { settings.shadows = v; stage.opts.shadows = v; }));
   row('Lens', 'If costumes look too flat or too deep', range(0.55, 1.3, 0.01, () => settings.lens, (v) => { settings.lens = v; }));
+  row('Costumes in party mode', 'Wear your costume while the room parties', sw(() => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
   row('Show the skeleton', 'What the pose tracker sees', sw(() => settings.debug, (v) => { settings.debug = v; }));
 }
 
@@ -254,6 +298,11 @@ function screenOf(t: Track): { x: number; y: number } {
 }
 canvas.addEventListener('click', (e) => {
   if (!started) return;
+  if (settings.scene === 'party' && !settings.partyCostumes) {
+    const i = PRESETS.findIndex((p) => p.id === settings.effect);
+    chooseEffect(PRESETS[(i + 1) % PRESETS.length]!.id);
+    return;
+  }
   let best: Track | null = null, bd = Infinity;
   for (const t of tracker.tracks) {
     if (t.lost) continue;
@@ -269,7 +318,18 @@ canvas.addEventListener('click', (e) => {
 });
 
 // ── the loop ───────────────────────────────────────────────────────────────────────────────────────────────────────
-let frame = 0, lastVideoTime = -1, lastSeen = 0, t0 = performance.now();
+let frame = 0, lastVideoTime = -1, lastSeen = 0, t0 = performance.now(), lastNow = performance.now();
+// party mode detects on a smaller copy of the frame: the masks come back at the input's size, one GPU→CPU copy each
+const detCanvas = document.createElement('canvas');
+const detCtx = detCanvas.getContext('2d')!;
+function detectionInput(): HTMLVideoElement | HTMLCanvasElement {
+  if (settings.scene !== 'party') return video;
+  const vw = video.videoWidth || 720, vh = video.videoHeight || 1280, k = 480 / Math.max(vw, vh);
+  const w = Math.round(vw * k), h = Math.round(vh * k);
+  if (detCanvas.width !== w || detCanvas.height !== h) { detCanvas.width = w; detCanvas.height = h; }
+  detCtx.drawImage(video, 0, 0, w, h);
+  return detCanvas;
+}
 let fps = 0, fpsT = performance.now(), fpsN = 0;
 function intrinsics(): Intrinsics {
   return guessIntrinsics(video.videoWidth || 720, video.videoHeight || 1280, settings.lens);
@@ -283,14 +343,18 @@ function loop(now: number): void {
   let dets: Detection[] | null = null;
   if (SYNTH) {
     dets = synthCrowd(SYNTH, (now - t0) / 1000 * (TEST ? 0 : 1) + Number(q.get('t') ?? 0), K);
+    if (settings.scene === 'party') { const a = K.w / K.h, mw = a >= 1 ? 240 : Math.round(240 * a), mh = a >= 1 ? Math.round(240 / a) : 240; for (const d of dets) d.mask = synthMask(d, mw, mh, a); }
   } else if (detector && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
-    try { dets = detector.detect(video, now); } catch (e) { console.error(e); }
+    try { dets = detector.detect(detectionInput(), now); } catch (e) { console.error(e); }
   }
   if (dets) tracker.update(dets.slice(0, settings.people), now, K);
-  for (const t of tracker.tracks) ensureBuilt(castOf(t.id), true);
-  const tSec = (now - t0) / 1000;
-  stage.sync(tracker.tracks, castOf, tSec);
+  if (settings.scene === 'costume' || settings.partyCostumes) for (const t of tracker.tracks) ensureBuilt(castOf(t.id), true);
+  const tSec = (now - t0) / 1000, dt = Math.min(0.25, (now - lastNow) / 1000);
+  lastNow = now;
+  const dressing = settings.scene === 'costume' || settings.partyCostumes;
+  stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
+  if (settings.scene === 'party') { party.subjects = settings.people; party.update(tracker.tracks, dt, tSec, K.w / K.h); }
   stage.render(video, K, frame);
   if (snapWanted) {
     snapWanted = false;
@@ -362,6 +426,7 @@ async function reloadDetector(): Promise<void> {
   if (SYNTH) return;
   const old = detector;
   const d = new Detector(settings.model, settings.people);
+  d.masks = settings.scene === 'party';
   await d.load((s) => toast(s, 2500));
   detector = d;
   old?.close();
@@ -400,6 +465,7 @@ async function start(): Promise<void> {
       await camera.open();
       status.textContent = 'Loading the pose model…';
       detector = new Detector(settings.model, settings.people);
+      detector.masks = settings.scene === 'party';
       await detector.load((s) => { status.textContent = s[0]!.toUpperCase() + s.slice(1) + '…'; });
     }
     stage.setVideo(video);
@@ -408,6 +474,7 @@ async function start(): Promise<void> {
     stage.template(settings.mode === 'one' ? settings.costume : ROSTER[0]!.id);
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
+    setScene(settings.scene);
     started = true;
     t0 = performance.now();
     lastSeen = performance.now();
@@ -433,12 +500,13 @@ function boot(): void {
   };
   $('btn-snap').onclick = () => { snapWanted = true; const f = $('stage'); f.style.filter = 'brightness(1.8)'; setTimeout(() => (f.style.filter = ''), 120); };
   $('btn-rec').onclick = toggleRecording;
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) b.onclick = () => setScene(b.dataset.scene as Settings['scene']);
   const cast = $('start-cast');
   for (const d of ROSTER.slice(0, 6)) { const i = new Image(); i.src = thumbUrl(d.id); i.alt = d.name; i.onerror = () => i.remove(); cast.appendChild(i); }
   buildPicker();
   requestAnimationFrame(loop);
   const w = window as unknown as { __costuma: unknown };
-  w.__costuma = { stage, tracker, settings, start, choose, get started() { return started; }, get frame() { return frame; }, LIGHT_TUNE };
+  w.__costuma = { stage, tracker, settings, start, choose, party, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, LIGHT_TUNE };
   if (TEST && SYNTH) void start();
 }
 boot();

@@ -21,8 +21,18 @@ page.on('pageerror', (e) => console.log('pageerror', e.message));
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.log('console', m.text().slice(0, 300)); });
 for (const id of ids) for (const t of times) {
   await page.goto(`${server.url}index.html?test=1&synth=${process.env.N ?? 2}&c=${id}&t=${t}&people=4${process.env.EXTRA ?? ''}`);
-  await page.waitForFunction(() => window.__costuma?.started && window.__costuma.frame > 12 && window.__costuma.stage.count > 0, null, { timeout: 240000 });
+  await page.waitForFunction(() => window.__costuma?.started && window.__costuma.frame > 12 && (window.__costuma.stage.count > 0 || window.__costuma.settings.scene === 'party'), null, { timeout: 240000 });
   await page.waitForTimeout(1500);
+  // FX=pop,rings,…: party mode, one shot per preset (the page is put in party mode first)
+  for (const fx of (process.env.FX ?? '').split(',').filter(Boolean)) {
+    await page.evaluate((f) => { const c = window.__costuma; if (c.settings.scene !== 'party') c.setScene('party'); c.chooseEffect(f); }, fx);
+    const f0 = await page.evaluate(() => window.__costuma.frame);
+    await page.waitForFunction((f) => window.__costuma.frame > f + 3, f0, { timeout: 120000 });
+    const file = path.join(out, `party-${fx}-t${t}.png`);
+    await page.screenshot({ path: file, timeout: 120000 });
+    console.log(file);
+  }
+  if (process.env.FX) continue;
   const file = path.join(out, `${id}-t${t}.png`);
   await page.screenshot({ path: file });
   console.log(file);

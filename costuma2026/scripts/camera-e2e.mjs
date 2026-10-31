@@ -21,12 +21,12 @@ page.on('pageerror', (e) => console.log('pageerror', e.message));
 page.on('console', (m) => { const t = m.text(); if (m.type() === 'error' || m.type() === 'warning' || /GPU|delegate/i.test(t)) console.log('console', m.type(), t.slice(0, 240)); });
 const C = process.env.C ?? 'crimson';
 await ctx.addInitScript((m) => localStorage.setItem('costuma26.settings', JSON.stringify({ model: m, debug: false, mode: 'one', people: 2 })), process.env.MODEL ?? 'lite');
-await page.goto(`${server.url}index.html?c=${C}&facing=${process.env.FACING ?? 'environment'}`);
+await page.goto(`${server.url}index.html?c=${C}&facing=${process.env.FACING ?? 'environment'}${process.env.EXTRA ?? ''}`);
 await page.click('#btn-start');
 await page.waitForFunction(() => window.__costuma?.started, null, { timeout: 240000 });
 const t0 = Date.now();
 // headless software GL runs this at well under 1 fps: wait on frames, not seconds
-await page.waitForFunction(() => window.__costuma.stage.count > 0 && window.__costuma.tracker.tracks.some((t) => t.presence >= 1), null, { timeout: 400000, polling: 1000 }).catch(() => console.log('no costume after', (Date.now() - t0) / 1000, 's'));
+await page.waitForFunction(() => (window.__costuma.stage.count > 0 || window.__costuma.settings.scene === 'party') && window.__costuma.tracker.tracks.some((t) => t.presence >= 1), null, { timeout: 400000, polling: 1000 }).catch(() => console.log('no costume after', (Date.now() - t0) / 1000, 's'));
 const f0 = await page.evaluate(() => window.__costuma.frame);
 await page.waitForFunction((f) => window.__costuma.frame > f + 4, f0, { timeout: 200000, polling: 1000 });
 const info = await page.evaluate(() => {

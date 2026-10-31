@@ -7,7 +7,8 @@ import type { LM } from './landmarks';
 import { L, N_LANDMARKS } from './landmarks';
 import { bodyLengths, solveTranslation, type Intrinsics } from './solve';
 
-export interface Detection { image: LM[]; world: LM[] }
+/** `mask`: the person's cut-out (0..1 per pixel, the detection input's size), when asked for */
+export interface Detection { image: LM[]; world: LM[]; mask?: { data: Float32Array; w: number; h: number } }
 
 export interface Track {
   id: number;
@@ -21,6 +22,8 @@ export interface Track {
   /** 0..1, fades in when found and out when lost */
   presence: number;
   lost: boolean;
+  /** the detection this track took this frame, if any (its mask, in party mode) */
+  det: Detection | null;
 }
 
 export const TUNE = {
@@ -89,14 +92,15 @@ export class Tracker {
       for (const key of Object.keys(nl) as (keyof typeof nl)[]) t.len[key] = ema(t.len[key], nl[key], kl);
       t.seen = now;
       t.lost = false;
+      t.det = p.d;
     }
     placed.forEach((p, di) => {
       if (usedD.has(di)) return;
       const world = copyLM(p.d.world);
-      this.tracks.push({ id: this.nextId++, born: now, seen: now, image: copyLM(p.d.image), world, T: { ...p.T! }, len: bodyLengths(world), presence: 0, lost: false });
+      this.tracks.push({ id: this.nextId++, born: now, seen: now, image: copyLM(p.d.image), world, T: { ...p.T! }, len: bodyLengths(world), presence: 0, lost: false, det: p.d });
     });
     for (const t of this.tracks) {
-      if (t.seen !== now) t.lost = true;
+      if (t.seen !== now) { t.lost = true; t.det = null; }
       t.presence = t.lost ? Math.max(0, t.presence - dt / TUNE.fadeOut) : Math.min(1, t.presence + dt / TUNE.fadeIn);
     }
     this.tracks = this.tracks.filter((t) => !(t.lost && t.presence <= 0 && now - t.seen > TUNE.forgetAfter * 1000));

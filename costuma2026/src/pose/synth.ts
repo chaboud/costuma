@@ -89,3 +89,32 @@ export function synthCrowd(n: number, t: number, K: Intrinsics): Detection[] {
   }
   return out;
 }
+
+/**
+ * A stand-in for MediaPipe's cut-out mask: the synthetic person's limbs as capsules and their torso as a quad, drawn
+ * from its image landmarks into a w × h grid (party mode's headless runs).
+ */
+export function synthMask(d: Detection, w: number, h: number, aspect: number): { data: Float32Array; w: number; h: number } {
+  const im = d.image, out = new Float32Array(w * h);
+  const P = (i: number) => [im[i]!.x * aspect, im[i]!.y] as const;
+  const torso = Math.hypot(P(L.shL)[0] - P(L.hipL)[0], P(L.shL)[1] - P(L.hipL)[1]);
+  const segs: [number, number, number][] = [
+    [L.shL, L.elL, 0.11], [L.elL, L.wrL, 0.09], [L.shR, L.elR, 0.11], [L.elR, L.wrR, 0.09], [L.hipL, L.knL, 0.15], [L.knL, L.anL, 0.11],
+    [L.hipR, L.knR, 0.15], [L.knR, L.anR, 0.11], [L.anL, L.toeL, 0.07], [L.anR, L.toeR, 0.07], [L.shL, L.hipR, 0.2], [L.shR, L.hipL, 0.2],
+    [L.shL, L.shR, 0.14], [L.hipL, L.hipR, 0.16],
+  ];
+  const head = P(L.nose), earL = P(L.earL), earR = P(L.earR);
+  const hr = Math.max(Math.hypot(earL[0] - earR[0], earL[1] - earR[1]) * 0.9, torso * 0.22);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const px = ((x + 0.5) / w) * aspect, py = (y + 0.5) / h;
+    let best = Math.hypot(px - head[0], py - (head[1] - hr * 0.2)) - hr;
+    for (const [a, b, r] of segs) {
+      const A = P(a), B = P(b);
+      const bx = B[0] - A[0], by = B[1] - A[1], l2 = bx * bx + by * by || 1;
+      const u = Math.max(0, Math.min(1, ((px - A[0]) * bx + (py - A[1]) * by) / l2));
+      best = Math.min(best, Math.hypot(px - A[0] - bx * u, py - A[1] - by * u) - r * torso);
+    }
+    out[y * w + x] = Math.max(0, Math.min(1, 0.5 - best / (torso * 0.04)));
+  }
+  return { data: out, w, h };
+}
