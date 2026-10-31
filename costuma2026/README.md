@@ -4,10 +4,13 @@
 to be, and each person is drawn over as a code-built 3D character posed by
 their own skeleton, lit by the room the camera sees. **Party mode** cuts the
 nearest one to four people out of the frame and rebuilds the room round them,
-graded like a concert's screens: the dance pyramid (clones in rows behind,
-dancing late — in 3D with costumes on), a feedback tunnel, lasers, a
-kaleidoscope, contour rings, neon, pop art, a Warhol 2×2, echo trails, disco,
-solarize; optionally on the beat (microphone). Photo and clip capture; a QR button shares the page.
+graded like a concert's screens. The default, **In Situ**, keeps the real
+room: the costumes dance behind you, spotlights sweep the real floor. The
+others: a feedback tunnel, lasers, a kaleidoscope, contour rings, neon, pop
+art, a Warhol 2×2, echo trails, disco, solarize; optionally on the beat
+(microphone). **Pyramid** is a toggle over any of them: rows of dancers
+behind you (in 3D, with costumes), late like a canon. Photo and clip capture;
+a QR button shares the page. The controls fade after a few seconds untouched.
 
 Static files only; everything is computed on the phone. Nothing is uploaded.
 
@@ -63,8 +66,16 @@ in `src/main.ts`.
   polygonised by marching cubes, coloured by region, skinned by distance to
   its segments (Strollzilla's `build.ts`, generalised), plus rigid meshes on
   bones. A character is a `CharacterDef` (data, D-7): add a file, list it in
-  `roster.ts` and `ids.ts`. Built on first use (≈0.3–1.5 s on a phone),
-  cloned per person.
+  `roster.ts` and `ids.ts`. Built in a worker on first use (≈0.3–1.5 s
+  headless), cloned per person.
+- **The rotation** (`settings.cast`): the characters the picker, the party's
+  dancers and Mix draw from. Default (founder, 2026-10-31): Jimothy, the
+  builder, Skelly, Jack, Howler, Violet, Plume. The rest — the kaiju, a
+  Catrina, a ghost, a mummy, a vampire, a witch, and Crimson, Bastion,
+  Kestrel, Unison — sit under **More → Advanced & trash**, each with a ✓/✕
+  that puts it in or takes it out of every rotation. Tapping the selected
+  party effect again changes the dancers (each character in turn, then Mix);
+  tapping Mix again reshuffles it.
 - **Light** (`src/render/envlight.ts`): the camera frame is folded into a
   small equirectangular environment a few times a second (the scene side as
   seen, spread wider than the lens; the unseen side behind the camera as the
@@ -97,16 +108,20 @@ in `src/main.ts`.
   the person themselves: the costume pyramid dances behind them and the room
   behind that — insertion by draw order, no depth: the background quad, the 3D
   costumes, then the grade again with the subjects' mask as alpha
-  (`party.foreground`, drawn last). The microphone (`audio/beat.ts`, off by default) turns
-  bass onsets into `uBeat`. A tap cycles the preset.
+  (`party.foreground`, drawn last). With Pyramid off no dancer is drawn at
+  all. The microphone (`audio/beat.ts`, off by default) turns bass onsets into
+  `uBeat`.
 - **Faces** (`src/pose/face.ts`): MediaPipe FaceLandmarker (478 points, 52
   blendshapes) beside the pose model, loaded in the background after Start,
   run on the full frame; each face joins the person whose pose nose is
   nearest; expressions and eye/mouth places EMA-smoothed (the jaw quickly).
   A face the model cannot read keeps eyes and a mouth from the pose model's
   own face points. An open mouth opens the costume's jaw (`CharacterDef.face.jaw`,
-  `rig.setJaw`), reaches each costume's `tick` (Skelly's jaw, Jack's lantern),
-  and breathes sparks (`render/breath.ts`). **Googly eyes** (`render/googly.ts`)
+  `rig.setJaw`), reaches each costume's `tick` (Skelly's jaw, Jack's lantern,
+  the kaiju's plates charging blue tail to neck), and breathes sparks
+  (`render/breath.ts`, colours, rate and speed per costume: `face.breath`).
+  Sparks fade within half a metre of the lens and never grow past a tenth of
+  the frame, or a breath toward the camera whites out the face. **Googly eyes** (`render/googly.ts`)
   go on the person's eyes, or over the costume's (`face.eyes` anchors on the
   head bone); their pupils are physics in eye-radius units — gravity from the
   floor's up, the eye's own acceleration (smoothed, with a dead zone so a still
