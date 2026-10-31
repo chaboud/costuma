@@ -28,10 +28,12 @@ export interface Settings {
   breath: boolean;
   /** who dances in party mode (behind you, or on you): Skelly unless chosen otherwise */
   partyCast: string;
+  /** the dance pyramid (clones behind the dancers) in every party mode */
+  pyramid: boolean;
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', v: 3 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', pyramid: true, v: 4 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
@@ -48,6 +50,8 @@ export function loadSettings(): Settings {
     if (v < 2) { s.effect = 'insitu'; s.partyCostumes = 'behind'; s.partyCast = 'skeleton'; }
     // v3 (2026-10-31): the full pose model by default (founder: "default to the higher quality tracker")
     if (v < 3) s.model = 'full';
+    // v4: the pyramid is a toggle on every party mode, not a mode of its own
+    if (v < 4) { if ((s.effect as string) === 'pyramid') s.effect = 'insitu'; s.pyramid = true; }
     // Violet took the Valkyrie's place: whoever wore the Valkyrie wears Violet
     if (s.costume === 'valkyrie') s.costume = 'violet';
     if (s.partyCast === 'valkyrie') s.partyCast = 'violet';

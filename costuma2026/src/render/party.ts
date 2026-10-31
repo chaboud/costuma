@@ -30,7 +30,6 @@ export interface Preset {
 
 export const PRESETS: Preset[] = [
   { id: 'insitu', name: 'In Situ', code: 12, swatch: 'radial-gradient(ellipse at 30% 85%, rgba(255,80,190,0.9), transparent 35%), radial-gradient(ellipse at 72% 80%, rgba(80,220,255,0.9), transparent 35%), linear-gradient(160deg, transparent 40%, rgba(255,240,220,0.35) 50%, transparent 60%), #2a2430' },
-  { id: 'pyramid', name: 'Pyramid', code: 8, swatch: 'conic-gradient(from 150deg at 50% 18%, transparent 0 60deg, #ff2d95 60deg 64deg, #b6ff2e 64deg 68deg, transparent 68deg), linear-gradient(#2a0f3d, #08050f)' },
   { id: 'tunnel', name: 'Tunnel', code: 9, swatch: 'repeating-radial-gradient(circle, #ff2d95 0 3px, #12071f 3px 8px, #2ee6ff 8px 11px, #12071f 11px 16px)' },
   { id: 'lasers', name: 'Lasers', code: 10, swatch: 'linear-gradient(115deg, transparent 46%, #b6ff2e 48%, transparent 50%), linear-gradient(65deg, transparent 46%, #ff2d95 48%, transparent 50%), linear-gradient(90deg, transparent 47%, #2ee6ff 49%, transparent 51%), #07040d' },
   { id: 'kaleido', name: 'Kaleido', code: 11, swatch: 'conic-gradient(#ff2d95, #ffe62e, #b6ff2e, #2ee6ff, #8a2eff, #ff2d95)' },
@@ -88,7 +87,7 @@ const SCENE_FRAG = /* glsl */ `
   varying vec2 vUv;
   uniform sampler2D uTex, uMask, uFx, uPrev;
   uniform highp sampler2DArray uHist;
-  uniform float uHead, uTime, uAspect, uBeat, uLevel, uClones;
+  uniform float uHead, uTime, uAspect, uBeat, uLevel, uClones, uPyramid;
   uniform int uPreset;
   uniform vec4 uOn, uBox;
   // the pyramid, laid out on the floor (pose/ground.ts) and projected: each clone's feet in uv, its scale against the
@@ -119,6 +118,16 @@ const SCENE_FRAG = /* glsl */ `
       acc += neon(fi / 5.0 + t * 0.03) * exp(-dot(d, d) * 45.0) * 0.9;
     }
     return acc;
+  }
+  // how a cut-out looks in this preset (the subject's look without its rims): the clones wear it too
+  vec3 look(vec3 v, int who, vec2 uv, float t) {
+    if (uPreset == 0) return v * 1.08;
+    if (uPreset == 1 || uPreset == 2) return print(v, who);
+    if (uPreset == 3) return solar(v, t);
+    if (uPreset == 4) return v * 0.16;
+    if (uPreset == 7) return v * (0.75 + 0.7 * discoLight(uv, t));
+    if (uPreset == 10) return v * 0.9;
+    return v;
   }
   // a frame of the subjects, \`delay\` frames ago, at q (outside the frame: nothing)
   vec4 past(vec2 q, float delay) {
@@ -193,27 +202,6 @@ const SCENE_FRAG = /* glsl */ `
       float fleck = step(0.992, hash(fc + floor(t * 6.0))) * 1.6;
       bg = vid * 0.1 + L * (0.9 + beat) + fleck * hsv(hash(fc), 0.5, 1.0);
       fg = vid * (0.75 + 0.7 * L);
-    } else if (uPreset == 8) {
-      // the dance pyramid: the subjects cloned on the floor behind them, row after row, each later — a canon
-      float y = uv.y;
-      float scan = pow(0.5 + 0.5 * sin(y * 90.0 - t * 5.0), 10.0);
-      bg = neon(y * 0.5 - t * 0.07) * (0.06 + 0.22 * scan + 0.05 * beat) + vid * 0.04;
-      vec3 col = bg;
-      for (int i = 0; i < 9; i++) {
-        if (i >= uCloneN || uClones < 0.5) break;
-        vec4 cl = uClone[i];
-        // the floor under it darkens first: a contact shadow, as wide as the clone, flattened by the floor's tilt
-        vec2 e = (uv - cl.xy) / vec2(uFootW * cl.z * 0.6, uFootW * cl.z * 0.13);
-        col *= 1.0 - 0.6 * exp(-dot(e, e));
-        vec2 q = uFoot + (uv - cl.xy) / cl.z;
-        vec4 c = past(q, cl.w);
-        vec3 tint = neon(float(i) * 0.13 + t * 0.05);
-        vec3 cc = mix(c.rgb, tint * (0.25 + 1.6 * luma(c.rgb)), 0.65) + tint * clamp(1.0 - abs(c.a - 0.5) * 2.0, 0.0, 1.0) * 1.8;
-        col = mix(col, cc, c.a);
-      }
-      col += neon(t * 0.05) * exp(-pow((uv.y - uFoot.y) * 18.0, 2.0)) * exp(-pow((uv.x - uFoot.x) / (uFootW * 2.5 + 0.01), 2.0)) * 0.5;
-      bg = col;
-      fg = vid + hue * rim * 1.6;
     } else if (uPreset == 9) {
       // the tunnel: the last frame, a little smaller and turned, fed back under this one — the dancers recede forever
       vec2 c = vec2(0.5, 0.52);
@@ -278,6 +266,20 @@ const SCENE_FRAG = /* glsl */ `
       fg = vid * (1.0 + pools * 0.9) + add * 0.15;
     }
     if (uPreset != 1 && uPreset != 2 && uPreset != 0 && uPreset != 12) bg += halo * (uPreset == 4 ? 0.0 : 1.0);
+    // the dance pyramid, over any preset's room: the subjects cloned on the floor behind them, row after row, each
+    // later — a canon — in the preset's own look, with a lit edge and a contact shadow
+    if (uPyramid > 0.5 && uClones > 0.5) {
+      for (int i = 0; i < 9; i++) {
+        if (i >= uCloneN) break;
+        vec4 cl = uClone[i];
+        vec2 e = (uv - cl.xy) / vec2(uFootW * cl.z * 0.6, uFootW * cl.z * 0.13);
+        bg *= 1.0 - 0.55 * exp(-dot(e, e));
+        vec4 c = past(uFoot + (uv - cl.xy) / cl.z, cl.w);
+        int cw = uPreset == 2 ? int(cellIx) : i - 4 * (i / 4);
+        vec3 edge = (uPreset == 12 ? vec3(0.0) : neon(float(i) * 0.13 + t * 0.05)) * clamp(1.0 - abs(c.a - 0.5) * 2.0, 0.0, 1.0) * 1.4;
+        bg = mix(bg, look(c.rgb, cw, uv, t) * (1.0 - 0.06 * float(i / 3)) + edge, c.a);
+      }
+    }
     gl_FragColor = vec4(mix(bg, fg, subj), 1.0);
   }`;
 
@@ -370,6 +372,8 @@ export class Party {
   }
   /** the pyramid clones the people (off when the costumes make their own pyramid in 3D) */
   clones = true;
+  /** the pyramid toggle (every preset) */
+  pyramid = true;
   private maskTex: THREE.DataTexture;
   private maskData = new Uint8Array(4);
   private mw = 0;
@@ -414,7 +418,7 @@ export class Party {
       ...common, vertexShader: QUAD_VERT, fragmentShader: SCENE_FRAG,
       uniforms: {
         uTex: shared.uTex, uMask: { value: this.maskTex }, uFx: { value: this.fxTex }, uPrev: { value: null }, uHist: { value: null },
-        uHead: { value: 0 }, uClones: { value: 1 },
+        uHead: { value: 0 }, uClones: { value: 1 }, uPyramid: { value: 1 },
         uSpotL: { value: [0, 1, 2].map(() => new THREE.Vector2(0.5, 1.2)) }, uSpotP: { value: [0, 1, 2].map(() => new THREE.Vector2(0.5, 0.1)) },
         uSpotR: { value: [0, 1, 2].map(() => new THREE.Vector2(0.1, 0.04)) }, uSpotC: { value: [0, 1, 2].map(() => new THREE.Color(0, 0, 0)) }, uSpotK: { value: 0 }, uClone: { value: Array.from({ length: 9 }, () => new THREE.Vector4()) }, uCloneN: { value: 0 },
         uFoot: { value: new THREE.Vector2(0.5, 0.1) }, uFootW: { value: 0.2 }, uTime: { value: 0 }, uAspect: { value: 1 }, uBeat: { value: 0 }, uLevel: { value: 0 }, uPreset: { value: 0 },
@@ -458,7 +462,7 @@ export class Party {
   update(tracks: Track[], dt: number, t: number, aspect: number, ground?: Ground, K?: Intrinsics): void {
     this.frameDt = dt;
     const u = this.scene.uniforms;
-    u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code; u.uBeat!.value = this.beat; u.uClones!.value = this.clones ? 1 : 0;
+    u.uTime!.value = t; u.uAspect!.value = aspect; u.uPreset!.value = this.preset.code; u.uBeat!.value = this.beat; u.uClones!.value = this.clones ? 1 : 0; u.uPyramid!.value = this.pyramid ? 1 : 0;
     this.material.uniforms.uTime!.value = t; this.material.uniforms.uBeat!.value = this.beat;
     // in situ looks like the camera's own picture: barely any fringing, the room's bright parts do not bloom much
     const situ = this.preset.code === 12;

@@ -39,6 +39,7 @@ const octx = overlay.getContext('2d')!;
 const stage = new Stage(canvas);
 stage.opts.size = settings.size; stage.opts.shadows = settings.shadows; stage.opts.envLight = settings.envLight;
 const party = new Party(stage.bgUniforms, BG_VERT);
+stage.cloneCast = (wearerId, i) => settings.scene === 'party' && settings.partyCast === 'mix' ? rosterAt(ROSTER.findIndex((d) => d.id === wearerId) + 1 + i + mixShift) : wearerId;
 const beat = new Beat();
 const motion = new Motion();
 let faceTracker: FaceTracker | null = null;
@@ -58,16 +59,24 @@ let started = false;
 const overrides = new Map<number, string>();
 const mixed = new Map<number, string>();
 let mixNext = 0;
+/** a re-tap of Mix moves everyone along: who wears what is shuffled by this */
+let mixShift = 0;
+const rosterAt = (i: number) => ROSTER[((i % ROSTER.length) + ROSTER.length) % ROSTER.length]!.id;
 function castOf(trackId: number): string {
   const o = overrides.get(trackId);
   if (o) return o;
-  // the party has its own dancers (Skelly unless chosen), whoever you are in costume mode
-  if (settings.scene === 'party') return ROSTER.some((d) => d.id === settings.partyCast) ? settings.partyCast : 'skeleton';
+  // the party has its own dancers (Skelly unless chosen), whoever you are in costume mode; a party mix: each their own
+  if (settings.scene === 'party') {
+    if (settings.partyCast !== 'mix') return ROSTER.some((d) => d.id === settings.partyCast) ? settings.partyCast : 'skeleton';
+    let m = mixed.get(trackId);
+    if (!m) { m = rosterAt(mixShift + mixNext++ * 3); mixed.set(trackId, m); }
+    return m;
+  }
   if (settings.mode === 'one') return settings.costume;
   let m = mixed.get(trackId);
   if (!m) {
     const start = ROSTER.findIndex((d) => d.id === settings.costume);
-    m = ROSTER[(start + mixNext++) % ROSTER.length]!.id;
+    m = rosterAt(start + mixShift + mixNext++);
     mixed.set(trackId, m);
   }
   return m;
@@ -175,9 +184,12 @@ function markPicker(): void {
 function choose(id: string): void {
   overrides.clear();
   if (id === 'mix') {
+    // Mix again: everyone moves on to another costume
+    const again = settings.mode === 'mix';
     settings.mode = 'mix';
+    if (again) mixShift++;
     mixed.clear(); mixNext = 0;
-    toast('Mix: everyone gets their own');
+    toast(again ? 'Shuffled' : 'Mix: everyone gets their own');
   } else {
     settings.mode = 'one';
     settings.costume = id;
@@ -188,8 +200,22 @@ function choose(id: string): void {
   markPicker();
 }
 
+/** the party's dancers, in the order a re-tap walks them: every costume, then a mix */
+const DANCERS = [...ROSTER.map((d) => d.id), 'mix'];
 function chooseEffect(id: string): void {
   const p = PRESETS.find((x) => x.id === id) ?? PRESETS[0]!;
+  if (settings.effect === p.id && party.preset.id === p.id) {
+    // the same effect again: the next set of dancers (and a mix reshuffles each time round)
+    const i = DANCERS.indexOf(settings.partyCast);
+    settings.partyCast = DANCERS[(i + 1) % DANCERS.length]!;
+    if (settings.partyCast === 'mix') mixShift++;
+    overrides.clear(); mixed.clear(); mixNext = 0;
+    if (settings.partyCast !== 'mix') ensureBuilt(settings.partyCast);
+    if (settings.partyCostumes === 'off') settings.partyCostumes = 'behind';
+    persist();
+    toast(settings.partyCast === 'mix' ? 'Dancers: a mix' : `Dancers: ${byId(settings.partyCast).name}`, 1000);
+    return;
+  }
   settings.effect = p.id;
   party.preset = p;
   persist();
@@ -210,6 +236,7 @@ function setScene(scene: Settings['scene']): void {
   persist();
   stage.setBackground(scene === 'party' ? party.material : null);
   void detector?.setOptions({ masks: scene === 'party' });
+  $('btn-pyramid').classList.toggle('hidden', scene !== 'party');
   for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) {
     const on = b.dataset.scene === scene;
     b.classList.toggle('on', on);
@@ -290,8 +317,9 @@ function buildSettings(): void {
     const sel = document.createElement('select');
     sel.className = 'pick';
     for (const d of ROSTER) { const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; sel.appendChild(o); }
+    { const o = document.createElement('option'); o.value = 'mix'; o.textContent = 'A mix'; sel.appendChild(o); }
     sel.value = settings.partyCast;
-    sel.onchange = () => { settings.partyCast = sel.value; overrides.clear(); persist(); ensureBuilt(sel.value); };
+    sel.onchange = () => { settings.partyCast = sel.value; overrides.clear(); mixed.clear(); persist(); if (sel.value !== 'mix') ensureBuilt(sel.value); };
     row('Party dancers', 'Who dances behind (or as) you in party mode', sel);
   }
   row('Costumes in party mode', 'Behind you: you stay yourself, a pyramid of your costume dances behind you', seg<Settings['partyCostumes']>([['off', 'Off'], ['behind', 'Behind'], ['on', 'On you']], () => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
@@ -349,6 +377,24 @@ function toggleRecording(): void {
   toast('Recording — tap to stop', 1200);
 }
 
+// ── the controls fade when left alone ──────────────────────────────────────────────────────────────────────────────
+// After a few seconds untouched the HUD fades out (the picture is the show); any touch brings it back, and that first
+// touch only brings it back — it does not also change a costume or an effect underneath.
+const IDLE_MS = 4500;
+let lastTouch = performance.now();
+let swallowTap = false;
+const hud = () => $('hud');
+function wake(): void {
+  lastTouch = performance.now();
+  if (hud().classList.contains('idle')) { hud().classList.remove('idle'); swallowTap = true; setTimeout(() => (swallowTap = false), 400); }
+}
+for (const ev of ['pointerdown', 'keydown', 'wheel'] as const) window.addEventListener(ev, wake, { capture: true, passive: true });
+setInterval(() => {
+  const modal = [...document.querySelectorAll('.modal')].some((m) => !m.classList.contains('hidden'));
+  const idle = started && !modal && performance.now() - lastTouch > IDLE_MS;
+  if (idle !== hud().classList.contains('idle')) hud().classList.toggle('idle', idle);
+}, 300);
+
 // ── tap a person to change their costume ───────────────────────────────────────────────────────────────────────────
 function screenOf(t: Track): { x: number; y: number } {
   const c = stage.cover;
@@ -361,6 +407,7 @@ function screenOf(t: Track): { x: number; y: number } {
 }
 canvas.addEventListener('click', (e) => {
   if (!started) return;
+  if (swallowTap) { swallowTap = false; return; }
   if (settings.scene === 'party' && settings.partyCostumes === 'off') {
     const i = PRESETS.findIndex((p) => p.id === settings.effect);
     chooseEffect(PRESETS[(i + 1) % PRESETS.length]!.id);
@@ -430,8 +477,10 @@ function loop(now: number): void {
   // costumes in the party: on you (and in Pyramid, cloned in 3D behind you), or only behind you, with you cut out
   // and drawn over them; either way the costumes clone, not the people in 2D
   const partying = settings.scene === 'party', behind = partying && settings.partyCostumes === 'behind';
-  stage.pyramid = behind || (partying && settings.partyCostumes === 'on' && party.preset.id === 'pyramid');
+  stage.pyramid = partying && settings.pyramid && settings.partyCostumes !== 'off';
+  stage.backup = behind;
   stage.hideWearers = behind;
+  party.pyramid = settings.pyramid;
   stage.setForeground(behind ? party.foreground : null);
   party.clones = !stage.pyramid;
   stage.stageLights(settings.scene === 'party' && party.preset.id !== 'insitu', tSec, beat.env);
@@ -620,6 +669,14 @@ async function start(): Promise<void> {
 }
 
 function boot(): void {
+  $('btn-pyramid').innerHTML = ICONS.pyramid;
+  const markPyramid = () => $('btn-pyramid').setAttribute('aria-pressed', String(settings.pyramid));
+  markPyramid();
+  $('btn-pyramid').onclick = () => {
+    settings.pyramid = !settings.pyramid;
+    persist(); markPyramid();
+    toast(settings.pyramid ? 'Dance pyramid' : 'No pyramid', 800);
+  };
   $('btn-googly').innerHTML = ICONS.googly;
   const markGoogly = () => $('btn-googly').setAttribute('aria-pressed', String(settings.googly));
   markGoogly();

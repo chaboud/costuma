@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { buildCharacter, type Built, type CharacterDef, type SurfaceArrays } from '../characters/build';
 import { byId } from '../characters/roster';
-import { Rig, poseFromLandmarks } from '../pose/rig';
+import { Rig, poseFromLandmarks, type BodyPose } from '../pose/rig';
 import type { Track } from '../pose/tracker';
 import { project, type Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
@@ -24,12 +24,15 @@ interface Wearer {
   /** 0..1: how far this costume has faded in (new) or, leaving, how much is left */
   life: number;
   leaving: boolean;
-  /** the bones in a fixed order, and a ring of their past poses (the pyramid's canon) */
-  boneList: THREE.Bone[];
-  hist: Float32Array[];
-  histHead: number;
-  clones: { root: THREE.Object3D; bones: THREE.Bone[]; row: number; col: number; shadow: THREE.Mesh }[];
+  /** a ring of the wearer's past poses and body lengths: the pyramid's dancers replay them late, a canon */
+  poses: BodyPose[];
+  head: number;
+  len: Track['len'] | null;
+  clones: Clone[];
 }
+
+/** a dancer in the pyramid: its own character (the wearer's, or another in a mix), its own rig and fading materials */
+interface Clone { id: string; def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[]; row: number; col: number; shadow: THREE.Mesh }
 
 // a soft dark patch where a clone meets the floor: what makes something inserted look like it stands there
 const SHADOW_MAT = new THREE.ShaderMaterial({
@@ -41,6 +44,11 @@ const SHADOW_GEO = new THREE.PlaneGeometry(1, 1);
 
 /** past poses kept per wearer; the back row of the pyramid dances this many frames late at most */
 const POSE_HIST = 12;
+
+const clonePose = (p: BodyPose): BodyPose => ({
+  pelvis: p.pelvis.clone(), chest: p.chest.clone(), head: p.head.clone(), headVis: p.headVis, neck: p.neck.clone(),
+  dir: Object.fromEntries(Object.entries(p.dir).map(([k, v]) => [k, v.clone()])) as BodyPose['dir'], vis: { ...p.vis },
+});
 
 export const BG_VERT = /* glsl */ `
   varying vec2 vUv;
@@ -81,6 +89,10 @@ export class Stage {
   pyramid = false;
   /** the wearers themselves undressed (party's "behind you": only their pyramid shows, and they stay in front) */
   hideWearers = false;
+  /** with no pyramid, "behind you" still has two backup dancers (a row of two) */
+  backup = false;
+  /** which character dances at place `i` of a wearer's pyramid (a mix gives each its own); default: the wearer's */
+  cloneCast: (wearerId: string, i: number) => string = (id) => id;
   /** the floor (pose/ground.ts): the pyramid stands on it */
   ground = new Ground();
   /** face fun: googly eyes, and sparks breathed from open mouths */
@@ -282,6 +294,15 @@ export class Stage {
   }
 
   private dress(trackId: number, id: string): Wearer {
+    const { def, root, rig, mats } = this.instance(id);
+    const w: Wearer = { trackId, def, root, rig, mats, fade: 0, life: 0, leaving: false, poses: [], head: 0, len: null, clones: [] };
+    this.world.add(root);
+    this.wearers.set(trackId, w);
+    return w;
+  }
+
+  /** a worn copy of a character: its own bones, rig and material copies (each fades on its own) */
+  private instance(id: string): { def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[] } {
     const tpl = this.template(id);
     const root = SkeletonUtils.clone(tpl.root);
     const bones = new Map<string, THREE.Bone>();
@@ -305,17 +326,12 @@ export class Stage {
       };
       m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material);
     });
-    const boneList = tpl.def.segs.map((sg) => bones.get(sg.name)!).filter(Boolean);
-    const w: Wearer = { trackId, def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], fade: 0, life: 0, leaving: false,
-      boneList, hist: Array.from({ length: POSE_HIST }, () => new Float32Array(boneList.length * 7)), histHead: 0, clones: [] };
-    this.world.add(root);
-    this.wearers.set(trackId, w);
-    return w;
+    return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()] };
   }
 
   private drop(w: Wearer): void {
     this.world.remove(w.root);
-    for (const c of w.clones) this.world.remove(c.root, c.shadow);
+    for (const c of w.clones) this.dropClone(c);
     for (const m of w.mats) m.dispose();
     if (this.wearers.get(w.trackId) === w) this.wearers.delete(w.trackId);
   }
@@ -323,15 +339,7 @@ export class Stage {
   private pose(w: Wearer, tr: Track, t: number): void {
     const def = w.def, rig = w.rig;
     const p = poseFromLandmarks(tr.world);
-    const s = (tr.len.torso / rig.torso) * (def.fit?.size ?? 1) * this.opts.size;
-    const limb = def.fit?.limb ?? 0;
-    const fitLen = (bone: string, person: number) => {
-      const k = 1 + ((person / s) / (rig.len.get(bone) ?? 1) - 1) * limb;
-      rig.setLength(bone, Math.min(1.6, Math.max(0.65, k)));
-    };
-    for (const side of ['L', 'R']) { fitLen('arm' + side, tr.len.upperArm); fitLen('thigh' + side, tr.len.thigh); fitLen('shin' + side, tr.len.shin); }
-    const kn = rig.neckFit(tr.len.neck / s);
-    rig.setNeck(1 + (Math.min(1.25, Math.max(0.45, kn)) - 1) * (def.fit?.head ?? 0.85));
+    const s = this.fit(rig, def, tr.len);
     rig.apply(p, t, def.idle?.tail ?? 0, this.frameDt);
     // the wearer's mouth opens the costume's (face tracking)
     if (def.face?.jaw) rig.setJaw((tr.face?.jaw ?? 0) * def.face.jaw);
@@ -343,10 +351,29 @@ export class Stage {
     w.root.visible = fade > 0.01 && !this.hideWearers;
     def.tick?.(w.root, t, tr.face ?? null);
     // the pose into the ring
-    w.histHead = (w.histHead + 1) % POSE_HIST;
-    const h = w.hist[w.histHead]!;
-    w.boneList.forEach((b, i) => { b.quaternion.toArray(h, i * 7); b.position.toArray(h, i * 7 + 4); });
+    w.head = (w.head + 1) % POSE_HIST;
+    w.poses[w.head] = clonePose(p);
+    w.len = tr.len;
     this.posePyramid(w, s, fade, t);
+  }
+
+  /** size a character to a person and stretch its limbs and neck toward theirs; returns its scale */
+  private fit(rig: Rig, def: CharacterDef, len: Track['len']): number {
+    const s = (len.torso / rig.torso) * (def.fit?.size ?? 1) * this.opts.size;
+    const limb = def.fit?.limb ?? 0;
+    const fitLen = (bone: string, person: number) => {
+      const k = 1 + ((person / s) / (rig.len.get(bone) ?? 1) - 1) * limb;
+      rig.setLength(bone, Math.min(1.6, Math.max(0.65, k)));
+    };
+    for (const side of ['L', 'R']) { fitLen('arm' + side, len.upperArm); fitLen('thigh' + side, len.thigh); fitLen('shin' + side, len.shin); }
+    const kn = rig.neckFit(len.neck / s);
+    rig.setNeck(1 + (Math.min(1.25, Math.max(0.45, kn)) - 1) * (def.fit?.head ?? 0.85));
+    return s;
+  }
+
+  private dropClone(c: Clone): void {
+    this.world.remove(c.root, c.shadow);
+    for (const m of c.mats) m.dispose();
   }
 
   /**
@@ -355,21 +382,19 @@ export class Stage {
    * dance, so the triangle count stays a phone's.
    */
   private posePyramid(w: Wearer, s: number, fade: number, t: number): void {
-    const rows = this.pyramid ? (this.wearers.size > 1 ? 2 : 3) : 0;
-    const want: [number, number][] = [];
-    for (let r = 1; r <= rows; r++) for (let j = 0; j <= r; j++) want.push([r, j]);
-    while (w.clones.length > want.length) { const c = w.clones.pop()!; this.world.remove(c.root, c.shadow); }
+    const rows = this.pyramid ? (this.wearers.size > 1 ? 2 : 3) : this.backup ? 1 : 0;
+    const want: { row: number; col: number; id: string }[] = [];
+    for (let r = 1; r <= rows; r++) for (let j = 0; j <= r; j++) want.push({ row: r, col: j, id: this.cloneCast(w.def.id, want.length) });
+    // a place whose dancer changed (a new mix, another cast) gets the new one once it is made; the old dances till then
+    for (let i = 0; i < w.clones.length; i++) {
+      const c = w.clones[i]!, wnt = want[i];
+      if (!wnt) { this.dropClone(c); w.clones.splice(i--, 1); continue; }
+      if (c.id !== wnt.id && this.templates.has(wnt.id)) { this.dropClone(c); w.clones[i] = this.makeClone(wnt); }
+    }
     while (w.clones.length < want.length) {
-      const root = SkeletonUtils.clone(w.root);
-      // the clone shares the wearer's (fading) materials; SkeletonUtils.clone already does, and drops its own clones
-      root.traverse((o) => { o.castShadow = false; });
-      const bones = new Map<string, THREE.Bone>();
-      root.traverse((o) => { if ((o as THREE.Bone).isBone) bones.set(o.name, o as THREE.Bone); });
-      const [row, col] = want[w.clones.length]!;
-      const shadow = new THREE.Mesh(SHADOW_GEO, SHADOW_MAT);
-      shadow.renderOrder = 1;
-      w.clones.push({ root, bones: w.def.segs.map((sg) => bones.get(sg.name)!).filter(Boolean), row, col, shadow });
-      this.world.add(root, shadow);
+      const wnt = want[w.clones.length]!;
+      if (!this.templates.has(wnt.id)) { void this.prepare(wnt.id); break; }
+      w.clones.push(this.makeClone(wnt));
     }
     // on the floor: the wearer's hips dropped to it, then rows back along it and across it, the hips at the wearer's
     // height above it; perspective shrinks and raises the back rows by itself
@@ -380,18 +405,31 @@ export class Stage {
     for (const c of w.clones) {
       const fj = c.col - c.row / 2;
       const delay = Math.round(c.row * 3 + Math.abs(fj) * 1.5);
-      const h = w.hist[(w.histHead - delay + POSE_HIST * 4) % POSE_HIST]!;
-      c.bones.forEach((b, i) => { b.quaternion.fromArray(h, i * 7); b.position.fromArray(h, i * 7 + 4); });
+      // the wearer's pose `delay` frames ago (or the oldest kept), through this dancer's own rig, fitted to the wearer
+      let p: BodyPose | undefined;
+      for (let k = delay; k >= 0 && !p; k--) p = w.poses[(w.head - k + POSE_HIST * 4) % POSE_HIST];
+      const cs = w.len ? this.fit(c.rig, c.def, w.len) : s;
+      if (p) c.rig.apply(p, t - delay / 30, c.def.idle?.tail ?? 0);
       const at = foot.clone().addScaledVector(back, c.row * height * 0.5).addScaledVector(side, fj * height * 0.55);
       c.root.position.copy(at).addScaledVector(g.n, up);
-      c.root.scale.copy(w.root.scale);
+      c.root.scale.setScalar(cs);
       c.root.visible = fade > 0.01;
+      for (const m of c.mats) m.opacity = fade * ((m.userData.baseOpacity as number | undefined) ?? 1);
       c.shadow.position.copy(at).addScaledVector(g.n, 0.004);
       c.shadow.quaternion.copy(flat);
       c.shadow.scale.set(height * 0.42, height * 0.26, 1);
       c.shadow.visible = c.root.visible;
-      w.def.tick?.(c.root, t - delay / 30, null);
+      c.def.tick?.(c.root, t - delay / 30, null);
     }
+  }
+
+  private makeClone(w: { row: number; col: number; id: string }): Clone {
+    const { def, root, rig, mats } = this.instance(w.id);
+    root.traverse((o) => { o.castShadow = false; });
+    const shadow = new THREE.Mesh(SHADOW_GEO, SHADOW_MAT);
+    shadow.renderOrder = 1;
+    this.world.add(root, shadow);
+    return { id: w.id, def, root, rig, mats, row: w.row, col: w.col, shadow };
   }
 
   /**
