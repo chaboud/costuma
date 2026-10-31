@@ -92,6 +92,8 @@ const WART: V3 = [0.14, 16.92, 1.52];
 
 function witchHead(x: number, y: number, z: number): number {
   if (y < 15.0) return 15.1 - y;
+  const b = sdEllipsoid(x, y, z, 0, 16.95, 0.3, 1.2, 1.95, 1.8);
+  if (b > 0.35) return b;
   const ax = Math.abs(x);
   let d = sdEllipsoid(x, y, z, 0, 17.42, 0.02, 0.88, 0.98, 1.05); // the cranium
   d = smin(d, sdEllipsoid(x, y, z, 0, 16.85, 0.42, 0.7, 0.95, 0.72), 0.4); // the face
@@ -105,7 +107,8 @@ function witchHead(x: number, y: number, z: number): number {
   d = smin(d, sdCapsule(x, y, z, 0, 17.18, 1.0, 0, 16.98, 1.42, 0.085, 0.125), 0.12);
   d = smin(d, sdCapsule(x, y, z, 0, 16.98, 1.42, 0, 16.68, 1.9, 0.125, 0.09), 0.08);
   d = smin(d, sdCapsule(x, y, z, 0, 16.68, 1.9, 0, 16.5, 1.84, 0.09, 0.06), 0.06);
-  d = smin(d, sdEllipsoid(ax, y, z, 0.1, 16.6, 1.2, 0.1, 0.08, 0.12), 0.08); // the nostrils
+  d = smin(d, sdCapsule(x, y, z, 0, 16.52, 1.8, 0, 16.6, 1.18, 0.07, 0.1), 0.1); // its underside back to the lip
+  d = smin(d, sdEllipsoid(ax, y, z, 0.1, 16.64, 1.3, 0.09, 0.07, 0.14), 0.08); // the nostrils' wings
   d = smin(d, sdSphere(x, y, z, WART[0], WART[1], WART[2], 0.07), 0.03); // the wart
   // thin lips
   d = smin(d, sdCapsule(ax, y, z, 0, 16.3, 1.08, 0.27, 16.33, 0.94, 0.05, 0.03), 0.05);
@@ -114,7 +117,7 @@ function witchHead(x: number, y: number, z: number): number {
   return smin(d, sdCapsule(x, y, z, 0, 15.2, -0.06, 0, 16.5, 0.0, 0.44, 0.42), 0.3); // the neck
 }
 
-const C_SKIN = new THREE.Color(0x98c27a), C_SHADE = new THREE.Color(0x557c40), C_LIP = new THREE.Color(0x4a2440);
+const C_SKIN = new THREE.Color(0x98c27a), C_SHADE = new THREE.Color(0x557c40), C_LIP = new THREE.Color(0x5a4a50);
 const C_MOUTH = new THREE.Color(0x1c0508), C_TEETH = new THREE.Color(0xd8cc8c), C_WART = new THREE.Color(0x6a6a32);
 const C_SCALP = new THREE.Color(0x161412);
 function headColour(x: number, y: number, z: number, c: THREE.Color): void {
@@ -125,6 +128,7 @@ function headColour(x: number, y: number, z: number, c: THREE.Color): void {
     const front = z > LIP_Z - 0.26 && ax < 0.36 && Math.abs(y - cutY(z)) < 0.13;
     const k = (x + 0.36) / 0.12, gap = Math.floor(k) === 4;
     c.copy(front && !gap && k - Math.floor(k) < 0.8 ? C_TEETH : C_MOUTH);
+    if (ax > JAW_W - 0.05) c.copy(C_SHADE).multiplyScalar(0.55); // the cheeks' insides, where the chin parts from them
     return;
   }
   // the scalp under the hat, where the hair parts
@@ -137,7 +141,7 @@ function headColour(x: number, y: number, z: number, c: THREE.Color): void {
   // a little redder at the tip of the nose
   c.lerp(new THREE.Color(0x9a9a5a), 0.4 * (1 - sstep(0.1, 0.35, Math.hypot(x, y - 16.62, z - 1.88))));
   if (Math.hypot(x - WART[0], y - WART[1], z - WART[2]) < 0.1) c.copy(C_WART);
-  if (z > 0.9 && ax < 0.3 && Math.abs(y - cutY(z)) < 0.075) c.copy(C_LIP);
+  if (z > 0.9 && ax < 0.28 && Math.abs(y - cutY(z)) < 0.05) c.copy(C_LIP);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -185,21 +189,24 @@ const SHAWL_TEETH = tatters(16, 9);
 const yNeck = (c: number) => 15.48 - 0.2 * (1 - c) / 2;
 const yShoulder = (c: number) => 14.62 - 0.3 * Math.max(0, c) ** 2;
 /** the shawl's hem (u: 0 the back, ±1 the front ends): a point down the back, up over the arms, the ends on the chest */
-const shawlHem = (u: number) => { const a = Math.abs(u); return a < 0.55 ? lerp(10.9, 12.9, sstep(0, 0.55, a)) : lerp(12.9, 12.0, sstep(0.55, 1, a)); };
+const shawlHem = (u: number) => { const a = Math.abs(u); return a < 0.55 ? lerp(10.9, 12.6, sstep(0, 0.55, a)) : lerp(12.6, 11.9, sstep(0.55, 1, a)); };
 /** the shawl: round the neck (θ from the back), over the shoulders, hanging in a point behind and two ends in front */
 function shawlAt(u: number, v: number, o: THREE.Vector3): void {
   const th = u * 2.72, c = Math.cos(th);
   let rx: number, rz: number, zc: number, y: number;
   if (v <= SHAWL_V1) {
-    const t = v / SHAWL_V1, yN = yNeck(c), yS = yShoulder(c), e = lerp(2, 4, Math.abs(Math.sin(th)));
+    const t = v / SHAWL_V1, yN = yNeck(c), yS = yShoulder(c), e = lerp(2, 3, Math.abs(Math.sin(th)));
     y = yS + (yN - yS) * Math.pow(Math.max(0, 1 - t ** e), 1 / e);
-    rx = lerp(0.68, 3.0, t); rz = lerp(0.68, 1.4, t); zc = lerp(0.0, -0.08, t);
-  } else {
-    const s = (v - SHAWL_V1) / (1 - SHAWL_V1);
-    y = lerp(yShoulder(c), shawlHem(u) - 0.55 * SHAWL_TEETH(u), s);
-    rx = 3.0 + 0.32 * Math.sqrt(s); rz = 1.4 + 0.18 * Math.sqrt(s); zc = -0.08;
+    rx = lerp(0.68, 2.92, t); rz = lerp(0.68, 1.42, t); zc = lerp(0.0, -0.08, t);
+    o.set(rx * Math.sin(th), y, zc - rz * c);
+    return;
   }
-  o.set(rx * Math.sin(th), y, zc - rz * c);
+  const s = (v - SHAWL_V1) / (1 - SHAWL_V1);
+  y = lerp(yShoulder(c), shawlHem(u) - 0.55 * SHAWL_TEETH(u), s);
+  rx = 2.92 + 0.32 * Math.sqrt(s); rz = 1.42 + 0.22 * Math.sqrt(s); zc = -0.08;
+  // the front ends come in to the knot and hang crossed below it
+  const fr = sstep(0.62, 1.0, Math.abs(u)) * sstep(0, 0.55, s);
+  o.set(rx * Math.sin(th) * lerp(1, 0.12, fr), y, zc - rz * c + 0.12 * fr);
 }
 function shawlWeights(x: number, y: number, _z: number, u: number, v: number): Influence[] {
   const au = Math.abs(u);
@@ -229,10 +236,14 @@ function cuffGeometry(): THREE.BufferGeometry {
 const restBody = (x: number, y: number, z: number) => Math.min(witchHead(x, y, z), witchSDF(x, y, z));
 /** how far out from the head's axis (0, y, 0) the body reaches along the direction (sin φ, cos φ), by bisection */
 function reachAt(phi: number, y: number): number {
-  let lo = 0, hi = 3.5;
+  let lo = 0, hi = 3.2;
   if (restBody(Math.sin(phi) * hi, y, Math.cos(phi) * hi) < 0) return hi;
-  // find the outermost surface: march in from outside
-  for (let r = hi; r > 0; r -= 0.06) { if (restBody(Math.sin(phi) * r, y, Math.cos(phi) * r) < 0) { lo = r; hi = r + 0.06; break; } }
+  // find the outermost surface: march in from outside, by the field's own distance (it never overshoots by much)
+  for (let r = hi, i = 0; r > 0 && i < 60; i++) {
+    const f = restBody(Math.sin(phi) * r, y, Math.cos(phi) * r);
+    if (f < 0) { lo = r; hi = r + 0.1; break; }
+    r -= Math.max(0.03, Math.min(0.1, f * 0.8));
+  }
   for (let i = 0; i < 12; i++) { const m = (lo + hi) / 2; if (restBody(Math.sin(phi) * m, y, Math.cos(phi) * m) < 0) lo = m; else hi = m; }
   return lo;
 }
@@ -245,7 +256,7 @@ function hairGeometry(): THREE.BufferGeometry {
   for (let i = 0; i < N; i++) {
     // round the head from beside the face (φ 0.42) to the back (π), both sides
     const sx = i % 2 === 0 ? 1 : -1;
-    const phi = sx * (0.42 + (Math.PI - 0.42) * ((Math.floor(i / 2) + rnd() * 0.6) / (N / 2)));
+    const phi = sx * (0.62 + (Math.PI - 0.62) * ((Math.floor(i / 2) + rnd() * 0.6) / (N / 2)));
     const back = Math.abs(phi) / Math.PI;
     const y0 = 17.72 - 0.25 * back + rnd() * 0.08;
     const yEnd = lerp(15.0, 12.4, back ** 0.8) - rnd() * 0.6;
@@ -254,8 +265,9 @@ function hairGeometry(): THREE.BufferGeometry {
     const n = 12, w0 = rnd() * 6.28, w1 = 0.5 + rnd() * 0.8;
     for (let k = 0; k <= n; k++) {
       const t = k / n, y = lerp(y0, yEnd, t);
-      // hang straight down, never back in toward the neck; clear of the shoulders and the shawl over them
-      const clear = y > 15.7 ? 0.08 : lerp(0.08, 0.42, sstep(15.7, 15.1, y));
+      // hang straight down, never back in toward the neck; clear of the shoulders and the shawl over them (it stands
+      // further off the back than off the shoulders' tops)
+      const clear = y > 15.7 ? 0.08 : lerp(0.08, lerp(0.48, 0.8, sstep(1.9, 2.6, Math.abs(phi))), sstep(15.7, 15.0, y));
       R = Math.max(R, reachAt(phi, y) + clear);
       const wig = 0.07 * Math.sin(t * 9 * w1 + w0) * t;
       const ph = phi + wig / Math.max(0.8, R);
@@ -302,7 +314,7 @@ function addHat(d: Dresser): void {
   for (let r = 0; r <= TS; r++) {
     const t = r / TS, c = curve.getPointAt(t);
     // tapering to the tip, with creases where it bends
-    const k = 1.08 * Math.pow(1 - t, 0.95) * (1 + 0.05 * Math.sin(t * 28) * (1 - t)) + 0.015;
+    const k = 1.08 * Math.pow(1 - t, 0.95) * (1 + 0.05 * Math.sin(t * 28) * (1 - t) * sstep(0.1, 0.2, t)) + 0.015;
     for (let j = 0; j <= RS; j++) {
       const q = r * (RS + 1) + j;
       p.setXYZ(q, c.x + (p.getX(q) - c.x) * k, c.y + (p.getY(q) - c.y) * k, c.z + (p.getZ(q) - c.z) * k);
@@ -311,7 +323,7 @@ function addHat(d: Dresser): void {
   crown.computeVertexNormals();
   hat.add(new THREE.Mesh(crown, felt));
   // the band, purple, and its buckle, gold
-  const band = new THREE.LatheGeometry([new THREE.Vector2(1.11, 0.04), new THREE.Vector2(1.08, 0.24), new THREE.Vector2(1.05, 0.44)], 40);
+  const band = new THREE.LatheGeometry([new THREE.Vector2(1.13, 0.04), new THREE.Vector2(1.11, 0.24), new THREE.Vector2(1.09, 0.44)], 40);
   hat.add(new THREE.Mesh(band, d.std({ color: 0x5a2a7a, roughness: 0.6, side: THREE.DoubleSide })));
   const gold = d.std({ color: 0xd8a838, roughness: 0.3, metalness: 0.9 });
   const buckle = mergeAll([
@@ -320,7 +332,7 @@ function addHat(d: Dresser): void {
     new THREE.BoxGeometry(0.05, 0.42, 0.05).translate(0, 0, 0.02),
   ]);
   const bk = new THREE.Mesh(buckle, gold);
-  bk.position.set(0, 0.24, 1.1);
+  bk.position.set(0, 0.24, 1.13);
   bk.rotation.x = -0.03;
   hat.add(bk);
   // crooked: tipped back and to her left
@@ -382,7 +394,7 @@ function addBroom(d: Dresser): void {
     q.x += 0.06 * Math.sin(i * 2.1); q.z += 0.05 * Math.cos(i * 1.7);
     handlePts.push(q);
   }
-  const handle = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(handlePts), 40, 0.1, 8, false);
+  const handle = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(handlePts), 40, 0.12, 8, false);
   const wood = d.std({ color: 0x5a3e24, roughness: 0.75 });
   const broom = new THREE.Group();
   broom.add(new THREE.Mesh(handle, wood));
@@ -423,7 +435,7 @@ function dress(d: Dresser): void {
   // --- the head: split along the mouth; the hat; eyes under heavy lids; arched brows
   splitHead(d, witchHead, jawMask,
     { min: [-1.05, 15.05, -1.2], max: [1.05, 18.5, 2.05] },
-    { min: [-0.5, 15.5, -0.2], max: [0.5, 16.7, 1.3] }, 60, 34,
+    { min: [-0.5, 15.5, -0.2], max: [0.5, 16.7, 1.3] }, 56, 30,
     headColour, headMaterial('witch-head-v1'), 'witch');
   addEyes(d, EYE, 0.12, 0xc8c418, 0.3, 'witch-eye', { look: [0.08, 0.05], lid: 0x6a9452, lidRest: 0.26, white: 0xe2dcc0, irisFrac: 0.6 });
   const browAt = (ax: number, lift: number): V3 => { const yy = 17.4 + lift; return [ax, yy, frontZ(witchHead, ax, yy, 0.3, 1.6) + 0.025]; };
@@ -436,7 +448,7 @@ function dress(d: Dresser): void {
   bindSkinned(d, hair, d.std({ color: 0xffffff, vertexColors: true, roughness: 0.5 }), 'witch-hair');
 
   // --- the skirt and the shawl, skinned sheets
-  const skirt = sheetGeometry(110, 40, skirtAt, true);
+  const skirt = sheetGeometry(110, 40, skirtAt, true, true);
   setSkin(d, skirt, skirtWeights);
   bindSkinned(d, skirt, clothMaterial(0x16141a, 0x2a1e30, 0.7, 0.12, 'witch-cloth-v1'), 'witch-skirt');
   const shawl = sheetGeometry(72, 22, shawlAt);
@@ -444,7 +456,7 @@ function dress(d: Dresser): void {
   bindSkinned(d, shawl, clothMaterial(0x5c2a82, 0x2e1642, 0.85, 0.15, 'witch-cloth-v1'), 'witch-shawl');
   // the shawl's ends knotted at the breastbone
   const knot = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 10).scale(1.3, 0.9, 0.8), d.std({ color: 0x5c2a82, roughness: 0.85 }));
-  d.at(knot, 'spine2', 0, 13.95, frontZ(witchSDF, 0, 13.95) + 0.28);
+  d.at(knot, 'spine2', 0, 13.25, frontZ(witchSDF, 0, 13.25) + 0.36);
 
   // --- a sash at the waist, purple, a gold buckle
   const sash = new THREE.Mesh(new THREE.TorusGeometry(1, 0.12, 8, 40).rotateX(Math.PI / 2).scale(1.13, 1.6, 0.82), d.std({ color: 0x4a2266, roughness: 0.7 }));

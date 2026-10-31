@@ -140,25 +140,38 @@ function neckSDF(x: number, y: number, z: number): number {
 }
 
 /** the body, skull and upper jaw included; plates are meshes, only a low ridge under them here */
+/** is (x, y, z) within r of (cx, cy, cz)? (the field's parts are skipped beyond their reach: see kaijuBodySDF) */
+const near = (x: number, y: number, z: number, cx: number, cy: number, cz: number, r: number) => {
+  const dx = x - cx, dy = y - cy, dz = z - cz;
+  return dx * dx + dy * dy + dz * dz < r * r;
+};
+
+/**
+ * The body, skull and upper jaw included; plates are meshes, only a low ridge under them here. Each part is asked only
+ * within its reach plus its blend and the 1.25 m past which the grid's field is clamped to "outside" (build.ts): beyond
+ * that it cannot change the surface, and most of the box is beyond every part (in Node, the field 0.85 s → 0.33 s, the same 48.6k triangles).
+ */
 export function kaijuBodySDF(x: number, y: number, z: number): number {
   const ax = Math.abs(x);
-  // the torso: a pear — wide hips, a deep belly, the chest narrowing into hunched shoulders
-  let d = sdEllipsoid(x, y, z, 0, 9.7, -0.3, 3.0, 2.6, 2.6);
-  d = smin(d, sdCapsule(x, y, z, 0, 10.2, 0.0, 0, 12.6, 0.5, 2.75, 2.55), 1.0);
-  d = smin(d, sdCapsule(x, y, z, 0, 12.6, 0.5, 0, 14.2, 0.7, 2.55, 2.0), 0.9);
-  d = smin(d, sdEllipsoid(x, y, z, 0, 11.4, 1.5, 2.2, 3.0, 1.75), 0.9); // the belly's bulge
-  d = smin(d, sdEllipsoid(ax, y, z, 1.65, 13.9, 0.5, 1.35, 1.05, 1.4), 0.8); // the shoulders, hunched
-  // the neck: thick, into the back of the skull; the throat under the jaw
-  d = smin(d, neckSDF(x, y, z), 0.9);
+  let d = 9;
+  // the torso: a pear — wide hips, a deep belly, the chest narrowing into hunched shoulders; the neck into the skull
+  if (near(x, y, z, 0, 12.4, 0.4, 8.2)) {
+    d = sdEllipsoid(x, y, z, 0, 9.7, -0.3, 3.0, 2.6, 2.6);
+    d = smin(d, sdCapsule(x, y, z, 0, 10.2, 0.0, 0, 12.6, 0.5, 2.75, 2.55), 1.0);
+    d = smin(d, sdCapsule(x, y, z, 0, 12.6, 0.5, 0, 14.2, 0.7, 2.55, 2.0), 0.9);
+    d = smin(d, sdEllipsoid(x, y, z, 0, 11.4, 1.5, 2.2, 3.0, 1.75), 0.9); // the belly's bulge
+    d = smin(d, sdEllipsoid(ax, y, z, 1.65, 13.9, 0.5, 1.35, 1.05, 1.4), 0.8); // the shoulders, hunched
+    d = smin(d, neckSDF(x, y, z), 0.9);
+  }
   // the ridge the plates root in
-  if (x * x < 4 && z < 1.5) {
+  if (x * x < 4 && z < 1.5 && y > 6.5 && y < 19) {
     d = smin(d, sdCapsule(x, y, z, 0, 16.2, -0.3, 0, 12.0, -2.0, 0.45, 0.6), 0.6);
     d = smin(d, sdCapsule(x, y, z, 0, 12.0, -2.0, 0, 9.4, -3.0, 0.6, 0.55), 0.6);
   }
   // the skull
-  if (y > 13.4 && z > -1.6) d = smin(d, skullSDF(x, y, z), 0.7);
+  if (y > 13.4 && z > -1.6 && near(x, y, z, 0, 16.6, 3.25, 6.5)) d = smin(d, skullSDF(x, y, z), 0.7);
   // the tail: tapering, down to drag along the ground and out to the left
-  if (z < 1.6) {
+  if (z < 1.6 && y < 13.5 && x > -4.5 && x < 7.6) {
     const ks = [1.0, 0.7, 0.5, 0.4];
     for (let i = 0; i < 4; i++) {
       const a = TAIL[i]!, b = TAIL[i + 1]!;
@@ -166,19 +179,21 @@ export function kaijuBodySDF(x: number, y: number, z: number): number {
     }
   }
   // the legs: a haunch, a thick thigh, a column of a shin, a broad foot with three clawed toes
-  if (y < 12.2) {
+  if (y < 12.2 && ax < 6.0 && z > -4.0 && z < 5.6) {
     let g = sdSphere(ax, y, z, 2.05, 8.6, -0.1, 2.2);
     g = smin(g, sdCapsule(ax, y, z, 2.0, 9.0, 0.1, 2.2, 5.0, 0.7, 1.95, 1.55), 0.6);
     g = smin(g, sdSphere(ax, y, z, 2.25, 5.1, 0.85, 1.45), 0.5); // the knee
     g = smin(g, sdCapsule(ax, y, z, 2.2, 5.0, 0.7, 2.3, 1.5, -0.1, 1.45, 1.3), 0.5);
-    g = smin(g, sdCapsule(ax, y, z, 2.3, 1.3, 0.0, 2.4, 0.75, 2.0, 1.25, 0.95), 0.5); // the foot
-    g = smin(g, sdSphere(ax, y, z, 2.3, 0.9, -0.6, 0.95), 0.4); // the heel
-    for (const tx of [-1, 0, 1]) g = smin(g, sdCapsule(ax, y, z, 2.4 + tx * 0.5, 0.75, 1.8, 2.4 + tx * 0.95, 0.5, 3.25 + (tx === 0 ? 0.45 : 0), 0.52, 0.36), 0.3);
+    if (y < 4.5) {
+      g = smin(g, sdCapsule(ax, y, z, 2.3, 1.3, 0.0, 2.4, 0.75, 2.0, 1.25, 0.95), 0.5); // the foot
+      g = smin(g, sdSphere(ax, y, z, 2.3, 0.9, -0.6, 0.95), 0.4); // the heel
+      if (z > 0.2) for (const tx of [-1, 0, 1]) g = smin(g, sdCapsule(ax, y, z, 2.4 + tx * 0.5, 0.75, 1.8, 2.4 + tx * 0.95, 0.5, 3.25 + (tx === 0 ? 0.45 : 0), 0.52, 0.36), 0.3);
+    }
     d = smin(d, g, 0.8);
   }
   // the arms: small, a shoulder's knob, three claws on each hand
-  if (ax > 1.2 && y > 8.2 && y < 15.8) d = smin(d, armSDF(ax, y, z), 0.3);
-  d = Math.min(d, clawSDF(ax, y, z));
+  if (ax > 1.2 && y > 8.2 && y < 15.8 && z > -1.3 && z < 6.2) d = smin(d, armSDF(ax, y, z), 0.3);
+  if ((y < 2.0 && z > 2.0) || (ax > 3.2 && y > 8.4 && y < 12.0 && z > 2.6)) d = Math.min(d, clawSDF(ax, y, z));
   // flat soles
   return Math.max(d, -y);
 }
@@ -437,6 +452,11 @@ function dress(d: Dresser): void {
   // ---- the throat's glow: at the back of the mouth, inside the shut jaw; lit by `tick` ----
   const core = new THREE.MeshStandardMaterial({ color: 0x0c1a2a, emissive: GLOW, emissiveIntensity: 0, roughness: 0.4 });
   core.name = 'kaiju-core';
+  // brightest where it faces you, soft at its rim: an orb of light, not a flat blue disc
+  core.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n float facing = abs(dot(normalize(normal), normalize(vViewPosition)));\n totalEmissiveRadiance *= 0.2 + 1.4 * facing * facing;');
+  };
+  core.customProgramCacheKey = () => 'kaiju-core-v1';
   const coreM = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), core);
   coreM.scale.set(0.85, 0.7, 0.6);
   d.at(coreM, 'head', 0, 15.0, 3.2);
@@ -475,7 +495,11 @@ export const KAIJU: CharacterDef = {
   face: {
     jaw: 0.5,
     eyes: [[EYE[0], EYE[1], EYE[2] + 0.3, 0.38], [-EYE[0], EYE[1], EYE[2] + 0.3, 0.38]],
-    breath: { colors: [0x9fe8ff, 0x3aa8ff, 0xffffff], rate: 3, speed: 2.4, size: 1.8 },
+    // measured stepping render/breath.ts at a real 30 fps (headless frames are too slow to show it): a spark shows only
+    // after its first 15 % of life, so at speed 2.4 the stream began 0.5–0.9 m past the snout, out of a portrait
+    // frame, and facing the camera it flew into the lens as white discs; at 1.4 it is a dense beam from the jaws in
+    // profile and a blue burst toward the camera. Blue-weighted: a third white saturated the additive core
+    breath: { colors: [0x9fe8ff, 0x3aa8ff, 0x3aa8ff, 0x1f6fff, 0xffffff], rate: 3, speed: 1.4, size: 1.0 },
   },
   tick(root, t, face) {
     let e = LIT.get(root);

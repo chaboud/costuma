@@ -39,7 +39,7 @@ export const smax = (a: number, b: number, k: number): number => -smin(-a, -b, k
  * A grid surface P(u, v), u ∈ [-1, 1] across and v ∈ [0, 1] along, indexed and smooth-shaded; wound so that ∂u × ∂v is
  * its front face (`flip` the other way). `uv` carries (u, v) remapped to 0..1 for the weights.
  */
-export function sheetGeometry(nu: number, nv: number, at: (u: number, v: number, out: THREE.Vector3) => void, flip = false): THREE.BufferGeometry {
+export function sheetGeometry(nu: number, nv: number, at: (u: number, v: number, out: THREE.Vector3) => void, flip = false, wrap = false): THREE.BufferGeometry {
   const n = (nu + 1) * (nv + 1);
   const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2);
   const p = new THREE.Vector3();
@@ -59,6 +59,15 @@ export function sheetGeometry(nu: number, nv: number, at: (u: number, v: number,
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   g.setIndex(idx);
   g.computeVertexNormals();
+  if (wrap) {
+    // a closed sheet (u = -1 meets u = 1): the seam's two columns share a normal, or it shows as a crease
+    const nr = g.attributes.normal!, a = new THREE.Vector3(), b = new THREE.Vector3();
+    for (let j = 0; j <= nv; j++) {
+      const i0 = j * (nu + 1), i1 = i0 + nu;
+      a.fromBufferAttribute(nr, i0).add(b.fromBufferAttribute(nr, i1)).normalize();
+      nr.setXYZ(i0, a.x, a.y, a.z); nr.setXYZ(i1, a.x, a.y, a.z);
+    }
+  }
   return g;
 }
 
@@ -174,6 +183,7 @@ export function splitHead(d: Dresser, head: Field, mask: Field, box: Box, jawBox
     const p = g.attributes.position!, n = g.attributes.normal!, v = new THREE.Vector3();
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      if (Math.abs(mask(x, y, z)) > 0.12) continue;
       const h = head(x, y, z);
       if (h > 0.02 || h < -0.08) continue;
       fieldNormal(head, x, y, z, v, 0.015);
@@ -521,6 +531,9 @@ function hairAttribute(g: THREE.BufferGeometry): void {
 
 function vampHead(x: number, y: number, z: number): number {
   if (y < 15.0) return 15.1 - y;
+  // far outside a bound round the whole head, the bound will do (most of the grid's corners)
+  const b = sdEllipsoid(x, y, z, 0, 16.95, 0.15, 1.25, 1.95, 1.55);
+  if (b > 0.35) return b;
   return faceSDF(x, y, z);
 }
 
@@ -533,6 +546,8 @@ function headColour(x: number, y: number, z: number, c: THREE.Color): void {
     // a cut face, deep: the inside of the mouth, the front teeth along its edge (near the skin the cut keeps the skin's
     // colour, so the shut mouth's seam does not show)
     c.copy(z > LIP_Z - 0.24 && ax < 0.36 && Math.abs(y - cutY(z)) < 0.12 ? C_TEETH : C_MOUTH);
+    // the cheeks' insides, where the chin's sides part from them, a shadowed skin rather than a hole
+    if (ax > JAW_W - 0.05) c.copy(C_SHADE).multiplyScalar(0.55);
     return;
   }
   c.copy(C_SKIN);
@@ -648,7 +663,7 @@ function dress(d: Dresser): void {
   // --- the head: skull and face on the head bone, the lower jaw on the jaw bone, the mouth's inside on the cut
   splitHead(d, vampHead, jawMask,
     { min: [-1.12, 15.05, -1.28], max: [1.12, 18.62, 1.62] },
-    { min: [-0.8, 15.55, -0.25], max: [0.8, 16.75, 1.35] }, 60, 34,
+    { min: [-0.52, 15.55, -0.25], max: [0.52, 16.75, 1.35] }, 56, 30,
     headColour, vampHeadMaterial(), 'vamp', hairAttribute);
   addEyes(d, EYE, 0.13, 0xb01020, 0.55, 'vamp-eye', { look: [0.05, 0], lid: 0xa8a2ae, lidRest: 0.32, white: 0xe4ddd0, irisFrac: 0.62 });
   // sharp brows rising to their outer ends, on the brow ridge
