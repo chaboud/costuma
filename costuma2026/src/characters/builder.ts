@@ -193,7 +193,9 @@ function dress(d: Dresser): void {
   };
   const mesh = (g: THREE.BufferGeometry, m: THREE.Material, name = '') => { made.add(g); const o = new THREE.Mesh(g, m); o.name = name; return o; };
 
-  const lime = d.std({ color: 0xffffff, vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true, side: THREE.DoubleSide });
+  // a little lime of its own: under a camera's real (often warm, dim) light the green went olive; the costume it copies
+  // is a game's bright lime
+  const lime = d.std({ color: 0xffffff, vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true, side: THREE.DoubleSide, emissive: 0x2a4a12, emissiveIntensity: 1 });
   // the face is the one thing to read, deep in its hole under the hat: a faint glow of its own keeps it out of the shade
   const head = d.std({ color: 0xc4c1d0, emissive: 0xc4c1d0, emissiveIntensity: 0.05, roughness: 0.75 });
   const ink = d.std({ color: 0x141216, roughness: 0.5 });
