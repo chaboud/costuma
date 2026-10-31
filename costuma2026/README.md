@@ -112,20 +112,36 @@ in `src/main.ts`.
   all. The microphone (`audio/beat.ts`, off by default) turns bass onsets into
   `uBeat`.
 - **Faces** (`src/pose/face.ts`): MediaPipe FaceLandmarker (478 points, 52
-  blendshapes) beside the pose model, loaded in the background after Start,
-  run on the full frame; each face joins the person whose pose nose is
-  nearest; expressions and eye/mouth places EMA-smoothed (the jaw quickly).
-  A face the model cannot read keeps eyes and a mouth from the pose model's
-  own face points. An open mouth opens the costume's jaw (`CharacterDef.face.jaw`,
-  `rig.setJaw`), reaches each costume's `tick` (Skelly's jaw, Jack's lantern,
-  the kaiju's plates charging blue tail to neck), and breathes sparks
-  (`render/breath.ts`, colours, rate and speed per costume: `face.breath`).
-  Sparks fade within half a metre of the lens and never grow past a tenth of
-  the frame, or a breath toward the camera whites out the face. **Googly eyes** (`render/googly.ts`)
-  go on the person's eyes, or over the costume's (`face.eyes` anchors on the
-  head bone); their pupils are physics in eye-radius units — gravity from the
-  floor's up, the eye's own acceleration (smoothed, with a dead zone so a still
-  head does not buzz), rim bounces.
+  blendshapes, the face's 3D turn) beside the pose model, loaded in the
+  background after Start. Each person's face is read from a **crop round their
+  head**, where the pose model points (two people a frame, more take turns, a
+  12 ms budget): on the whole frame the face model's 128-px detector lost a face
+  smaller than ~140 px of 1280 (a person ~1 m off); on the crop it read faces
+  down to 46 px (~3 m), as far as the pose model found the person
+  (`scripts/face-probe.mjs`, a portrait shrunk in a 1280×720 frame). The crop
+  also says whose face it is. **The head turns as the face mesh says**: its
+  transformation matrix, turned by the ray to the crop so it matches our camera
+  (rolls read within 1–2°; the pose model's ears-and-nose head was 7° off at
+  rest, 13° off mirrored, and called near-profile heads 19–31°). Turned too far
+  for the face model, the pose model's head takes over, corrected by what the
+  face last said, the correction relaxing over seconds (`tests/face.test.ts`:
+  never more than 4° a frame). Every blendshape a costume can use is read into
+  `FaceState` (`characters/build.ts`): jaw, blinks, squints, wide eyes, gaze,
+  per-side smiles and brows, frown, pucker, funnel, sideways jaw, puff, sneer —
+  the blendshapes' "Left" is the person's own left (measured with an eye
+  painted shut). Smoothed by EMA, quick for the jaw and blinks. A face not read
+  this frame is carried along by the pose's nose for 0.4 s; then the pose
+  model's own face points give eyes and a mouth. Costumes move their faces in
+  their `tick` (`characters/faceparts.ts`: lids that blink, squint and widen;
+  eyes that look); an open mouth opens the costume's jaw (`face.jaw`,
+  `rig.setJaw`, sideways too) and breathes sparks (`render/breath.ts`, colours,
+  rate and speed per costume: `face.breath`; sparks fade within half a metre of
+  the lens and never grow past a tenth of the frame). **Googly eyes**
+  (`render/googly.ts`) go on the person's eyes, or over the costume's
+  (`face.eyes` anchors on the head bone); their pupils are physics in
+  eye-radius units — gravity from the floor's up, the eye's own acceleration
+  (smoothed, with a dead zone so a still head does not buzz), rim bounces. The
+  lab shows any face: `lab.html?c=<id>&focus=head&face=blinkL:1,lookX:0.8&jaw=0.6&head=20,0,10`.
 - **Floor** (`src/pose/ground.ts`): the pyramids stand on a ground plane
   estimated the way phone AR does without depth hardware. Up is the phone's
   gravity (`platform/motion.ts`, iOS asks at Start) when it agrees with the
@@ -180,6 +196,8 @@ that means here, and where each lives:
 | Swing from canonical directions | shortest arc from rest | arms overhead are ~180° from hanging: the arc's axis flips there |
 | Mirror the render | mirror the landmarks | a mirrored skeleton is a different-handed person; the costume faced away |
 | Static build committed to `2026/` | a deploy branch | costuma's Pages already serves `main`; one merge publishes it |
+| Faces from a crop round each head | the face model on the whole frame | the whole frame lost faces past ~1 m (its detector sees 128 px); crops read them to ~3 m and name whose face it is; costs one face read per person (two a frame, 12 ms budget) |
+| The head's turn from the face mesh | the pose model's ears and nose | measured: rolls within 1–2° against 7–13° off; profiles still fall back to the pose model |
 
 ## Things that bit already
 
