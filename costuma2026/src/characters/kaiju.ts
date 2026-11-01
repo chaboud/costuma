@@ -651,9 +651,9 @@ function faceTick(F: FaceParts, t: number, f: FaceState | null | undefined, char
       s.brow.position.set(s.browRest.x + sx * 0.06 * bd, s.browRest.y - 0.14 * bd + 0.12 * up + 0.22 * bo - 0.04 * sneer, s.browRest.z + 0.08 * bd);
       s.brow.rotation.x = 0.09 * bd - 0.07 * up + 0.02 * bo + 0.04 * sneer;
     }
-    // the upper lip lifts off the teeth, and out a little
+    // the upper lip lifts off the teeth, and out a little: a snarl, a roar, and on a smile's side a toothy smirk
     if (s.lip) {
-      const k = sneer + 0.25 * jaw * jaw;
+      const k = Math.min(1.2, sneer + 0.25 * jaw * jaw + 0.5 * sm);
       s.lip.position.set(s.lipRest.x + sx * 0.06 * k, s.lipRest.y + 0.3 * k, s.lipRest.z + 0.03 * k);
     }
     // the cheeks (an anchor at rest) swell out when the wearer puffs theirs
