@@ -29,6 +29,8 @@ node scripts/lab-shots.mjs <dir>     # characters on the turntable (C=ids POSES=
 node scripts/thumbs.mjs              # the picker's thumbnails → public/thumbs/ (rerun after changing a look)
 node scripts/app-shots.mjs <dir>     # the built app with synthetic people (C=ids N=2 T=0,1.5 DEBUG=1); build first
 node scripts/camera-e2e.mjs <clip.y4m> <dir>   # the built app on Chromium's fake camera: real MediaPipe (C= FACING= MODEL= W= H=)
+node scripts/face-probe.mjs <portrait.jpg> [profiles.jpg]   # what the face model finds: full frame vs head crops, head turn vs the truth
+node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill
 ```
 
 Make a test clip from any photo: `ffmpeg -loop 1 -i photo.jpg -t 3 -r 15 -pix_fmt yuv420p clip.y4m`.
@@ -161,6 +163,29 @@ in `src/main.ts`.
   the ratio of depths. Settings → Show the skeleton also draws the floor grid
   and says where up came from. The gravity mapping in landscape and for the
   front camera is reasoned, not measured on a phone — hence the agreement gate.
+- **Who counts as a person**: the pose model's detection and presence
+  thresholds are a setting (Detection threshold, 0.65 by default since
+  2026-11-01; MediaPipe's 0.5 before, which let coats and posters through:
+  founder, "some acquisition issues"), and the tracker shows nobody until
+  they have been found three frames running (`TUNE.confirm`, ~0.1 s), so a
+  one-frame false find never flashes a costume.
+- **Lenses** (`src/camera.ts`): where the stream can zoom (the `zoom`
+  constraint: Chrome on Android; Safari on iOS from 17.4 by a third party's
+  account, not checked), a pill above the shutter offers the phone's least
+  zoom (0.5 on an ultra-wide), 1×, 2×, 3×, 5× inside its range; an iPhone's
+  back camera changes lens by itself as the zoom passes them. Off iOS, a camera
+  that cannot zoom but has siblings facing the same way cycles through them by
+  device (never on iOS: its device ids change). The zoom scales the focal
+  length guess, so costumes keep their depth. Kept per facing in settings. What
+  a phone offers shows in the settings readout (`camera …`). Not yet seen on a
+  phone.
+- **Capture**: on an iPhone a photo or clip goes straight to the share sheet,
+  the file alone ("Save Image" / "Save Video" put it in Photos; a download lands
+  in Files), the shutter's tap standing as the gesture the sheet needs; if
+  Safari refuses that (or the sheet is dismissed) the preview opens with "Save
+  to Photos". Elsewhere the preview: Save downloads, Share is the sheet.
+  `scripts/capture-check.mjs` checks both paths with the sheet stubbed; whether
+  Safari honours the shutter's tap after the photo is encoded is not known.
 - **Stage** (`src/render/stage.ts`): the video is a full-screen background,
   cover-fitted; a selfie mirrors the whole world group (`scale.x = −1`), not
   the data — mirrored landmarks would describe a different-handed person.

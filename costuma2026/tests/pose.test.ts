@@ -82,7 +82,7 @@ describe('tracker', () => {
     const tr = new Tracker();
     const a = (x: number) => synthPerson({ T: { x, y: 0, z: -3 }, scale: 1 }, K);
     let t = 0;
-    tr.update([a(-0.8), a(0.8)], (t += 33), K);
+    for (let i = 0; i < 3; i++) tr.update([a(-0.8), a(0.8)], (t += 33), K);
     const idLeft = tr.tracks.find((k) => k.T.x < 0)!.id, idRight = tr.tracks.find((k) => k.T.x > 0)!.id;
     for (let i = 0; i < 20; i++) {
       const dets = i % 2 ? [a(-0.8 + i * 0.01), a(0.8 - i * 0.01)] : [a(0.8 - i * 0.01), a(-0.8 + i * 0.01)];
@@ -105,10 +105,24 @@ describe('tracker', () => {
     for (let i = 0; i < 40; i++) tr.update([], (t += 33), K);
     expect(tr.tracks.length).toBe(0);
   });
+  it('never shows a one-frame false find; shows a person found three frames running', () => {
+    const tr = new Tracker();
+    let t = 0;
+    const p = synthPerson({ T: { x: 0, y: 0, z: -3 } }, K);
+    tr.update([p], (t += 33), K);
+    expect(tr.tracks.length).toBe(0);
+    tr.update([], (t += 33), K);
+    tr.update([], (t += 33), K);
+    expect(tr.tracks.length).toBe(0);
+    for (let i = 0; i < 3; i++) tr.update([p], (t += 33), K);
+    expect(tr.tracks.length).toBe(1);
+    expect(tr.tracks[0]!.presence).toBeGreaterThan(0);
+  });
   it('smooths depth more than position', () => {
     const tr = new Tracker();
     let t = 0;
-    tr.update([synthPerson({ T: { x: 0, y: 0, z: -3 } }, K)], (t += 33), K);
+    // found in three frames (TUNE.confirm) before the move
+    for (let i = 0; i < 3; i++) tr.update([synthPerson({ T: { x: 0, y: 0, z: -3 } }, K)], (t += 33), K);
     tr.update([synthPerson({ T: { x: 0.1, y: 0, z: -3.5 } }, K)], (t += 33), K);
     const k = tr.tracks[0]!;
     const fx = k.T.x / 0.1, fz = (-3 - k.T.z) / 0.5;

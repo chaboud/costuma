@@ -13,7 +13,8 @@ export class Detector {
   inferMs = 0;
   /** cut-out masks per person (party mode): costs a GPU→CPU copy per person per frame */
   masks = false;
-  constructor(public model: ModelKind, public numPoses: number) {}
+  /** `conf`: how sure the model must be that a person is there, to find one (detection) and to keep them (presence) */
+  constructor(public model: ModelKind, public numPoses: number, public conf = 0.65) {}
 
   async load(onStage?: (s: string) => void): Promise<void> {
     const base = import.meta.env.BASE_URL;
@@ -24,8 +25,8 @@ export class Detector {
       baseOptions: { modelAssetPath: `${base}models/pose_landmarker_${this.model}.task`, delegate },
       runningMode: 'VIDEO',
       numPoses: this.numPoses,
-      minPoseDetectionConfidence: 0.5,
-      minPosePresenceConfidence: 0.5,
+      minPoseDetectionConfidence: this.conf,
+      minPosePresenceConfidence: this.conf,
       minTrackingConfidence: 0.5,
       outputSegmentationMasks: this.masks,
     });
@@ -40,7 +41,8 @@ export class Detector {
     }
   }
 
-  async setOptions(o: { numPoses?: number; masks?: boolean }): Promise<void> {
+  async setOptions(o: { numPoses?: number; masks?: boolean; conf?: number }): Promise<void> {
+    if (o.conf !== undefined && o.conf !== this.conf) { this.conf = o.conf; await this.lm?.setOptions({ minPoseDetectionConfidence: o.conf, minPosePresenceConfidence: o.conf }); }
     if (o.numPoses) { this.numPoses = o.numPoses; await this.lm?.setOptions({ numPoses: o.numPoses }); }
     if (o.masks !== undefined && o.masks !== this.masks) { this.masks = o.masks; await this.lm?.setOptions({ outputSegmentationMasks: o.masks }); }
   }

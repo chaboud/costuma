@@ -1,0 +1,89 @@
+// Capture and the lens pill, headless, with what headless Chromium lacks stubbed in:
+//  - as an iPhone (its user agent; a share sheet that records what it was handed): a photo goes straight to the sheet
+//    with the file alone; when the sheet refuses (no recent tap), the preview opens with "Save to Photos";
+//  - a camera that says it zooms 0.5–10× (Chrome's fake camera, its track's capabilities patched): the pill shows
+//    .5 1× 2 3 5, a tap zooms the track and the focal length follows.
+// Prints what it saw; exit 1 on a failure.   node scripts/capture-check.mjs <any.y4m>     (npm run build first)
+import { createRequire } from 'node:module';
+import { serveBuild } from './serve.mjs';
+import path from 'node:path';
+const { chromium } = createRequire(import.meta.url)('playwright');
+
+const clip = path.resolve(process.argv[2] ?? '');
+const server = await serveBuild();
+const fails = [];
+const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) fails.push(what); };
+const wake = (page) => page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+
+// ── as an iPhone: the share sheet ──
+{
+  const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 },
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1' });
+  await ctx.addInitScript(() => {
+    window.__shared = [];
+    window.__shareMode = 'ok';
+    navigator.canShare = (d) => !!d?.files?.length;
+    navigator.share = (d) => {
+      window.__shared.push({ keys: Object.keys(d), files: (d.files ?? []).map((f) => ({ name: f.name, type: f.type, size: f.size })) });
+      return window.__shareMode === 'refuse' ? Promise.reject(new DOMException('no activation', 'NotAllowedError')) : Promise.resolve();
+    };
+  });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.log('pageerror', e.message));
+  await page.goto(`${server.url}index.html?test=1&synth=1&c=skeleton`);
+  await page.waitForFunction(() => window.__costuma?.started && window.__costuma.frame > 3, null, { timeout: 300000, polling: 500 });
+  await wake(page); await page.waitForTimeout(200);
+  await page.evaluate(() => document.getElementById('btn-snap').click());
+  await page.waitForFunction(() => window.__shared.length >= 1, null, { timeout: 120000, polling: 250 }).catch(() => undefined);
+  const s1 = await page.evaluate(() => ({ shared: window.__shared, preview: !document.getElementById('preview').classList.contains('hidden') }));
+  console.log(JSON.stringify(s1.shared));
+  check(s1.shared.length === 1 && s1.shared[0].files[0]?.type === 'image/jpeg' && s1.shared[0].files[0].size > 10000, 'a photo goes to the share sheet as a jpeg file');
+  check(s1.shared[0]?.keys.join() === 'files', 'the sheet gets the file alone (no title or text)');
+  check(!s1.preview, 'no preview when the sheet opened');
+  await page.evaluate(() => { window.__shareMode = 'refuse'; });
+  await wake(page); await page.waitForTimeout(200);
+  await page.evaluate(() => document.getElementById('btn-snap').click());
+  await page.waitForFunction(() => !document.getElementById('preview').classList.contains('hidden'), null, { timeout: 120000, polling: 250 }).catch(() => undefined);
+  const s2 = await page.evaluate(() => ({ preview: !document.getElementById('preview').classList.contains('hidden'), share: document.getElementById('btn-share').textContent, save: document.getElementById('btn-save').textContent, note: document.getElementById('preview-note').textContent }));
+  console.log(JSON.stringify(s2));
+  check(s2.preview && s2.share === 'Save to Photos' && /Save Image/.test(s2.note), 'refused: the preview offers Save to Photos and says which button to pick');
+  if (process.env.SHOT) await page.screenshot({ path: path.resolve(process.env.SHOT) });
+  await browser.close();
+}
+
+// ── a camera that zooms ──
+{
+  const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-video-capture=${clip}`] });
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['camera'] });
+  await ctx.addInitScript(() => {
+    const P = MediaStreamTrack.prototype, caps = P.getCapabilities, sets = P.getSettings, apply = P.applyConstraints;
+    window.__zoomCalls = [];
+    P.getCapabilities = function () { return { ...caps.call(this), zoom: { min: 0.5, max: 10, step: 0.1 } }; };
+    P.getSettings = function () { return { ...sets.call(this), zoom: this.__zoom ?? 1 }; };
+    P.applyConstraints = function (c) { const z = c?.advanced?.[0]?.zoom; if (z !== undefined) { this.__zoom = z; window.__zoomCalls.push(z); return Promise.resolve(); } return apply.call(this, c); };
+    localStorage.setItem('costuma26.settings', JSON.stringify({ model: 'lite', v: 6 }));
+  });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.log('pageerror', e.message));
+  await page.goto(`${server.url}index.html?c=skeleton&facing=environment`);
+  await page.click('#btn-start');
+  await page.waitForFunction(() => window.__costuma?.started, null, { timeout: 300000 });
+  const pill = await page.evaluate(() => [...document.querySelectorAll('#lens button')].map((b) => b.textContent));
+  console.log('pill', pill.join(' '));
+  if (process.env.SHOT2) { await page.waitForTimeout(1500); await page.screenshot({ path: path.resolve(process.env.SHOT2) }); }
+  check(pill.join(' ') === '.5 1× 2 3 5', 'the pill offers .5 1× 2 3 5');
+  const f1 = await page.evaluate(() => window.__costuma.intrinsics().f);
+  await wake(page); await page.waitForTimeout(200);
+  await page.evaluate(() => [...document.querySelectorAll('#lens button')].find((b) => b.textContent === '.5').click());
+  await page.waitForFunction(() => window.__costuma.camera.zoom === 0.5, null, { timeout: 20000, polling: 100 }).catch(() => undefined);
+  await page.waitForTimeout(600);
+  const after = await page.evaluate(() => ({ zoom: window.__costuma.camera.zoom, f: window.__costuma.intrinsics().f, calls: window.__zoomCalls, pill: [...document.querySelectorAll('#lens button')].map((b) => b.textContent).join(' '), saved: window.__costuma.settings.zoom }));
+  console.log(JSON.stringify({ f1, ...after }));
+  check(after.zoom === 0.5 && Math.abs(after.f / f1 - 0.5) < 1e-6, 'a tap on .5 zooms the track and halves the focal length');
+  check(after.pill === '.5× 1 2 3 5' && after.saved.environment === 0.5, 'the pill marks .5× and the setting keeps it');
+  await browser.close();
+}
+await server.close();
+console.log(fails.length ? `${fails.length} failed` : 'all ok');
+process.exit(fails.length ? 1 : 0);

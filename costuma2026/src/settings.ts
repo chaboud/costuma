@@ -5,6 +5,10 @@ export interface Settings {
   size: number;
   /** the lens guess: focal length as a share of the long side (pose/solve.ts) */
   lens: number;
+  /** how sure the pose model must be that someone is there (0..1): its detection and presence thresholds */
+  poseConf: number;
+  /** the camera's zoom per facing (1: its main lens; 0.5 the ultra-wide where the phone offers it) */
+  zoom: { user?: number; environment?: number };
   envLight: boolean;
   shadows: boolean;
   debug: boolean;
@@ -35,7 +39,7 @@ export interface Settings {
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 5 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 6 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
@@ -57,6 +61,11 @@ export function loadSettings(): Settings {
     // v5: a rotation of seven by default; the rest wait under "More" (founder, 2026-10-31)
     if (v < 5) s.cast = [...DEFAULTS.cast];
     if (!Array.isArray(s.cast) || !s.cast.length) s.cast = [...DEFAULTS.cast];
+    // v6 (2026-11-01): the pose threshold, MediaPipe's 0.5 until now, is a setting and higher (founder: "our pose
+    // threshold is too low. Some acquisition issues")
+    if (v < 6) s.poseConf = DEFAULTS.poseConf;
+    if (!(s.poseConf >= 0.3 && s.poseConf <= 0.95)) s.poseConf = DEFAULTS.poseConf;
+    if (!s.zoom || typeof s.zoom !== 'object') s.zoom = {};
     // Violet took the Valkyrie's place: whoever wore the Valkyrie wears Violet
     if (s.costume === 'valkyrie') s.costume = 'violet';
     if (s.partyCast === 'valkyrie') s.partyCast = 'violet';

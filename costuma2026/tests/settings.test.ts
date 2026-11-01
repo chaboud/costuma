@@ -13,7 +13,7 @@ describe('settings', () => {
   it('moves settings from before v2 to the new party default, once', () => {
     store({ effect: 'pop', partyCostumes: false, people: 3 });
     const s = loadSettings();
-    expect([s.effect, s.partyCostumes, s.partyCast, s.people, s.v, s.model]).toEqual(['insitu', 'behind', 'skeleton', 3, 5, 'full']);
+    expect([s.effect, s.partyCostumes, s.partyCast, s.people, s.v, s.model]).toEqual(['insitu', 'behind', 'skeleton', 3, 6, 'full']);
     // already v2: a party choice made since stays, but the model moves to full (v3)
     store({ effect: 'pop', partyCostumes: 'off', model: 'lite', v: 2 });
     expect([loadSettings().effect, loadSettings().partyCostumes, loadSettings().model]).toEqual(['pop', 'off', 'full']);
@@ -26,6 +26,14 @@ describe('settings', () => {
     expect([loadSettings().effect, loadSettings().pyramid]).toEqual(['insitu', true]);
     store({ effect: 'lasers', pyramid: false, v: 4 });
     expect([loadSettings().effect, loadSettings().pyramid]).toEqual(['lasers', false]);
+  });
+  it('the pose threshold: raised for everyone once (v6), a chosen one stays after', () => {
+    store({ people: 2, v: 5 });
+    expect(loadSettings().poseConf).toBe(0.65);
+    store({ poseConf: 0.8, v: 6 });
+    expect(loadSettings().poseConf).toBe(0.8);
+    store({ poseConf: 7, v: 6 });
+    expect(loadSettings().poseConf).toBe(0.65);
   });
   it('the rotation: the usual seven by default; a chosen one stays', () => {
     store({ v: 4 });

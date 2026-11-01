@@ -20,8 +20,10 @@ export interface Track {
   /** hip centre in camera space, metres (three's axes) */
   T: { x: number; y: number; z: number };
   len: ReturnType<typeof bodyLengths>;
-  /** 0..1, fades in when found and out when lost */
+  /** 0..1, fades in when found (once confirmed) and out when lost */
   presence: number;
+  /** frames this track has been found in: under TUNE.confirm it is not shown, and lost it is dropped at once */
+  hits: number;
   lost: boolean;
   /** the detection this track took this frame, if any (its mask, in party mode) */
   det: Detection | null;
@@ -41,6 +43,9 @@ export const TUNE = {
    */
   tauCore: 0.09,
   fadeIn: 0.22, fadeOut: 0.35, forgetAfter: 0.6,
+  /** frames a new person must be found in before they show: a one-frame false find (a coat, a poster) never flashes a
+   *  costume (founder, 2026-11-01: "some acquisition issues") — ~0.1 s at 30 fps, under the fade-in anyway */
+  confirm: 3,
   /** a detection joins a track within this many of the track's torso lengths (in the image) */
   matchRadius: 1.3,
 };
@@ -84,7 +89,10 @@ function shiftTogether(out: LM[], inp: LM[]): void {
 }
 
 export class Tracker {
+  /** the people the rest of the app sees: confirmed (TUNE.confirm frames found), fading in, present or fading out */
   tracks: Track[] = [];
+  /** every track, the unconfirmed ones too */
+  private all: Track[] = [];
   private nextId = 1;
   private last = -1;
 
@@ -94,7 +102,7 @@ export class Tracker {
     this.last = now;
     // a detection we cannot place is no detection
     const placed = dets.map((d) => ({ d, T: solveTranslation(d.world, d.image, K), c: center(d.image) })).filter((p) => p.T);
-    const live = this.tracks.filter((t) => !t.lost || t.presence > 0);
+    const live = this.all.filter((t) => !t.lost || t.presence > 0);
     const pairs: { ti: number; di: number; cost: number }[] = [];
     live.forEach((t, ti) => {
       const tc = center(t.image);
@@ -132,19 +140,22 @@ export class Tracker {
       t.seen = now;
       t.lost = false;
       t.det = p.d;
+      t.hits++;
     }
     placed.forEach((p, di) => {
       if (usedD.has(di)) return;
       const world = copyLM(p.d.world);
-      this.tracks.push({ id: this.nextId++, born: now, seen: now, image: copyLM(p.d.image), world, T: { ...p.T! }, len: bodyLengths(world), presence: 0, lost: false, det: p.d });
+      this.all.push({ id: this.nextId++, born: now, seen: now, image: copyLM(p.d.image), world, T: { ...p.T! }, len: bodyLengths(world), presence: 0, hits: 1, lost: false, det: p.d });
     });
-    for (const t of this.tracks) {
+    for (const t of this.all) {
       if (t.seen !== now) { t.lost = true; t.det = null; }
-      t.presence = t.lost ? Math.max(0, t.presence - dt / TUNE.fadeOut) : Math.min(1, t.presence + dt / TUNE.fadeIn);
+      const confirmed = t.hits >= TUNE.confirm;
+      t.presence = t.lost ? Math.max(0, t.presence - dt / TUNE.fadeOut) : confirmed ? Math.min(1, t.presence + dt / TUNE.fadeIn) : 0;
     }
-    this.tracks = this.tracks.filter((t) => !(t.lost && t.presence <= 0 && now - t.seen > TUNE.forgetAfter * 1000));
+    this.all = this.all.filter((t) => !(t.lost && t.hits < TUNE.confirm) && !(t.lost && t.presence <= 0 && now - t.seen > TUNE.forgetAfter * 1000));
+    this.tracks = this.all.filter((t) => t.hits >= TUNE.confirm);
     return this.tracks;
   }
 
-  clear(): void { this.tracks = []; this.last = -1; }
+  clear(): void { this.tracks = []; this.all = []; this.last = -1; }
 }

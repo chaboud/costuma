@@ -1,7 +1,7 @@
 // costuma 2026: the boot, the frame loop and the HUD. Camera → MediaPipe pose (several people, 3D) → tracker (stable
 // ids) → each person's costume posed and placed in camera space → drawn over the camera frame, lit by it.
 import './style.css';
-import { Camera } from './camera';
+import { Camera, isIOS } from './camera';
 import { Detector } from './pose/detector';
 import { Tracker, type Detection, type Track } from './pose/tracker';
 import { guessIntrinsics, project, type Intrinsics } from './pose/solve';
@@ -19,7 +19,7 @@ import { parseFace, type CharacterDef } from './characters/build';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { ICONS } from './ui/icons';
 import { pageUrl, qrSvg } from './ui/qr';
-import { recorderMime, saveFile, shareFile } from './ui/share';
+import { canShareFile, recorderMime, saveFile, shareFile } from './ui/share';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const BASE = import.meta.env.BASE_URL;
@@ -351,6 +351,7 @@ function buildSettings(): void {
   };
   row(settings.scene === 'party' ? 'Subjects' : 'People', settings.scene === 'party' ? 'How many people to cut out (the nearest)' : 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); }));
   row('Costume size', 'Bigger hides more of the person', range(0.8, 1.5, 0.01, () => settings.size, (v) => { settings.size = v; stage.opts.size = v; }));
+  row('Detection threshold', 'Higher ignores what only looks like a person (coats, posters, shadows); lower finds people further off or half hidden', range(0.4, 0.9, 0.05, () => settings.poseConf, (v) => { settings.poseConf = v; void detector?.setOptions({ conf: v }); }));
   row('Pose model', 'Accurate is steadier, slower to load and run', seg<'lite' | 'full'>([['lite', 'Fast'], ['full', 'Accurate']], () => settings.model, (v) => { settings.model = v; void reloadDetector(); }));
   row('Light from the camera', 'The costume is lit by the room it stands in', sw(() => settings.envLight, (v) => { settings.envLight = v; stage.opts.envLight = v; }));
   row('Shadows', 'Off is faster on older phones', sw(() => settings.shadows, (v) => { settings.shadows = v; stage.opts.shadows = v; }));
@@ -390,10 +391,31 @@ function preview(blob: Blob, name: string): void {
   } else {
     const i = new Image(); i.src = url; box.appendChild(i);
   }
+  // on an iPhone the sheet is how a file gets into Photos; a download would land in Files
+  const ios = isIOS() && canShareFile(blob, name);
+  $('btn-share').textContent = ios ? 'Save to Photos' : 'Share';
+  $('btn-save').textContent = ios ? 'Download' : 'Save';
+  $('preview-note').textContent = ios ? `In the sheet, choose “Save ${blob.type.startsWith('video') ? 'Video' : 'Image'}”.` : '';
   openModal('preview');
 }
 $('btn-share').onclick = async () => { if (lastCapture) { const r = await shareFile(lastCapture.blob, lastCapture.name); if (r === 'saved') toast('Saved'); } };
 $('btn-save').onclick = () => { if (lastCapture) { saveFile(lastCapture.blob, lastCapture.name); toast('Saved'); } };
+/**
+ * A photo or a clip just taken. On an iPhone, straight to the share sheet ("Save Image" / "Save Video": into Photos),
+ * the shutter's tap still counting as the gesture the sheet needs; if Safari will not open it from there, or it is
+ * dismissed, the preview, whose "Save to Photos" is a fresh tap. Elsewhere the preview: Save downloads (on Android a
+ * download shows in the gallery), Share is the sheet.
+ */
+async function captured(blob: Blob, name: string): Promise<void> {
+  lastCapture = { blob, name };
+  if (isIOS() && canShareFile(blob, name)) {
+    if (!shareHinted) { shareHinted = true; toast(blob.type.startsWith('video') ? 'Choose “Save Video” to put it in Photos' : 'Choose “Save Image” to put it in Photos', 2600); }
+    const r = await shareFile(blob, name, false);
+    if (r === 'shared') return;
+  }
+  preview(blob, name);
+}
+let shareHinted = false;
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 
 let recorder: MediaRecorder | null = null;
@@ -415,7 +437,7 @@ function toggleRecording(): void {
     recorder = null;
     btn.classList.remove('on'); btn.innerHTML = ICONS.rec;
     const type = mime.split(';')[0]!;
-    preview(new Blob(chunks, { type }), `costuma-${stamp()}.${type.includes('mp4') ? 'mp4' : 'webm'}`);
+    void captured(new Blob(chunks, { type }), `costuma-${stamp()}.${type.includes('mp4') ? 'mp4' : 'webm'}`);
   };
   r.start(250);
   recorder = r;
@@ -489,7 +511,37 @@ function detectionInput(): HTMLVideoElement | HTMLCanvasElement {
 }
 let fps = 0, fpsT = performance.now(), fpsN = 0;
 function intrinsics(): Intrinsics {
-  return guessIntrinsics(video.videoWidth || 720, video.videoHeight || 1280, settings.lens);
+  // zoomed, the same sensor sees a narrower view: the focal length grows with the zoom (0.5: an ultra-wide)
+  return guessIntrinsics(video.videoWidth || 720, video.videoHeight || 1280, settings.lens * (camera.zoom > 0 ? camera.zoom : 1));
+}
+
+/** the lens pill: the camera's zoom stops, or its other lenses; empty (hidden) when it offers no choice */
+function renderLens(): void {
+  const box = $('lens');
+  box.innerHTML = '';
+  if (SYNTH) return;
+  const stops = camera.stops();
+  const cur = camera.zoomRange
+    ? stops.reduce((b, s, i) => (Math.abs(s.zoom - camera.zoom) < Math.abs(stops[b]!.zoom - camera.zoom) ? i : b), 0)
+    : camera.lens;
+  stops.forEach((st, i) => {
+    const b = document.createElement('button');
+    const on = i === cur;
+    b.textContent = on ? st.label + '×' : st.label;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-label', camera.zoomRange ? `Zoom ${st.label}×` : `Camera ${st.label}`);
+    b.onclick = () => {
+      if (on) return;
+      dip(async () => {
+        try {
+          if (st.zoom > 0) { await camera.setZoom(st.zoom); settings.zoom[camera.facing] = camera.zoom; persist(); }
+          else { await camera.nextLens(-1 - st.zoom); stage.setVideo(video); }
+        } catch (e) { toast(`Camera: ${(e as Error).message}`); }
+        renderLens();
+      });
+    };
+    box.appendChild(b);
+  });
 }
 function loop(now: number): void {
   requestAnimationFrame(loop);
@@ -553,7 +605,7 @@ function loop(now: number): void {
   stage.render(video, K, frame);
   if (snapWanted) {
     snapWanted = false;
-    canvas.toBlob((b) => b && preview(b, `costuma-${stamp()}.jpg`), 'image/jpeg', 0.92);
+    canvas.toBlob((b) => { if (b) void captured(b, `costuma-${stamp()}.jpg`); }, 'image/jpeg', 0.92);
   }
   const live = tracker.tracks.filter((t) => !t.lost).length;
   if (live) lastSeen = now;
@@ -627,6 +679,7 @@ function readout(): void {
     `build ${__BUILD__}`,
     `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'}`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
+    `camera ${camera.describe()}`,
     `people ${tracker.tracks.filter((t) => !t.lost).length} · dressed ${stage.count}`,
     ...tracker.tracks.filter((t) => !t.lost && t.face).map((t) => {
       const f = t.face!, e = new THREE.Euler().setFromQuaternion(f.head, 'YXZ'), d = (r: number) => Math.round(THREE.MathUtils.radToDeg(r));
@@ -642,7 +695,7 @@ function readout(): void {
 async function reloadDetector(): Promise<void> {
   if (SYNTH) return;
   const old = detector;
-  const d = new Detector(settings.model, settings.people);
+  const d = new Detector(settings.model, settings.people, settings.poseConf);
   d.masks = settings.scene === 'party';
   await d.load((s) => toast(s, 2500));
   detector = d;
@@ -688,9 +741,10 @@ async function start(): Promise<void> {
     } else {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error(location.protocol !== 'https:' ? 'The camera needs an https:// page.' : 'This browser has no camera access.');
       status.textContent = 'Asking for the camera…';
-      await camera.open();
+      await camera.open(camera.facing, settings.zoom[camera.facing] ?? 1);
+      renderLens();
       status.textContent = 'Loading the pose model…';
-      detector = new Detector(settings.model, settings.people);
+      detector = new Detector(settings.model, settings.people, settings.poseConf);
       detector.masks = settings.scene === 'party';
       await detector.load((s) => { status.textContent = s[0]!.toUpperCase() + s.slice(1) + '…'; });
     }
@@ -744,7 +798,7 @@ function boot(): void {
   $('btn-gear').onclick = () => { buildSettings(); openModal('settings'); readout(); };
   $('btn-flip').onclick = async () => {
     if (SYNTH) return;
-    dip(async () => { try { await camera.flip(); stage.setVideo(video); tracker.clear(); overrides.clear(); mixed.clear(); } catch (e) { toast(`Camera: ${(e as Error).message}`); } });
+    dip(async () => { try { await camera.flip(settings.zoom[camera.facing === 'user' ? 'environment' : 'user'] ?? 1); stage.setVideo(video); tracker.clear(); overrides.clear(); mixed.clear(); } catch (e) { toast(`Camera: ${(e as Error).message}`); } renderLens(); });
   };
   $('btn-snap').onclick = () => { snapWanted = true; const f = $('stage'); f.style.filter = 'brightness(1.8)'; setTimeout(() => (f.style.filter = ''), 120); };
   $('btn-rec').onclick = toggleRecording;
@@ -755,7 +809,7 @@ function boot(): void {
   scrollablePicker($('picker'));
   requestAnimationFrame(loop);
   const w = window as unknown as { __costuma: unknown };
-  w.__costuma = { stage, tracker, settings, start, choose, party, beat, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, LIGHT_TUNE };
+  w.__costuma = { stage, tracker, settings, start, choose, party, beat, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, LIGHT_TUNE, camera, intrinsics };
   if (TEST && SYNTH) void start();
 }
 boot();

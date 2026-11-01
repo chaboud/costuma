@@ -144,3 +144,12 @@ h1 { font-size: 46px; margin: 0 0 8px; letter-spacing: -0.01em; }
 .more-card .name { font-size: 12px; font-weight: 600; }
 .more-card .tick { position: absolute; top: 4px; right: 6px; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 800; background: rgba(0,0,0,0.5); }
 .more-card.on .tick { background: var(--pumpkin); color: #1b0d02; }
+
+/* the lens pill: 0.5 · 1× · 2 · 3, as a phone's camera app has it */
+.lens { display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 10px; pointer-events: none; min-height: 0; }
+.lens:empty { display: none; }
+.lens button { pointer-events: auto; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, 0.45); color: #fff;
+  font: 600 12px/1 system-ui, sans-serif; display: grid; place-items: center; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.lens button.on { width: 40px; height: 40px; color: #ffd34d; font-size: 13px; }
+.preview-note { text-align: center; margin: 8px 0 0; min-height: 0; }
+.preview-note:empty { display: none; }
