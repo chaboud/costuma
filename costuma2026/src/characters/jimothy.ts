@@ -251,8 +251,8 @@ export function jimothyRegion(x: number, y: number, z: number): number {
   const ax = Math.abs(x);
   if (Math.hypot(x, y - JIMOTHY_NOSE[1], z - JIMOTHY_NOSE[2]) < 0.62) return 3;
   const p = parts(x, y, z), m = p.min;
-  // (the lip's own fillet stays pale, so no red shows at the line while the mouth is shut)
-  if (p.head === m && inMouth(p) && p.raw < -0.08) return 6;
+  // (the lip's own fillet is dark, not red: the line a shut mouth shows)
+  if (p.head === m && inMouth(p)) return p.raw < -0.08 ? 6 : 2;
   if (p.head === m) {
     // a bandit's mask: a dark oval round each eye drooping back toward the cheek, a dark stripe up the bridge from the
     // nose to the crown, a white arc over each eye, white from the muzzle down. In face coordinates, so it moves with SK
@@ -284,6 +284,8 @@ export function jimothyFurLength(x: number, y: number, z: number): number {
   const p = parts(x, y, z), m = p.min;
   if (p.head === m) {
     if (inMouth(p)) return 0;
+    // bare along the mouth line: the fur's coarser shell cannot follow the cut, and strands there took the mouth's colour
+    if (Math.abs(overMouth(y - SK[1], z - SK[2])) < 0.09 && z - SK[2] > HINGE_Z - 0.2 && ax < MOUTH_W + 0.1) return 0;
     const hy = y - SK[1], hz = z - SK[2];
     if (hy > 1.4 && ax > 0.9 && hz < 0.1) return 0.5; // the ears
     if (ax > 1.4 && hy < 0 && hz < 1.5) return 1.35; // the cheek ruff
@@ -342,11 +344,13 @@ const jimothyCapture: Capture = (sg, x, y, z) => {
 // ---- the face ----
 
 const JIM_FUR = { length: 1.0, density: 7, tip: 0.18 };
-const PALE = new THREE.Color(0xe6e0d2), MOUTH = new THREE.Color(0x5a262a);
+const PALE = new THREE.Color(0xe6e0d2), MOUTH = new THREE.Color(0x5a262a), LIP = new THREE.Color(0x2a2420);
 
 /** the jaw's colours: its top inside the upper lip is the mouth's, the rest the pale chin */
 function jawColour(x: number, y: number, z: number, c: THREE.Color): void {
-  c.copy(overMouth(y - SK[1], z - SK[2]) > -0.06 && Math.abs(x) < 0.3 ? MOUTH : PALE);
+  // on top, the mouth only well inside the upper lip's footprint; at its rim a dark lip, the line a shut mouth shows
+  const hy = y - SK[1], hz = z - SK[2], top = overMouth(hy, hz) > -0.06;
+  c.copy(top ? (headRaw(x, Math.abs(x), hy + 0.02, hz) < -0.15 ? MOUTH : LIP) : PALE);
 }
 /** the jaw's coat: short and pale on the chin, none on the cut faces a closed mouth hides */
 function jawFur(x: number, y: number, z: number): number {

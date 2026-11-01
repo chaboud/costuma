@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import type { CharacterDef, Capture, Dresser } from './build';
 import { HERO_BOX, HERO_SEGMENTS, heroRegion, heroSDF } from './hero';
-import { WOLF_BOX, WOLF_EYES, WOLF_SEGMENTS, wolfFurLength, wolfRegion, wolfSDF } from './wolf';
+import { WOLF_BOX, WOLF_EYES, WOLF_PALETTE, WOLF_SEGMENTS, howlerDress, howlerTick, wolfFurLength, wolfRegion, wolfSDF } from './wolf';
 import { PLUME_BOX, PLUME_EYES, PLUME_SEGMENTS, dressPlume, plumeCapture, plumeFeatherLength, plumeRegion, plumeSDF, tickPlume } from './plume';
 import { MECH_BOX, MECH_SEGMENTS, mechRegion, mechSDF } from './mech';
 import { KESTREL_BOX, UNISON_BOX, kestrelRegion, kestrelSDF, unisonRegion, unisonSDF } from './robots';
@@ -73,12 +73,11 @@ const WOLF_COSTUME_SEGS = WOLF_SEGMENTS.map((s) => (/^(arm|forearm)/.test(s.name
 export const HOWLER: CharacterDef = {
   id: 'howler', name: 'Howler', blurb: 'A wolf man with amber eyes',
   segs: WOLF_COSTUME_SEGS,
-  body: { sdf: (x, y, z) => wolfSDF(x, y, z), region: wolfRegion, box: WOLF_BOX, palette: [0x77706a, 0xb8afa0, 0x34302c, 0x121010],
+  body: { sdf: (x, y, z) => wolfSDF(x, y, z), region: wolfRegion, box: WOLF_BOX, palette: WOLF_PALETTE,
     capture: capture({ tail: -1.5 }), fur: { length: 0.8, density: 7, tip: 0.22 }, furLen: wolfFurLength },
-  dress(d) {
-    const m = glowMat(d, 0xffb020, 1.8);
-    for (const sx of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 8), m); e.scale.set(1.2, 0.8, 0.8); d.at(e, 'head', sx * WOLF_EYES[0], WOLF_EYES[1], WOLF_EYES[2]); }
-  },
+  // the face (wolf.ts): glowing eyes under lids, a furred jaw with fangs, brows, ears and lips on face bones
+  dress: howlerDress,
+  tick: howlerTick,
   fit: { size: 1.1, limb: 0.6 },
   idle: { tail: 0.25 },
   face: { jaw: 0.45, eyes: [[WOLF_EYES[0], WOLF_EYES[1], WOLF_EYES[2] + 0.12, 0.3], [-WOLF_EYES[0], WOLF_EYES[1], WOLF_EYES[2] + 0.12, 0.3]] },

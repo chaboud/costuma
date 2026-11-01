@@ -98,7 +98,7 @@ function FACE_SEGMENTS(): Seg[] {
   }
   return out;
 }
-/** the face bones that move, and the anchors that only hold the skin still round them */
+/** the face bones that move, and the anchors that only hold the skin still round them (the cheeks, also puffed) */
 const FACE_MOVERS = ['browL', 'browR', 'lipL', 'lipR'];
 const FACE_ANCHORS = ['bridge', 'crownL', 'crownR', 'cheekL', 'cheekR', 'snoutL', 'snoutR'];
 
@@ -476,12 +476,26 @@ function dress(d: Dresser): void {
   // ---- teeth: bone cones along the upper lip, pointing down, and inside them along the lower jaw, pointing up ----
   const tooth = d.std({ color: 0xece6d4, roughness: 0.45 });
   const upper: THREE.BufferGeometry[] = [], lower: THREE.BufferGeometry[] = [];
+  // (an upper tooth has a root up into the jaw, hidden until a snarl lifts the lip off it: a cone alone showed its flat
+  // base. It leans in and back from the tooth, as the jaw's side and front do above the lip, or it shows through them)
+  const Y = new THREE.Vector3(0, 1, 0), dir = new THREE.Vector3();
+  const root = (x: number, y: number, z: number, r: number) => {
+    dir.set(-Math.sign(x) * ROOT_IN, ROOT_LEN, z > 6 ? -ROOT_BACK : 0);
+    const len = dir.length();
+    // (it starts inside the cone, slimmer than it there, so no edge of it shows at the lip's rounded rim)
+    upper.push(new THREE.CylinderGeometry(r * 0.42, r * 0.68, len, 6).translate(0, len / 2, 0)
+      .applyQuaternion(new THREE.Quaternion().setFromUnitVectors(Y, dir.normalize())).translate(x, y - 0.1, z));
+  };
   for (let i = 0; i < 7; i++) for (const sx of [-1, 1]) {
     const z = 2.3 + i * 0.6, big = i === 4 ? 1.35 : 1;
     upper.push(new THREE.ConeGeometry(0.15 * big, 0.55 * big, 6).rotateX(Math.PI).translate(sx * (lipW(z) - 0.14), MOUTH_Y - 0.22 * big, z));
+    root(sx * (lipW(z) - 0.14), MOUTH_Y + 0.055 * big, z, 0.15 * big);
     lower.push(new THREE.ConeGeometry(0.12, 0.42, 6).translate(sx * (lipW(z) - 0.45), MOUTH_Y + 0.14, z + 0.3));
   }
-  for (const sx of [-1, 1]) upper.push(new THREE.ConeGeometry(0.13, 0.42, 6).rotateX(Math.PI).translate(sx * 0.32, MOUTH_Y - 0.17, 6.75));
+  for (const sx of [-1, 1]) {
+    upper.push(new THREE.ConeGeometry(0.13, 0.42, 6).rotateX(Math.PI).translate(sx * 0.32, MOUTH_Y - 0.17, 6.75));
+    root(sx * 0.32, MOUTH_Y + 0.04, 6.75, 0.13);
+  }
   d.at(new THREE.Mesh(mergeGeometries(upper)!, tooth), 'head', 0, 0, 0);
   d.at(new THREE.Mesh(mergeGeometries(lower)!, tooth), 'jaw', 0, 0, 0);
 
@@ -538,6 +552,8 @@ function socketTurn(sx: number): THREE.Quaternion {
   const y = new THREE.Vector3().crossVectors(z, x);
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
 }
+/** an upper tooth's root: how far it rises over the tooth's base, and leans in (and back, at the front) */
+const ROOT_LEN = 0.5, ROOT_IN = 0.32, ROOT_BACK = 0.42;
 /** the lids' scale-up (see dress), and the slit's width (× its sphere's radius) at rest */
 const LID_K = 2.3, PUPIL_W = 0.35;
 
@@ -553,14 +569,19 @@ const HALO = new THREE.Color(GLOW);
 interface FaceSide {
   ball: THREE.Object3D | null; pupil: THREE.Object3D | null; up: THREE.Object3D | null; lo: THREE.Object3D | null;
   upOpen: number; upShut: number; loOpen: number; loShut: number;
-  brow: THREE.Object3D | null; lip: THREE.Object3D | null; browRest: THREE.Vector3; lipRest: THREE.Vector3;
+  brow: THREE.Object3D | null; lip: THREE.Object3D | null; cheek: THREE.Object3D | null;
+  browRest: THREE.Vector3; lipRest: THREE.Vector3; cheekRest: THREE.Vector3;
 }
-interface FaceParts { side: [FaceSide, FaceSide] }
+interface FaceParts { side: [FaceSide, FaceSide]; jaw: THREE.Object3D | null }
 function findFace(root: THREE.Object3D): FaceParts {
-  const side = (): FaceSide => ({ ball: null, pupil: null, up: null, lo: null, upOpen: 0, upShut: 0, loOpen: 0, loShut: 0, brow: null, lip: null, browRest: new THREE.Vector3(), lipRest: new THREE.Vector3() });
-  const f: FaceParts = { side: [side(), side()] };
+  const side = (): FaceSide => ({
+    ball: null, pupil: null, up: null, lo: null, upOpen: 0, upShut: 0, loOpen: 0, loShut: 0,
+    brow: null, lip: null, cheek: null, browRest: new THREE.Vector3(), lipRest: new THREE.Vector3(), cheekRest: new THREE.Vector3(),
+  });
+  const f: FaceParts = { side: [side(), side()], jaw: null };
   root.traverse((o) => {
-    const m = /^(kaiju-eye|kaiju-pupil|kaiju-lids|brow|lip)([LR])$/.exec(o.name);
+    if ((o as THREE.Bone).isBone && o.name === 'jaw') f.jaw = o;
+    const m = /^(kaiju-eye|kaiju-pupil|kaiju-lids|brow|lip|cheek)([LR])$/.exec(o.name);
     if (!m) return;
     const sd = f.side[m[2] === 'L' ? 0 : 1];
     if (m[1] === 'kaiju-eye') sd.ball = o;
@@ -572,6 +593,7 @@ function findFace(root: THREE.Object3D): FaceParts {
       setLids(o, 1, 0, 0); sd.upShut = sd.up?.rotation.x ?? 0; sd.loShut = sd.lo?.rotation.x ?? 0;
     } else if ((o as THREE.Bone).isBone && m[1] === 'brow') { sd.brow = o; sd.browRest.copy(o.position); }
     else if ((o as THREE.Bone).isBone && m[1] === 'lip') { sd.lip = o; sd.lipRest.copy(o.position); }
+    else if ((o as THREE.Bone).isBone && m[1] === 'cheek') { sd.cheek = o; sd.cheekRest.copy(o.position); }
   });
   return f;
 }
@@ -580,6 +602,11 @@ const clamp01k = (v: number) => Math.max(0, Math.min(1, v));
 const ramp = (v: number, lo: number, hi: number) => clamp01k((v - lo) / (hi - lo));
 /** how far the upper lids hang over the eyes at rest: a heavy, glowering lid */
 const KLID_REST = 0.2;
+/** the jaw's full opening (radians, face.jaw) and its sideways swing at a full jawSide: the rig swings every jaw 0.16 rad
+ *  (rig.setJaw), which on this long snout put a shut chin 0.8 m off the upper jaw's, a dislocation; a third of it reads
+ *  as the jaw shifting */
+const JAW_OPEN = 0.5, JAW_SIDE = 0.055;
+const AX_X = new THREE.Vector3(1, 0, 0), AX_Y = new THREE.Vector3(0, 1, 0), QX = new THREE.Quaternion();
 /** the gaze a still face is given (only its look is read): a glance aside now and then */
 const IDLE_LOOK: FaceState = { ...NEUTRAL_FACE };
 
@@ -600,6 +627,9 @@ function faceTick(F: FaceParts, t: number, f: FaceState | null | undefined, char
   // no face: a slow blink every 5.2 s
   const b0 = t % 5.2, idleBlink = b0 < 0.2 ? Math.sin((b0 / 0.2) * Math.PI) : 0;
   const up = f ? ramp(f.browUp, 0.1, 0.65) : 0, sneer = f ? ramp(f.sneer, 0.06, 0.5) : 0, jaw = f ? clamp01k(f.jaw) : 0;
+  const puff = f ? ramp(f.puff, 0.04, 0.4) : 0;
+  // the jaw again, after the stage's rig.setJaw, with less of the sideways swing (the breath reads the bone after this)
+  if (f && F.jaw) F.jaw.quaternion.setFromAxisAngle(AX_Y, f.jawSide * JAW_SIDE).multiply(QX.setFromAxisAngle(AX_X, f.jaw * JAW_OPEN));
   for (let i = 0; i < 2; i++) {
     const s = F.side[i]!, sx = i === 0 ? 1 : -1, L = i === 0;
     const bl = f ? ramp(L ? f.blinkL : f.blinkR, 0.15, 0.65) : idleBlink;
@@ -618,14 +648,16 @@ function faceTick(F: FaceParts, t: number, f: FaceState | null | undefined, char
     // the brow ridge pivots at the temple: a scowl drops it, the snout end most, and slides it out over the eye; the
     // inner raise lifts the snout end; the outer raise lifts the temple end
     if (s.brow) {
-      s.brow.position.set(s.browRest.x + sx * 0.06 * bd, s.browRest.y - 0.14 * bd + 0.12 * up + 0.14 * bo - 0.04 * sneer, s.browRest.z + 0.08 * bd);
-      s.brow.rotation.x = 0.09 * bd - 0.07 * up + 0.04 * bo + 0.04 * sneer;
+      s.brow.position.set(s.browRest.x + sx * 0.06 * bd, s.browRest.y - 0.14 * bd + 0.12 * up + 0.22 * bo - 0.04 * sneer, s.browRest.z + 0.08 * bd);
+      s.brow.rotation.x = 0.09 * bd - 0.07 * up + 0.02 * bo + 0.04 * sneer;
     }
     // the upper lip lifts off the teeth, and out a little
     if (s.lip) {
       const k = sneer + 0.25 * jaw * jaw;
       s.lip.position.set(s.lipRest.x + sx * 0.06 * k, s.lipRest.y + 0.3 * k, s.lipRest.z + 0.03 * k);
     }
+    // the cheeks (an anchor at rest) swell out when the wearer puffs theirs
+    if (s.cheek) s.cheek.position.set(s.cheekRest.x + sx * 0.24 * puff, s.cheekRest.y - 0.04 * puff, s.cheekRest.z + 0.06 * puff);
   }
 }
 
@@ -641,7 +673,7 @@ export const KAIJU: CharacterDef = {
   idle: { tail: 0.2 },
   res: 88,
   face: {
-    jaw: 0.5,
+    jaw: JAW_OPEN,
     eyes: [[EYE[0], EYE[1], EYE[2] + 0.3, 0.38], [-EYE[0], EYE[1], EYE[2] + 0.3, 0.38]],
     // measured stepping render/breath.ts at a real 30 fps (headless frames are too slow to show it): a spark shows only
     // after its first 15 % of life, so at speed 2.4 the stream began 0.5–0.9 m past the snout, out of a portrait
