@@ -8,6 +8,7 @@ import { byId } from '../characters/roster';
 import { Rig, poseFromLandmarks, type BodyPose } from '../pose/rig';
 import { reachLimbs, REACH_TUNE } from '../pose/reach';
 import { driveFaceField, wearFaceField, type FaceField } from './facemap';
+import { SceneDepth, wearOcclusion } from './occlusion';
 import type { Track } from '../pose/tracker';
 import { project, type Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
@@ -252,6 +253,8 @@ export class Stage {
   private K: Intrinsics | null = null;
   /** carry the wearers' faces onto the costumes' (render/facemap.ts) */
   faceTransfer = true;
+  /** the picture's depth, for hiding costumes behind what stands in front of them (render/occlusion.ts) */
+  readonly depth = new SceneDepth();
   layout(K: Intrinsics, mirror: boolean): void {
     this.K = K;
     const cw = this.canvas.clientWidth || window.innerWidth, ch = this.canvas.clientHeight || window.innerHeight;
@@ -337,6 +340,8 @@ export class Stage {
     });
     // the wearer's face carried onto this one's (render/facemap.ts): its own uniforms, on its own material copies
     const field = wearFaceField(root, tpl.def);
+    // and hidden where the picture says something stands in front (render/occlusion.ts; off until asked for)
+    wearOcclusion(root, this.depth.u);
     return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], field };
   }
 
