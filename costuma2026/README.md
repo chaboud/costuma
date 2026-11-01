@@ -133,7 +133,14 @@ in `src/main.ts`.
   this frame is carried along by the pose's nose for 0.4 s; then the pose
   model's own face points give eyes and a mouth. Costumes move their faces in
   their `tick` (`characters/faceparts.ts`: lids that blink, squint and widen;
-  eyes that look); an open mouth opens the costume's jaw (`face.jaw`,
+  eyes that look). The default seven and the kaiju all do: winks, gaze, brows
+  per side, smiles and smirks, scowls, snarls, puffed cheeks, ears and crests.
+  Jimothy, Howler, Violet, Plume and the kaiju carry face bones under the head
+  (brows, ears, lips, cheeks, a crest) that take a share of the head's own skin
+  weights; their lower jaws are rigid meshes on the `jaw` bone, so an open mouth
+  is a clean gap with a palate, tongue and teeth, not a stretched sheet. Jack's
+  carving moves in his shell's vertex shader. An open mouth opens the
+  costume's jaw (`face.jaw`,
   `rig.setJaw`, sideways too) and breathes sparks (`render/breath.ts`, colours,
   rate and speed per costume: `face.breath`; sparks fade within half a metre of
   the lens and never grow past a tenth of the frame). **Googly eyes**
