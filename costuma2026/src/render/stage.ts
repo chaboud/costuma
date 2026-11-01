@@ -8,7 +8,7 @@ import { byId } from '../characters/roster';
 import { Rig, poseFromLandmarks, type BodyPose } from '../pose/rig';
 import { reachLimbs, REACH_TUNE } from '../pose/reach';
 import { driveFaceField, wearFaceField, type FaceField } from './facemap';
-import { SceneDepth, wearOcclusion } from './occlusion';
+import { OCCLUSION_TUNE, SceneDepth, wearOcclusion } from './occlusion';
 import type { Track } from '../pose/tracker';
 import { project, type Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
@@ -25,6 +25,8 @@ interface Wearer {
   mats: THREE.Material[];
   /** the wearer's face carried onto this costume's (render/facemap.ts), when it has eyes to map to */
   field: FaceField | null;
+  /** the wearer's front, metres from the camera: nothing nearer than it hides this costume but what stands before it */
+  occlSelf: { value: number };
   fade: number;
   /** 0..1: how far this costume has faded in (new) or, leaving, how much is left */
   life: number;
@@ -306,15 +308,15 @@ export class Stage {
   }
 
   private dress(trackId: number, id: string): Wearer {
-    const { def, root, rig, mats, field } = this.instance(id);
-    const w: Wearer = { trackId, def, root, rig, mats, field, fade: 0, life: 0, leaving: false, poses: [], head: 0, len: null, clones: [] };
+    const { def, root, rig, mats, field, occlSelf } = this.instance(id);
+    const w: Wearer = { trackId, def, root, rig, mats, field, occlSelf, fade: 0, life: 0, leaving: false, poses: [], head: 0, len: null, clones: [] };
     this.world.add(root);
     this.wearers.set(trackId, w);
     return w;
   }
 
   /** a worn copy of a character: its own bones, rig and material copies (each fades on its own) */
-  private instance(id: string): { def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[]; field: FaceField | null } {
+  private instance(id: string): { def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[]; field: FaceField | null; occlSelf: { value: number } } {
     const tpl = this.template(id);
     const root = SkeletonUtils.clone(tpl.root);
     const bones = new Map<string, THREE.Bone>();
@@ -341,8 +343,8 @@ export class Stage {
     // the wearer's face carried onto this one's (render/facemap.ts): its own uniforms, on its own material copies
     const field = wearFaceField(root, tpl.def);
     // and hidden where the picture says something stands in front (render/occlusion.ts; off until asked for)
-    wearOcclusion(root, this.depth.u);
-    return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], field };
+    const occlSelf = wearOcclusion(root, this.depth.u);
+    return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], field, occlSelf };
   }
 
   private drop(w: Wearer): void {
@@ -363,6 +365,7 @@ export class Stage {
     if (def.face?.jaw) rig.setJaw((tr.face?.jaw ?? 0) * def.face.jaw, tr.face?.jawSide ?? 0);
     w.root.position.set(tr.T.x, tr.T.y, tr.T.z);
     w.root.scale.setScalar(s);
+    w.occlSelf.value = -tr.T.z - OCCLUSION_TUNE.self;
     // the limbs aimed at the person's in the picture, at the costume's own bone lengths (pose/reach.ts)
     if (this.K && REACH_TUNE.strength > 0) reachLimbs(rig, w.root, tr.image, this.K);
     const f0 = tr.presence * Math.max(0, Math.min(1, w.life));

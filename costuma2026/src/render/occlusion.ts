@@ -1,7 +1,8 @@
 // Occlusion from a picture's depth (founder, 2026-11-01: "is there a phone-friendly monocular image depth estimation
 // model that we could use to handle occlusion? Could be a fun optional setting"). Depth Anything V2 Small (Apache 2.0;
 // the onnx-community 4-bit export, 19 MB, vendored under public/models: never a CDN at run time) through
-// onnxruntime-web: WebGPU where the phone has it (iOS 26 Safari, recent Android Chrome), else the CPU in a worker.
+// onnxruntime-web 1.30 (its WebGPU bundle; its 27 MB runtime is a build asset, fetched only when this is switched on):
+// WebGPU where the phone gives an adapter (iOS 26 Safari, recent Android Chrome), else the CPU in a worker.
 // It sees the frame at ~250×250 every so often (a frame takes ~1–1.6 s on this sandbox's CPU; WebGPU should be many
 // times quicker — not measured on a phone) and says how near each pixel is — relatively: an inverse depth up to an
 // unknown scale and shift.
@@ -25,6 +26,9 @@ export const OCCLUSION_TUNE = {
   everyGpu: 0.15, everyCpu: 0.8,
   /** a costume pixel starts to hide when the picture is this many metres in front of it, and is gone this much further */
   near: 0.18, soft: 0.25,
+  /** never by its own wearer: only what stands this far in front of the wearer's hips can hide their costume (a
+   *  skeleton is inside its wearer: their own front, nearer than its spine, hid it whole) */
+  self: 0.3,
   /** a reading's share of the shown depth map (the rest the last), and of the calibration */
   mapEase: 0.6, calEase: 0.5,
 };
@@ -65,16 +69,19 @@ export class SceneDepth {
   async load(say?: (s: string) => void): Promise<void> {
     const base = import.meta.env.BASE_URL;
     say?.('Loading the depth engine…');
+    // the bundled build carries its own loader; its one runtime file is the build's own asset (no wasmPaths: set, it
+    // looked for a separate loader relative to the wrong folder)
     const ort = this.ort = await import('onnxruntime-web/webgpu');
-    ort.env.wasm.wasmPaths = `${base}ort/`;
     ort.env.wasm.numThreads = 1; // GitHub Pages cannot send the headers threads need
-    const gpu = !!(navigator as Navigator & { gpu?: unknown }).gpu;
+    // a GPU only if it gives an adapter (headless Chromium has navigator.gpu and none); decided before the first
+    // start, because a failed start leaves the runtime refusing every later one
+    const nav = navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } };
+    const gpu = !!(await nav.gpu?.requestAdapter().catch(() => null));
     if (!gpu) ort.env.wasm.proxy = true; // the CPU's work in a worker: the frames go on
     say?.('Loading the depth model…');
     const url = `${base}models/depth-anything-v2-small-q4f16.onnx`;
-    for (const ep of gpu ? ['webgpu', 'wasm'] : ['wasm']) {
-      try { this.session = await ort.InferenceSession.create(url, { executionProviders: [ep] }); this.engine = ep; break; } catch (e) { console.warn('depth: no', ep, e); }
-    }
+    const ep = gpu ? 'webgpu' : 'wasm';
+    try { this.session = await ort.InferenceSession.create(url, { executionProviders: [ep] }); this.engine = ep; } catch (e) { console.warn('depth: no', ep, e); }
     if (!this.session) throw new Error('the depth model would not load');
     this.ready = true;
   }
@@ -84,8 +91,9 @@ export class SceneDepth {
     return this.ready && !this.busy && now - this.last > 1000 * (this.engine === 'webgpu' ? OCCLUSION_TUNE.everyGpu : OCCLUSION_TUNE.everyCpu);
   }
 
-  /** read the frame's depth and put it in metres against the people in it */
-  async read(src: HTMLVideoElement | HTMLCanvasElement, tracks: Track[], K: Intrinsics, now: number): Promise<void> {
+  /** read the frame's depth and put it in metres against the people in it; `floor`: the floor's plane (n·p = h, camera
+   *  space), whose pixels never hide a costume */
+  async read(src: HTMLVideoElement | HTMLCanvasElement, tracks: Track[], K: Intrinsics, now: number, floor?: { n: THREE.Vector3; h: number }): Promise<void> {
     if (!this.session || !this.ort || this.busy) return;
     this.busy = true;
     this.last = now;
@@ -103,7 +111,7 @@ export class SceneDepth {
       const t = out[this.session.outputNames[0]!]!;
       const d = t.data as Float32Array, oh = t.dims.at(-2)!, ow = t.dims.at(-1)!;
       this.calibrate(d, ow, oh, tracks);
-      if (this.cal) this.toMetres(d, ow, oh);
+      if (this.cal) this.toMetres(d, ow, oh, K, floor);
     } catch (e) { console.warn('depth reading failed', e); } finally { this.busy = false; }
   }
 
@@ -114,7 +122,7 @@ export class SceneDepth {
       const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(w - 1, x0 + 1), y1 = Math.min(h - 1, y0 + 1), u = fx - x0, v = fy - y0;
       return (d[y0 * w + x0]! * (1 - u) + d[y0 * w + x1]! * u) * (1 - v) + (d[y1 * w + x0]! * (1 - u) + d[y1 * w + x1]! * u) * v;
     };
-    let sw = 0, sx = 0, sy = 0, sxx = 0, sxy = 0, n = 0;
+    let sw = 0, sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0, n = 0;
     for (const t of tracks) {
       if (t.lost || t.presence < 0.5) continue;
       for (const i of POINTS) {
@@ -123,13 +131,15 @@ export class SceneDepth {
         const z = -(t.T.z + wp.z);
         if (z < 0.3) continue;
         const x = at(im.x, im.y), y = 1 / z, k = im.v;
-        sw += k; sx += k * x; sy += k * y; sxx += k * x * x; sxy += k * x * y; n++;
+        sw += k; sx += k * x; sy += k * y; sxx += k * x * x; sxy += k * x * y; syy += k * y * y; n++;
       }
     }
     if (n < 4 || sw <= 0) return;
-    const mx = sx / sw, my = sy / sw, vx = sxx / sw - mx * mx, cxy = sxy / sw - mx * my;
-    // the slope is believed by how much the people's depths spread (one person: a scale through no shift)
-    const spread = vx / (vx + 0.02 * mx * mx + 1e-9);
+    const mx = sx / sw, my = sy / sw, vx = sxx / sw - mx * mx, cxy = sxy / sw - mx * my, vy = syy / sw - my * my;
+    // the shift is believed by how far apart the people truly stand (their metric depths, not the model's numbers: one
+    // body's own disparity varies more than its depth does, and fitted a shift that squashed the street into 5–10 m) —
+    // a curve: one person, a scale through no shift; people a fifth of their distance apart, half of the fit
+    const spread = vy / (vy + (0.2 * my) ** 2 + 1e-12);
     const aFit = vx > 1e-9 ? cxy / vx : 0, aZero = mx > 1e-9 ? my / mx : 0;
     let a = aZero + (aFit - aZero) * spread, b = (my - a * mx) * spread;
     if (!(a > 0)) { a = aZero; b = 0; }
@@ -138,12 +148,26 @@ export class SceneDepth {
   }
 
   /** the reading in metres, eased into the shown map */
-  private toMetres(d: Float32Array, w: number, h: number): void {
+  private toMetres(d: Float32Array, w: number, h: number, K: Intrinsics, floor?: { n: THREE.Vector3; h: number }): void {
     const { a, b } = this.cal!, n = w * h;
     if (!this.map || this.w !== w || this.h !== h) { this.map = new Float32Array(n).fill(-1); this.w = w; this.h = h; }
     const k = OCCLUSION_TUNE.mapEase, half = new Uint16Array(n);
     for (let i = 0; i < n; i++) {
-      const inv = a * d[i]! + b, z = inv > 1 / 60 ? 1 / inv : 60;
+      const inv = a * d[i]! + b;
+      let z = inv > 1 / 60 ? 1 / inv : 60;
+      // the floor never hides a costume (a costume's feet stand on it; read from the body alone, the ground round them
+      // came out a little nearer and cut the legs off): a pixel as far as the floor's plane along its ray counts as
+      // floor, by a curve of how near the two agree, and is pushed to the far distance
+      if (floor) {
+        const x = ((i % w) + 0.5) / w, y = (Math.floor(i / w) + 0.5) / h;
+        const rx = (x * K.w - K.cx) / K.f, ry = -(y * K.h - K.cy) / K.f;
+        const nd = floor.n.x * rx + floor.n.y * ry - floor.n.z;
+        const t = Math.abs(nd) > 1e-6 ? floor.h / nd : -1;
+        if (t > 0.2 && t < 60) {
+          const off = Math.abs(z - t) / t, u = Math.min(1, Math.max(0, (off - 0.08) / 0.17)), floorish = 1 - u * u * (3 - 2 * u);
+          z += (60 - z) * floorish;
+        }
+      }
       const m = this.map[i]! < 0 ? z : this.map[i]! + (z - this.map[i]!) * k;
       this.map[i] = m;
       half[i] = THREE.DataUtils.toHalfFloat(m);
@@ -167,7 +191,7 @@ export class SceneDepth {
 
 const DECL = /* glsl */ `
 uniform sampler2D uOccl; uniform float uOcclOn; uniform vec4 uOcclCrop; uniform float uOcclMirror; uniform vec2 uOcclRes;
-uniform float uOcclNear; uniform float uOcclSoft;
+uniform float uOcclNear; uniform float uOcclSoft; uniform float uOcclSelf;
 // how much of this costume pixel the picture leaves showing: the scene's depth where it lands (the background's own
 // crop and mirror), against the pixel's own; a curve of how far the scene stands in front
 float occlVisible() {
@@ -176,16 +200,21 @@ float occlVisible() {
   s.x = mix(s.x, 1.0 - s.x, uOcclMirror);
   vec2 v = uOcclCrop.xy + s * uOcclCrop.zw;
   float scene = texture2D(uOccl, vec2(v.x, 1.0 - v.y)).r;
-  float hidden = smoothstep(uOcclNear, uOcclNear + uOcclSoft, vViewPosition.z - scene);
+  // measured from the nearer of this pixel and the wearer's front: the wearer's own body, its arms, the floor at its
+  // feet are never in front of it
+  float hidden = smoothstep(uOcclNear, uOcclNear + uOcclSoft, min(vViewPosition.z, uOcclSelf) - scene);
   return 1.0 - hidden * uOcclOn;
 }`;
 
 /**
  * Give a worn costume's materials the occlusion: each multiplies its alpha by what the picture leaves showing (the
  * worn copies fade by dithered transparency, so a hidden pixel dithers away; a glow by its blending). Chains after the
- * materials' own hooks, keyed by them.
+ * materials' own hooks, keyed by them. Returns the costume's own uniform for its wearer's front.
  */
-export function wearOcclusion(root: THREE.Object3D, u: SceneDepth['u']): void {
+export function wearOcclusion(root: THREE.Object3D, shared: SceneDepth['u']): { value: number } {
+  // the wearer's front (metres from the camera), this costume's own: set each frame (stage.ts pose)
+  const self = { value: 1e3 };
+  const u = { ...shared, uOcclSelf: self };
   const done = new Set<THREE.Material>();
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -207,4 +236,5 @@ export function wearOcclusion(root: THREE.Object3D, u: SceneDepth['u']): void {
       mat.needsUpdate = true;
     }
   });
+  return self;
 }

@@ -597,7 +597,7 @@ function loop(now: number): void {
   stage.setGrain(true, tSec);
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
   // the picture's depth for occlusion: a reading now and then (off the frame: it resolves later), the effect eased
-  if (settings.occlusion && !SYNTH && stage.depth.due(now) && video.readyState >= 2) void stage.depth.read(video, tracker.tracks, K, now);
+  if (settings.occlusion && !SYNTH && stage.depth.due(now) && video.readyState >= 2) void stage.depth.read(video, tracker.tracks, K, now, { n: stage.ground.n, h: stage.ground.h });
   stage.depth.frame(settings.occlusion, stage.bgUniforms.uCrop.value, stage.bgUniforms.uMirror.value, stage.renderer.getDrawingBufferSize(new THREE.Vector2()), dt);
   stage.googlyOn = settings.googly && settings.faces;
   stage.breathOn = settings.breath && settings.faces;

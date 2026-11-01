@@ -33,6 +33,7 @@ node scripts/face-probe.mjs <portrait.jpg> [profiles.jpg]   # what the face mode
 node scripts/pose-record.mjs <clip|photo> <out.json>   # every frame through the real pose model, in order (FPS= SECS= VF='ffmpeg filter' N=)
 STAB=a.json,b.json npx vitest run scripts/stability-sim.test.ts   # replay through the tracker: lean, error, jerk, jumps; INJECT=1 adds depth flips
 STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
+node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion: the depth model loads, calibrates, hides; the same frozen frame on and off, and the depth map
 node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill
 ```
 
@@ -112,6 +113,22 @@ in `src/main.ts`.
   the character"); joint limits would go here. A person 1.3 m off with arms
   forward: elbows, wrists, knees and ankles that were 9–493 px off the person's
   (Howler's forearm the worst) land on them wherever the bone reaches.
+- **Occlusion** (`src/render/occlusion.ts`, settings → Occlusion
+  (experimental), off by default): Depth Anything V2 Small (Apache 2.0, the
+  onnx-community 4-bit export, 19 MB, vendored) through onnxruntime-web 1.30
+  (its WebGPU bundle; its 27 MB runtime a build asset fetched only when this is
+  on), WebGPU where the phone gives an adapter, else the CPU in a worker,
+  reading the frame now and then (headless CPU: 1.5–2.9 s a reading; WebGPU on
+  a phone not measured). Its relative depth is put in metres against the tracked
+  people (`1/z = a·d + b`, the shift believed only as far as the people stand
+  apart: one person, a scale), and each costume pixel fades by a curve of how
+  far the picture stands in front of it — never by its own wearer (only what
+  stands 0.3 m before the wearer's hips counts: a skeleton is inside its wearer,
+  whose own front hid it whole) and never by the floor (a pixel as far as the
+  floor's plane counts as floor: read from the body alone, the ground at the
+  feet cut the legs off). Checked headless on OpenPose's street clip: a costume
+  on a woman behind her friend is hidden where the friend stands, its arms
+  showing past her (`scripts/occlusion-check.mjs`).
 - **Characters** (`src/characters/`): code, no model files. An SDF body
   polygonised by marching cubes, coloured by region, skinned by distance to
   its segments (Strollzilla's `build.ts`, generalised), plus rigid meshes on
