@@ -7,6 +7,8 @@ export interface Settings {
   lens: number;
   /** how sure the pose model must be that someone is there (0..1): its detection and presence thresholds */
   poseConf: number;
+  /** how much the pose is smoothed, 0 snappy .. 1 steady (pose/tracker.ts setSmoothing) */
+  smoothing: number;
   /** the camera's zoom per facing (1: its main lens; 0.5 the ultra-wide where the phone offers it) */
   zoom: { user?: number; environment?: number };
   envLight: boolean;
@@ -39,7 +41,7 @@ export interface Settings {
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, smoothing: 0.5, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
@@ -68,6 +70,7 @@ export function loadSettings(): Settings {
     // v7 (2026-11-01): the sparks from open mouths are off unless asked for (founder: "Default the sparks to off")
     if (v < 7) s.breath = false;
     if (!s.zoom || typeof s.zoom !== 'object') s.zoom = {};
+    if (!(s.smoothing >= 0 && s.smoothing <= 1)) s.smoothing = DEFAULTS.smoothing;
     // Violet took the Valkyrie's place: whoever wore the Valkyrie wears Violet
     if (s.costume === 'valkyrie') s.costume = 'violet';
     if (s.partyCast === 'valkyrie') s.partyCast = 'violet';

@@ -74,13 +74,21 @@ in `src/main.ts`.
   frame-to-frame jitter 2–4× the picture's and now equal to it (6, 10, 6 px);
   the head's biggest jumps ~50 → ~15 px; arms and turns 25–42 % less jerky;
   injected depth flips on a street clip left the body horizontal for 3–6 frames
-  a person and now 0–1. **A hold after the smoothing** (founder: "like a PID
-  on a motorized fader"): each shown point moves only once the smoothed one
-  leaves a band round it the size of the model's measured noise for that kind
-  of point (limbs 3× the torso's), then at once; inside it, it creeps to
-  centre. On a still torso clip the arms moved 0.4–0.7° a frame instead of
-  1.9–2.1°, the costume's size 0.07 cm instead of 0.23; on the walking street
-  clip the error barely changed. A constant-velocity Kalman filter (`src/pose/kalman.ts`)
+  a person and now 0–1. **A motorized fader after the smoothing** (founder:
+  "a smoothing that considers the scale of difference … like a PID on a
+  motorized fader"): each shown value is a motor with a position and a velocity,
+  driven toward the smoothed reading by P on the error past a dead band the
+  size of the model's measured noise for that kind of point (limbs 3× the
+  torso's), D on its velocity (critically damped), a faint pull inside the band
+  for the last offset, and a stiffness that grows with the error so a big move
+  arrives sooner; the whole body's shared shift (a hand-held camera's shake)
+  through a stiff one. **Settings → Smoothing** (0 snappy .. 1 steady, default
+  0.5) scales the EMA's times, the bands and the motors together. Replayed on a
+  still torso clip at the default: arms 0.09° a frame (the EMA alone 2.0°, the
+  dead band alone 0.53°), the costume's position 1.0 px (3.6), its size 0.02
+  cm; on a walking street clip the chest turn's error 17.6° → 26° (lag); at 0,
+  the walking error of the dead band alone with less than half its position
+  jitter. A constant-velocity Kalman filter (`src/pose/kalman.ts`)
   was tried for the points and the depth and lost to the slower EMA on every
   recorded clip (MediaPipe's errors wander over frames, which a velocity filter
   reads as motion); it is there, off (`TUNE.filter`). Tracks fade in and out.

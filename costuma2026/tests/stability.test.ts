@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { guessIntrinsics } from '../src/pose/solve';
 import { synthPerson } from '../src/pose/synth';
-import { Tracker, TUNE, type Detection } from '../src/pose/tracker';
+import { Tracker, TUNE, setSmoothing, type Detection } from '../src/pose/tracker';
 import { CVBank } from '../src/pose/kalman';
 import { L, type LM } from '../src/pose/landmarks';
 
@@ -142,9 +142,16 @@ describe('the hold', () => {
     return { still: moved / n, frames };
   }
   it('a still person holds still, and a raised arm still arrives', () => {
+    // the default setting (the middle): far stiller, a raised arm in within half a second
+    setSmoothing(0.5);
     const off = run(false), on = run(true);
-    expect(on.still).toBeLessThan(off.still * 0.5);
-    expect(on.frames).toBeLessThan(off.frames + 4);
-    expect(on.frames).toBeLessThan(10);
+    expect(on.still).toBeLessThan(off.still * 0.3);
+    expect(on.frames).toBeLessThan(15);
+    // the snappy end: as quick as no hold, still stiller
+    setSmoothing(0);
+    const snappy = run(true), none = run(false);
+    expect(snappy.frames).toBeLessThanOrEqual(none.frames + 2);
+    expect(snappy.still).toBeLessThan(none.still);
+    setSmoothing(0.5);
   });
 });

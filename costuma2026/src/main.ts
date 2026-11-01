@@ -3,7 +3,7 @@
 import './style.css';
 import { Camera, isIOS } from './camera';
 import { Detector } from './pose/detector';
-import { Tracker, type Detection, type Track } from './pose/tracker';
+import { Tracker, setSmoothing, type Detection, type Track } from './pose/tracker';
 import { guessIntrinsics, project, type Intrinsics } from './pose/solve';
 import * as THREE from 'three';
 import { synthCrowd, synthMask } from './pose/synth';
@@ -28,6 +28,7 @@ const TEST = q.get('test') === '1';
 const SYNTH = Number(q.get('synth') ?? 0);
 
 const settings: Settings = loadSettings();
+setSmoothing(settings.smoothing);
 if (q.get('c')) settings.costume = q.get('c')!;
 if (!ROSTER.some((d) => d.id === settings.costume)) settings.costume = ROSTER[0]!.id;
 if (q.get('people')) settings.people = Number(q.get('people'));
@@ -351,6 +352,7 @@ function buildSettings(): void {
   };
   row(settings.scene === 'party' ? 'Subjects' : 'People', settings.scene === 'party' ? 'How many people to cut out (the nearest)' : 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); }));
   row('Costume size', 'Bigger hides more of the person', range(0.8, 1.5, 0.01, () => settings.size, (v) => { settings.size = v; stage.opts.size = v; }));
+  row('Smoothing', 'Steady holds a still pose rock-solid; snappy follows fast moves sooner', range(0, 1, 0.05, () => settings.smoothing, (v) => { settings.smoothing = v; setSmoothing(v); }));
   row('Detection threshold', 'Higher ignores what only looks like a person (coats, posters, shadows); lower finds people further off or half hidden', range(0.4, 0.9, 0.05, () => settings.poseConf, (v) => { settings.poseConf = v; void detector?.setOptions({ conf: v }); }));
   row('Pose model', 'Accurate is steadier, slower to load and run', seg<'lite' | 'full'>([['lite', 'Fast'], ['full', 'Accurate']], () => settings.model, (v) => { settings.model = v; void reloadDetector(); }));
   row('Light from the camera', 'The costume is lit by the room it stands in', sw(() => settings.envLight, (v) => { settings.envLight = v; stage.opts.envLight = v; }));

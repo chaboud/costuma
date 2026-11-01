@@ -26,9 +26,12 @@ export interface Track {
   wh: LM[];
   /** the smoothed picture (what the smoothing works on); `image` is it as held */
   ism: LM[];
-  /** the hips' depth smoothed, and as held (shown) */
+  /** the hips' depth smoothed, and as held (shown); the motor's velocities (the 3D points, the picture's, the depth) */
   zs?: number;
   zh?: number;
+  vel?: { world: Float64Array; image: Float64Array; z: number };
+  /** the shared shift's motor: where the shake has taken the person, where the shown has followed, its velocity */
+  cm?: { tx: number; ty: number; x: number; y: number; vx: number; vy: number };
   /** hip centre in camera space, metres (three's axes) */
   T: { x: number; y: number; z: number };
   len: ReturnType<typeof bodyLengths>;
@@ -92,6 +95,14 @@ export const TUNE = {
   hold: true,
   holdWorldCore: 0.008, holdWorldLimb: 0.013, holdZ: 1.5, holdImageCore: 0.007, holdImageLimb: 0.028, holdDepth: 0.015,
   holdCreep: 1.2, holdFollow: 0.02,
+  /** the shown values follow the smoothed ones by the dead band and snap ('hold') or by the motor ('motor') */
+  follow: 'motor' as 'hold' | 'motor',
+  /** the motor's stiffness (rad/s) for the torso-and-face and the limbs, and its faint pull inside the band */
+  motorCore: 10, motorLimb: 14, motorCreep: 2.5, motorBoost: 2,
+  /** the shared shift's motor (rad/s): stiff, so a hand-held shake is followed nearly at once */
+  motorShake: 30,
+  /** the smoothing setting's scales (settings → Smoothing): on the EMA's times, the bands, the motor's stiffness */
+  smoothTau: 1, smoothBand: 1, smoothW: 1,
   /**
    * The Kalman filters' noise. `r*`: a reading's standard deviation (the picture in image widths/heights, 3D and depth
    * in metres), divided by its visibility; `q*`: how hard a point may accelerate (spectral density, units²/s³). The
@@ -180,6 +191,40 @@ function hold(x: number, z: number, dt: number, band: number): number {
   const excess = e - Math.sign(e) * band;
   return x + excess * (1 - Math.exp(-dt / TUNE.holdFollow)) + Math.sign(e) * band * (1 - Math.exp(-dt / TUNE.holdCreep));
 }
+/**
+ * The motorized fader, as asked (founder: "Did you try my PID style thing?"): the shown value is a motor with a
+ * position and a velocity driven toward the smoothed reading — P on the error past a dead band the size of the model's
+ * noise, D on its own velocity (critically damped: it arrives without overshoot), and inside the band only a faint pull
+ * (`motorCreep`, standing in for the I term: the last offset settles away over a second or two). Starts and stops are
+ * smooth (the velocity never jumps), a wobble inside the noise never moves it, a real move drives it at once. `w`
+ * (rad/s) is how stiff the motor is. Returns the new velocity; writes the position through `set`.
+ */
+function motor(x: number, v: number, r: number, dt: number, band: number, w: number): [number, number] {
+  const n = Math.max(1, Math.ceil((dt * w * (1 + TUNE.motorBoost)) / 0.35)), h = dt / n, wc = TUNE.motorCreep;
+  for (let k = 0; k < n; k++) {
+    const e = r - x, out = Math.max(0, Math.abs(e) - band) * Math.sign(e);
+    // a big error drives harder (the motor's gain scheduled on the error, in bands): a wobble meets the plain motor,
+    // a real move up to (1 + motorBoost)× its stiffness, so it arrives sooner; the velocity stays continuous
+    const b = band > 0 ? Math.min(1, Math.max(0, (Math.abs(e) / band - 2) / 6)) : 1, wk = w * (1 + TUNE.motorBoost * b);
+    const a = wk * wk * out + wc * wc * e - 2 * wk * v;
+    v += a * h;
+    x += v * h;
+  }
+  return [x, v];
+}
+/** the motor for every point: `vel` its velocities (per coordinate), `band` and stiffness per point */
+function motorLM(out: LM[], inp: LM[], vel: Float64Array, dims: 2 | 3, dt: number, band: (i: number, a: number) => number): void {
+  for (let i = 0; i < N_LANDMARKS; i++) {
+    const o = out[i]!, p = inp[i]!, vis = Math.max(0.25, Math.min(1, p.v)), w = CORE.has(i) ? TUNE.motorCore : TUNE.motorLimb;
+    for (let a = 0; a < dims; a++) {
+      const j = i * dims + a;
+      const [x, v] = motor(o[AXES[a]!], vel[j]!, p[AXES[a]!], dt, band(i, a) / vis, w * TUNE.smoothW);
+      o[AXES[a]!] = x; vel[j] = v;
+    }
+    o.v = p.v;
+  }
+}
+
 /** hold `out` (shown) against `inp` (smoothed): `band(i, axis)` each coordinate's band */
 function holdLM(out: LM[], inp: LM[], dims: 2 | 3, dt: number, band: (i: number, a: number) => number): void {
   for (let i = 0; i < N_LANDMARKS; i++) {
@@ -195,6 +240,19 @@ function resetBank(bank: CVBank, lm: LM[], dims: 2 | 3): void {
   }
 }
 const UP = new THREE.Vector3(0, 1, 0);
+
+/**
+ * The smoothing setting (settings → Smoothing, 0 snappy .. 1 steady): one knob over the EMA's times, the dead bands and
+ * the motor's stiffness together. Replayed (scripts/stability-sim.test.ts), the motor at the middle setting holds a
+ * still torso's arms to ~0.15° a frame (the dead band alone, before it: 0.53°; the EMA alone: 2.0°) and its position to
+ * 1.1 px a frame (3.6), at the cost of lag on fast moves (a walking street's chest turn: 17.6° error → ~24°).
+ */
+export function setSmoothing(s: number): void {
+  const k = Math.max(0, Math.min(1, s)), lerp = (a: number, b: number) => a + (b - a) * k;
+  TUNE.smoothW = lerp(2, 0.55);
+  TUNE.smoothBand = lerp(0.7, 2);
+  TUNE.smoothTau = lerp(0.8, 1.6);
+}
 
 const TORSO = [L.shL, L.shR, L.hipL, L.hipR];
 /**
@@ -277,21 +335,42 @@ export class Tracker {
         if (!snap) { shift = shiftTogether(t.ism, p.d.image); for (let i = 0; i < N_LANDMARKS; i++) { kf.image.shift(i * 2, shift.dx); kf.image.shift(i * 2 + 1, shift.dy); } }
         filterLM(kf.image, t.ism, p.d.image, 2, dt, kv);
       } else {
-        blendLM(t.wsm, chk.world, snap ? 1 : kOf(dt, TUNE.tauWorld), kv, snap ? 1 : kOf(dt, TUNE.tauCore));
+        blendLM(t.wsm, chk.world, snap ? 1 : kOf(dt, TUNE.tauWorld * TUNE.smoothTau), kv, snap ? 1 : kOf(dt, TUNE.tauCore * TUNE.smoothTau));
         // what moves together is followed at once, what jitters alone is smoothed: a hand-held camera shakes the whole
         // person in the frame, and an EMA on that lags it (measured: the costume trembled 1.6 px against the person
         // under a simulated tremor, 0.7 px unsmoothed). The torso's shared shift moves every smoothed point first; only
         // what is left over — each point's own noise — goes through the EMA.
         if (!snap) shift = shiftTogether(t.ism, p.d.image);
-        blendLM(t.ism, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage), kv);
+        blendLM(t.ism, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage * TUNE.smoothTau), kv);
       }
       // what is shown: held against the smoothed (the shake passes straight through: it moved the person)
       if (TUNE.hold && !snap) {
-        for (const o of t.image) { o.x += shift.dx; o.y += shift.dy; }
+        // the shared shift: a hand-held camera's shake is followed (the person moved in the picture), the model's own
+        // whole-body jitter is not — through a stiff motor with a band the size of the torso's noise (follow 'motor')
+        let sdx = shift.dx, sdy = shift.dy;
+        if (TUNE.follow === 'motor') {
+          const c = t.cm ??= { tx: 0, ty: 0, x: 0, y: 0, vx: 0, vy: 0 };
+          const sw = Math.hypot(t.ism[L.shL]!.x - t.ism[L.shR]!.x, (t.ism[L.shL]!.y - t.ism[L.shR]!.y) * K.h / K.w) || 0.05;
+          const band = TUNE.holdImageCore * sw * TUNE.smoothBand, x0 = c.x, y0 = c.y;
+          c.tx += shift.dx; c.ty += shift.dy;
+          [c.x, c.vx] = motor(c.x, c.vx, c.tx, dt, band, TUNE.motorShake * TUNE.smoothW);
+          [c.y, c.vy] = motor(c.y, c.vy, c.ty, dt, band * K.w / K.h, TUNE.motorShake * TUNE.smoothW);
+          sdx = c.x - x0; sdy = c.y - y0;
+          // the smoothed picture keeps the person where they are; the shown follows by the motor
+          for (const o of t.image) { o.x += sdx; o.y += sdy; }
+        } else for (const o of t.image) { o.x += sdx; o.y += sdy; }
         const shoulders = Math.hypot(t.ism[L.shL]!.x - t.ism[L.shR]!.x, (t.ism[L.shL]!.y - t.ism[L.shR]!.y) * K.h / K.w) || 0.05;
-        holdLM(t.wh, t.wsm, 3, dt, (i, a) => (CORE.has(i) ? TUNE.holdWorldCore : TUNE.holdWorldLimb) * (a === 2 ? TUNE.holdZ : 1));
-        holdLM(t.image, t.ism, 2, dt, (i, a) => (CORE.has(i) ? TUNE.holdImageCore : TUNE.holdImageLimb) * shoulders * (a === 1 ? K.w / K.h : 1));
-      } else { copyInto(t.wh, t.wsm); copyInto(t.image, t.ism); }
+        const bw = (i: number, a: number) => (CORE.has(i) ? TUNE.holdWorldCore : TUNE.holdWorldLimb) * (a === 2 ? TUNE.holdZ : 1) * TUNE.smoothBand;
+        const bi = (i: number, a: number) => (CORE.has(i) ? TUNE.holdImageCore : TUNE.holdImageLimb) * shoulders * (a === 1 ? K.w / K.h : 1) * TUNE.smoothBand;
+        if (TUNE.follow === 'motor') {
+          const vel = t.vel ??= { world: new Float64Array(N_LANDMARKS * 3), image: new Float64Array(N_LANDMARKS * 2), z: 0 };
+          motorLM(t.wh, t.wsm, vel.world, 3, dt, bw);
+          motorLM(t.image, t.ism, vel.image, 2, dt, bi);
+        } else {
+          holdLM(t.wh, t.wsm, 3, dt, bw);
+          holdLM(t.image, t.ism, 2, dt, bi);
+        }
+      } else { copyInto(t.wh, t.wsm); copyInto(t.image, t.ism); if (t.vel) { t.vel.world.fill(0); t.vel.image.fill(0); t.vel.z = 0; } }
       t.world = this.shaped(t.wh, t.image, t.len.torso, up);
       if (TUNE.upright && Math.min(t.image[L.hipL]!.v, t.image[L.hipR]!.v) < 0.7 && t.verdict === 'kept') t.verdict = 'torso shot';
       // the hips from the smoothed shape and the smoothed (shake-following) picture; their depth smoothed again on its
@@ -301,9 +380,12 @@ export class Tracker {
       else {
         if ((TUNE.filter === 'kalman' || TUNE.kalmanDepth) && !t.kf) { t.kf = { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) }; t.kf.z.reset(0, t.T.z, TUNE.rDepth ** 2); }
         const z = (TUNE.filter === 'kalman' || TUNE.kalmanDepth) && t.kf ? t.kf.z.step(0, Ts.z, dt, TUNE.qDepth, TUNE.rDepth ** 2, TUNE.gate)
-          : ema(t.zs ?? t.T.z, Ts.z, kOf(dt, TUNE.tauZ));
+          : ema(t.zs ?? t.T.z, Ts.z, kOf(dt, TUNE.tauZ * TUNE.smoothTau));
         // the depth shown: held like the points (a still person's costume does not breathe in size)
-        t.zh = TUNE.hold && t.zh !== undefined ? hold(t.zh, z, dt, TUNE.holdDepth * Math.abs(z)) : z;
+        if (TUNE.hold && t.zh !== undefined && TUNE.follow === 'motor') {
+          const vel = t.vel ??= { world: new Float64Array(N_LANDMARKS * 3), image: new Float64Array(N_LANDMARKS * 2), z: 0 };
+          [t.zh, vel.z] = motor(t.zh, vel.z, z, dt, TUNE.holdDepth * Math.abs(z) * TUNE.smoothBand, TUNE.motorCore * TUNE.smoothW);
+        } else t.zh = TUNE.hold && t.zh !== undefined ? hold(t.zh, z, dt, TUNE.holdDepth * Math.abs(z) * TUNE.smoothBand) : z;
         t.zs = z;
         const r = t.zh / Ts.z;
         t.T = { x: Ts.x * r, y: Ts.y * r, z: t.zh };
