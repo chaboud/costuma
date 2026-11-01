@@ -61,11 +61,15 @@ function tip(w: LM[], a: number): LM[] {
 
 const score: Record<string, number> = {};
 const OLD: Partial<typeof TUNE> = { filter: 'ema', kalmanDepth: false, tauWorld: 0.045, tauImage: 0.035, tauCore: 0.09, tauZ: 0.14, pin: false };
+const NOW: Partial<typeof TUNE> = { upright: true, pin: true, hold: false };
 const ALL: [string, Partial<typeof TUNE>][] = [
-  ['before', { ...OLD, upright: false }],
-  ['smooth', { upright: false, pin: false }],
-  ['both', { upright: true, pin: false }],
-  ['pinned', { upright: true, pin: true }],
+  ['before', { ...OLD, upright: false, hold: false }],
+  ['smooth', { upright: false, pin: false, hold: false }],
+  ['both', { upright: true, pin: false, hold: false }],
+  ['pinned', NOW],
+  ['ema×2', { ...NOW, tauWorld: TUNE.tauWorld * 2, tauImage: TUNE.tauImage * 2, tauCore: TUNE.tauCore * 2, tauZ: TUNE.tauZ * 2 }],
+  ['hold', { ...NOW, hold: true }],
+  ['hold×2', { ...NOW, hold: true, holdWorldCore: TUNE.holdWorldCore * 2, holdWorldLimb: TUNE.holdWorldLimb * 2, holdImageCore: TUNE.holdImageCore * 2, holdImageLimb: TUNE.holdImageLimb * 2 }],
 ];
 const CONFIGS = process.env.CONF ? ALL.filter(([n]) => process.env.CONF!.split(',').includes(n)) : ALL;
 
@@ -106,10 +110,11 @@ describe.skipIf(!files.length)('stability (replay)', () => {
         const parts = KEYS.map((k) => {
           const un = ANGLE.has(k) ? unwrap : (x: number[]) => x;
           const r = un(q.raw.map((s) => s[k])), o = un(q.out.map((s) => s[k])), truth = gauss(r);
-          // the error, the jerk, and the biggest jump from one frame to the next
           const step = Math.max(...o.slice(1).map((x, i) => Math.abs(x - o[i]!)));
           score[k] = (score[k] ?? 0) + jerk(o);
-          return `${k} ${rms(o.map((x, i) => x - truth[i]!)).toFixed(1)}/${jerk(o).toFixed(1)}/${step.toFixed(0)}`;
+          // the error, the jerk, the biggest jump, and the frame-to-frame movement (RMS: the shake when still)
+          const vel = rms(o.slice(1).map((x, i) => x - o[i]!));
+          return `${k} ${rms(o.map((x, i) => x - truth[i]!)).toFixed(1)}/${jerk(o).toFixed(1)}/${step.toFixed(0)}/${vel.toFixed(2)}`;
         });
         const rows = table.get(id) ?? [];
         if (!rows.length) rows.push(` person ${id}: ${q.raw.length} frames · raw lean past 45°: ${over(q.rawLean)} frames`);

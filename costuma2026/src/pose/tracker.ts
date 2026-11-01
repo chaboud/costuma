@@ -21,8 +21,14 @@ export interface Track {
   image: LM[];
   /** the 3D pose the rest of the app uses: the smoothed one, hung from the shoulders in a torso shot (upright.ts) */
   world: LM[];
-  /** the smoothed 3D pose in the model's own frame (what the smoothing works on) */
+  /** the smoothed 3D pose in the model's own frame (what the smoothing works on), and as held (what is shown) */
   wsm: LM[];
+  wh: LM[];
+  /** the smoothed picture (what the smoothing works on); `image` is it as held */
+  ism: LM[];
+  /** the hips' depth smoothed, and as held (shown) */
+  zs?: number;
+  zh?: number;
   /** hip centre in camera space, metres (three's axes) */
   T: { x: number; y: number; z: number };
   len: ReturnType<typeof bodyLengths>;
@@ -76,6 +82,17 @@ export const TUNE = {
    */
   filter: 'ema' as 'kalman' | 'ema',
   /**
+   * The hold after the smoothing (hold()): on, and its bands — the 3D points (metres; depth ×`holdZ`), the picture's
+   * points (a share of the shoulders' width on screen), each for the torso-and-face and for the limbs; the hips' depth
+   * (a share of it) — and its creep and follow (seconds). The bands are the model's measured noise. Replayed on a still
+   * torso clip, frame-to-frame movement: arms 1.9–2.1° → 0.4–0.7°, chest turn 0.70 → 0.36°, head 0.49 → 0.31°, size
+   * 0.23 → 0.07 cm; on the street clip (people walking) the error barely moved (chest 18 → 21°) where slowing the EMA
+   * twice over for the same stillness cost far more (18 → 29°)
+   */
+  hold: true,
+  holdWorldCore: 0.008, holdWorldLimb: 0.013, holdZ: 1.5, holdImageCore: 0.007, holdImageLimb: 0.028, holdDepth: 0.015,
+  holdCreep: 1.2, holdFollow: 0.02,
+  /**
    * The Kalman filters' noise. `r*`: a reading's standard deviation (the picture in image widths/heights, 3D and depth
    * in metres), divided by its visibility; `q*`: how hard a point may accelerate (spectral density, units²/s³). The
    * torso and face (core) are let accelerate less than the limbs. Tuned on recorded clips replayed through the tracker
@@ -113,6 +130,7 @@ function blendLM(out: LM[], inp: LM[], k: number, kv: number, kCore = k): void {
   }
 }
 const copyLM = (a: LM[]): LM[] => a.map((p) => ({ ...p }));
+const copyInto = (out: LM[], a: LM[]): void => { for (let i = 0; i < a.length; i++) { const o = out[i]!, p = a[i]!; o.x = p.x; o.y = p.y; o.z = p.z; o.v = p.v; } };
 
 /** the points the shared shift is read from: the torso and the face, steady and usually seen */
 const STEADY = [L.nose, L.eyeL, L.eyeR, L.earL, L.earR, L.shL, L.shR, L.hipL, L.hipR];
@@ -144,6 +162,30 @@ function filterLM(bank: CVBank, out: LM[], inp: LM[], dims: 2 | 3, dt: number, k
       o[AXES[a]!] = bank.step(i * dims + a, p[AXES[a]!], dt, q, (r / vis) ** 2, T.gate);
     }
     o.v = ema(o.v, p.v, kv);
+  }
+}
+/**
+ * The fader's hold (founder, 2026-11-01: "a smoothing that considers the scale of difference to allow
+ * tremble/inaccuracy to not cause jumpiness but allows major changes ... like a PID on a motorized fader"): after the
+ * smoothing, each point's shown position moves only once the smoothed one has left a band round it (`band`, sized from
+ * the model's measured noise for that kind of point), and then at once, trailing by the band; inside it, it creeps to
+ * centre (`holdCreep` s). A still person holds still; a move gets through. Tried first on the raw readings with one noise
+ * for every point: it did nothing (best jerk ×1.01) — the limbs are 3× the torso's noise (measured on the still clips:
+ * 3D 1.3 against 0.8 cm, picture 2.8 against 0.7 % of the shoulders), and the noise wanders over frames.
+ */
+function hold(x: number, z: number, dt: number, band: number): number {
+  const e = z - x, a = Math.abs(e);
+  if (a <= band) return x + e * (1 - Math.exp(-dt / TUNE.holdCreep));
+  // past the band: the motor drives the excess, at once
+  const excess = e - Math.sign(e) * band;
+  return x + excess * (1 - Math.exp(-dt / TUNE.holdFollow)) + Math.sign(e) * band * (1 - Math.exp(-dt / TUNE.holdCreep));
+}
+/** hold `out` (shown) against `inp` (smoothed): `band(i, axis)` each coordinate's band */
+function holdLM(out: LM[], inp: LM[], dims: 2 | 3, dt: number, band: (i: number, a: number) => number): void {
+  for (let i = 0; i < N_LANDMARKS; i++) {
+    const o = out[i]!, p = inp[i]!, vis = Math.max(0.25, Math.min(1, p.v));
+    for (let a = 0; a < dims; a++) o[AXES[a]!] = hold(o[AXES[a]!], p[AXES[a]!], dt, band(i, a) / vis);
+    o.v = p.v;
   }
 }
 function resetBank(bank: CVBank, lm: LM[], dims: 2 | 3): void {
@@ -225,34 +267,46 @@ export class Tracker {
       // the depth for "what an upright torso looks like on screen": the track's, not this detection's (a flip moves it)
       const chk = this.check(t, p.d, t.T, K, up, now);
       t.verdict = chk.verdict;
+      let shift = { dx: 0, dy: 0 };
       if (TUNE.filter === 'kalman') {
         const fresh = !t.kf;
         const kf = t.kf ??= { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) };
         if (snap || fresh) { resetBank(kf.world, chk.world, 3); resetBank(kf.image, p.d.image, 2); kf.z.reset(0, t.T.z, TUNE.rDepth ** 2); }
         filterLM(kf.world, t.wsm, chk.world, 3, dt, kv);
         // the hand-held shake (below) moves the picture's filters too, so their predictions start from where it put them
-        if (!snap) { const { dx, dy } = shiftTogether(t.image, p.d.image); for (let i = 0; i < N_LANDMARKS; i++) { kf.image.shift(i * 2, dx); kf.image.shift(i * 2 + 1, dy); } }
-        filterLM(kf.image, t.image, p.d.image, 2, dt, kv);
+        if (!snap) { shift = shiftTogether(t.ism, p.d.image); for (let i = 0; i < N_LANDMARKS; i++) { kf.image.shift(i * 2, shift.dx); kf.image.shift(i * 2 + 1, shift.dy); } }
+        filterLM(kf.image, t.ism, p.d.image, 2, dt, kv);
       } else {
         blendLM(t.wsm, chk.world, snap ? 1 : kOf(dt, TUNE.tauWorld), kv, snap ? 1 : kOf(dt, TUNE.tauCore));
         // what moves together is followed at once, what jitters alone is smoothed: a hand-held camera shakes the whole
         // person in the frame, and an EMA on that lags it (measured: the costume trembled 1.6 px against the person
         // under a simulated tremor, 0.7 px unsmoothed). The torso's shared shift moves every smoothed point first; only
         // what is left over — each point's own noise — goes through the EMA.
-        if (!snap) shiftTogether(t.image, p.d.image);
-        blendLM(t.image, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage), kv);
+        if (!snap) shift = shiftTogether(t.ism, p.d.image);
+        blendLM(t.ism, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage), kv);
       }
-      t.world = this.shaped(t.wsm, t.image, t.len.torso, up);
+      // what is shown: held against the smoothed (the shake passes straight through: it moved the person)
+      if (TUNE.hold && !snap) {
+        for (const o of t.image) { o.x += shift.dx; o.y += shift.dy; }
+        const shoulders = Math.hypot(t.ism[L.shL]!.x - t.ism[L.shR]!.x, (t.ism[L.shL]!.y - t.ism[L.shR]!.y) * K.h / K.w) || 0.05;
+        holdLM(t.wh, t.wsm, 3, dt, (i, a) => (CORE.has(i) ? TUNE.holdWorldCore : TUNE.holdWorldLimb) * (a === 2 ? TUNE.holdZ : 1));
+        holdLM(t.image, t.ism, 2, dt, (i, a) => (CORE.has(i) ? TUNE.holdImageCore : TUNE.holdImageLimb) * shoulders * (a === 1 ? K.w / K.h : 1));
+      } else { copyInto(t.wh, t.wsm); copyInto(t.image, t.ism); }
+      t.world = this.shaped(t.wh, t.image, t.len.torso, up);
       if (TUNE.upright && Math.min(t.image[L.hipL]!.v, t.image[L.hipR]!.v) < 0.7 && t.verdict === 'kept') t.verdict = 'torso shot';
       // the hips from the smoothed shape and the smoothed (shake-following) picture; their depth smoothed again on its
       // own, keeping where they land on screen (x and y scale with depth along the same ray)
       const Ts = solveTranslation(t.world, t.image, K) ?? p.T!;
-      if (snap) { t.T = { ...Ts }; t.kf?.z.reset(0, Ts.z, TUNE.rDepth ** 2); }
+      if (snap) { t.T = { ...Ts }; t.zs = t.zh = Ts.z; t.kf?.z.reset(0, Ts.z, TUNE.rDepth ** 2); }
       else {
         if ((TUNE.filter === 'kalman' || TUNE.kalmanDepth) && !t.kf) { t.kf = { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) }; t.kf.z.reset(0, t.T.z, TUNE.rDepth ** 2); }
-        const z = (TUNE.filter === 'kalman' || TUNE.kalmanDepth) && t.kf ? t.kf.z.step(0, Ts.z, dt, TUNE.qDepth, TUNE.rDepth ** 2, TUNE.gate) : ema(t.T.z, Ts.z, kOf(dt, TUNE.tauZ));
-        const r = z / Ts.z;
-        t.T = { x: Ts.x * r, y: Ts.y * r, z };
+        const z = (TUNE.filter === 'kalman' || TUNE.kalmanDepth) && t.kf ? t.kf.z.step(0, Ts.z, dt, TUNE.qDepth, TUNE.rDepth ** 2, TUNE.gate)
+          : ema(t.zs ?? t.T.z, Ts.z, kOf(dt, TUNE.tauZ));
+        // the depth shown: held like the points (a still person's costume does not breathe in size)
+        t.zh = TUNE.hold && t.zh !== undefined ? hold(t.zh, z, dt, TUNE.holdDepth * Math.abs(z)) : z;
+        t.zs = z;
+        const r = t.zh / Ts.z;
+        t.T = { x: Ts.x * r, y: Ts.y * r, z: t.zh };
       }
       if (TUNE.pin) pinToPicture(t, K);
       // the person's lengths from the model's own pose (the anchored torso is the measured one, by construction)
@@ -267,7 +321,7 @@ export class Tracker {
       if (usedD.has(di)) return;
       const state: UprightState = { flatSince: null };
       const chk = this.check({ up: state }, p.d, p.T!, K, up, now);
-      const wsm = copyLM(chk.world), image = copyLM(p.d.image), len = bodyLengths(wsm);
+      const wsm = copyLM(chk.world), image = copyLM(p.d.image), len = bodyLengths(wsm), wh = copyLM(wsm), ism = copyLM(image);
       const world = this.shaped(wsm, image, len.torso, up);
       const T0 = solveTranslation(world, image, K) ?? p.T!;
       let kf: Track['kf'] = null;
@@ -275,7 +329,7 @@ export class Tracker {
         kf = { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) };
         resetBank(kf.world, wsm, 3); resetBank(kf.image, image, 2); kf.z.reset(0, T0.z, TUNE.rDepth ** 2);
       }
-      this.all.push({ id: this.nextId++, born: now, seen: now, image, world, wsm, T: { ...T0 }, len, presence: 0, hits: 1, lost: false, det: p.d, up: state, verdict: chk.verdict, kf });
+      this.all.push({ id: this.nextId++, born: now, seen: now, image, world, wsm, wh, ism, T: { ...T0 }, len, presence: 0, hits: 1, lost: false, det: p.d, up: state, verdict: chk.verdict, kf });
     });
     for (const t of this.all) {
       if (t.seen !== now) { t.lost = true; t.det = null; }

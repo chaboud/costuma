@@ -111,3 +111,40 @@ describe('kalman', () => {
     expect(Math.abs(x - 0.5 * 119 / 30)).toBeLessThan(0.005);
   });
 });
+
+describe('the hold', () => {
+  /** a still person whose readings tremble (1 cm in 3D, a pixel or two in the picture), then raises an arm */
+  function run(holdOn: boolean) {
+    const saved = TUNE.hold;
+    TUNE.hold = holdOn;
+    let seed = 3;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647 - 0.5; };
+    const tr = new Tracker();
+    const still = synthPerson({ T: { x: 0, y: -0.2, z: -3 } }, K);
+    const raised = synthPerson({ T: { x: 0, y: -0.2, z: -3 }, dir: { armL: [1, 0.4, 0], forearmL: [0.6, 1, 0] } }, K);
+    const noisy = (d: Detection) => ({ world: d.world.map((p) => ({ ...p, x: p.x + rnd() * 0.035, y: p.y + rnd() * 0.035, z: p.z + rnd() * 0.05 })), image: d.image.map((p) => ({ ...p, x: p.x + rnd() * 0.004, y: p.y + rnd() * 0.003 })) });
+    let t = 0, moved = 0, n = 0, prev: LM | null = null;
+    for (let i = 0; i < 90; i++) {
+      tr.update([noisy(still)], (t += 33), K);
+      const w = tr.tracks[0]?.world[L.wrL];
+      if (w && prev && i > 30) { moved += Math.hypot(w.x - prev.x, w.y - prev.y, w.z - prev.z); n++; }
+      if (w) prev = { ...w };
+    }
+    // the arm goes up: frames until the wrist is within 5 cm of where the raised arm puts it
+    const target = raised.world[L.wrL]!;
+    let frames = 0;
+    for (; frames < 30; frames++) {
+      tr.update([noisy(raised)], (t += 33), K);
+      const w = tr.tracks[0]!.world[L.wrL]!;
+      if (Math.hypot(w.x - target.x, w.y - target.y, w.z - target.z) < 0.05) break;
+    }
+    TUNE.hold = saved;
+    return { still: moved / n, frames };
+  }
+  it('a still person holds still, and a raised arm still arrives', () => {
+    const off = run(false), on = run(true);
+    expect(on.still).toBeLessThan(off.still * 0.5);
+    expect(on.frames).toBeLessThan(off.frames + 4);
+    expect(on.frames).toBeLessThan(10);
+  });
+});

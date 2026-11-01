@@ -84,6 +84,18 @@ describe('the face read from its mesh', () => {
     expect(e.browDownL).toBeLessThan(0.05);
     expect(e.browDownR).toBeLessThan(0.05);
   });
+  it('a held scowl levels out; a change surfaces', () => {
+    const calib = new FaceCalib();
+    calib.update(faceGeometry(mesh(), W, H)!, 1 / 30);
+    const scowl = { 336: [0, -0.4, 0] as [number, number, number], 107: [0, -0.4, 0] as [number, number, number] };
+    const g = faceGeometry(mesh(scowl), W, H)!;
+    expect(calib.express(g, NEUTRAL_FACE).browDownL).toBeGreaterThan(0.6);
+    // held for 15 seconds
+    for (let i = 0; i < 450; i++) calib.update(g, 1 / 30);
+    expect(calib.express(g, NEUTRAL_FACE).browDownL).toBeLessThan(0.15);
+    // then the brows go back up: that change surfaces, as a raise against the scowl
+    expect(calib.express(faceGeometry(mesh(), W, H)!, NEUTRAL_FACE).browUp).toBeGreaterThan(0.6);
+  });
   it('learns the person\'s own resting face, and a blink does not teach it', () => {
     // narrower eyes than the canonical face's: read as half shut at first, then as rest
     const narrowEyes = { 386: [0, -0.2, 0] as [number, number, number], 159: [0, -0.2, 0] as [number, number, number] };

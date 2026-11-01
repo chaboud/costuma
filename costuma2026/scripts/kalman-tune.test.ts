@@ -72,13 +72,17 @@ function run(recs: Rec[], tune: Partial<typeof TUNE>): Map<string, number[][]> {
 describe.skipIf(!files.length)('kalman tuning (replay)', () => {
   it('sweeps', () => {
     const clips = files.map((f) => ({ name: f.split('/').pop()!, recs: JSON.parse(readFileSync(f, 'utf8')) as Rec[] }));
-    const base = clips.map((c) => run(c.recs, { filter: 'ema', upright: false }));
+    const base = clips.map((c) => run(c.recs, { filter: 'ema', upright: false, hold: false }));
     const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]!; };
     const results: { tune: Partial<typeof TUNE>; err: number; jerk: number; step: number; label: string }[] = [];
     const tunes: [string, Partial<typeof TUNE>][] = [];
     // the EMA slowed down, for the trade-off it makes on its own
-    for (const s of [1, 1.25, 1.5, 2, 3]) tunes.push([`ema ×${s}`, { filter: 'ema', upright: false, tauWorld: TUNE.tauWorld * s, tauImage: TUNE.tauImage * s, tauCore: TUNE.tauCore * s, tauZ: TUNE.tauZ * s }]);
-    // the EMA ×1.5 on the points with the depth through a Kalman filter
+    for (const s of [1, 1.25, 1.5, 2, 3]) tunes.push([`ema ×${s}`, { filter: 'ema', upright: false, hold: false, tauWorld: TUNE.tauWorld * s, tauImage: TUNE.tauImage * s, tauCore: TUNE.tauCore * s, tauZ: TUNE.tauZ * s }]);
+    // the hold after the EMA: its bands as multiples of the measured noise, its creep and follow
+    for (const m of [0.5, 1, 1.5, 2.5]) for (const mi of [0.5, 1, 1.5]) for (const creep of [0.6, 1.5]) for (const follow of [0.02, 0.06]) {
+      tunes.push([`hold world ×${m} picture ×${mi} creep ${creep} follow ${follow}`, { filter: 'ema', upright: false, hold: true, holdWorldCore: 0.008 * m, holdWorldLimb: 0.013 * m, holdImageCore: 0.007 * mi, holdImageLimb: 0.028 * mi, holdCreep: creep, holdFollow: follow }]);
+    }
+    if (process.env.FULL) // the EMA ×1.5 on the points with the depth through a Kalman filter
     for (const qd of [0.01, 0.03, 0.1, 0.3, 1]) for (const rd of [0.03, 0.06]) tunes.push([`ema ×1.5 + kalman depth q ${qd} r ${rd}`, { filter: 'ema', upright: false, tauWorld: TUNE.tauWorld * 1.5, tauImage: TUNE.tauImage * 1.5, tauCore: TUNE.tauCore * 1.5, tauZ: TUNE.tauZ * 1.5, kalmanDepth: true, qDepth: qd, rDepth: rd, gate: 4 }]);
     if (!process.env.FULL) {} else for (const qw of [0.015, 0.05, 0.15, 0.5]) for (const core of [0.15, 0.4]) for (const qi of [0.002, 0.006, 0.02]) for (const gate of [3, 6]) for (const qd of [0.05, 0.3]) {
       tunes.push([`kalman qWorld ${qw}/${(qw * core).toFixed(4)} qImage ${qi}/${(qi * core).toFixed(4)} gate ${gate} qDepth ${qd}`, { filter: 'kalman', upright: false, qWorldLimb: qw, qWorldCore: qw * core, qImageLimb: qi, qImageCore: qi * core, gate, qDepth: qd }]);
@@ -100,7 +104,11 @@ describe.skipIf(!files.length)('kalman tuning (replay)', () => {
     front.sort((a, b) => a.err - b.err);
     console.log('the front (none better on both):');
     for (const r of front) console.log(`  err ×${r.err.toFixed(2)} jerk ×${r.jerk.toFixed(2)} jump ×${r.step.toFixed(2)} · ${r.label}`);
-    console.log('depth through Kalman (signal 3, the costume\'s size) vs ema ×1.5:');
+    const fad = results.filter((x) => x.label.startsWith('hold')).sort((a, b) => a.jerk - b.jerk);
+    console.log('holds, least jerk first:');
+    for (const r of fad.slice(0, 8)) console.log(`  err ×${r.err.toFixed(2)} jerk ×${r.jerk.toFixed(2)} jump ×${r.step.toFixed(2)} · ${r.label}`);
+    console.log('holds, least error first:');
+    for (const r of [...fad].sort((a, b) => a.err - b.err).slice(0, 5)) console.log(`  err ×${r.err.toFixed(2)} jerk ×${r.jerk.toFixed(2)} jump ×${r.step.toFixed(2)} · ${r.label}`);
     console.log('the EMA slowed:');
     for (const r of results.filter((x) => x.label.startsWith('ema'))) console.log(`  err ×${r.err.toFixed(2)} jerk ×${r.jerk.toFixed(2)} jump ×${r.step.toFixed(2)} · ${r.label}`);
   });

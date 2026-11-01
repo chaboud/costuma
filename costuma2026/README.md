@@ -74,7 +74,13 @@ in `src/main.ts`.
   frame-to-frame jitter 2–4× the picture's and now equal to it (6, 10, 6 px);
   the head's biggest jumps ~50 → ~15 px; arms and turns 25–42 % less jerky;
   injected depth flips on a street clip left the body horizontal for 3–6 frames
-  a person and now 0–1. A constant-velocity Kalman filter (`src/pose/kalman.ts`)
+  a person and now 0–1. **A hold after the smoothing** (founder: "like a PID
+  on a motorized fader"): each shown point moves only once the smoothed one
+  leaves a band round it the size of the model's measured noise for that kind
+  of point (limbs 3× the torso's), then at once; inside it, it creeps to
+  centre. On a still torso clip the arms moved 0.4–0.7° a frame instead of
+  1.9–2.1°, the costume's size 0.07 cm instead of 0.23; on the walking street
+  clip the error barely changed. A constant-velocity Kalman filter (`src/pose/kalman.ts`)
   was tried for the points and the depth and lost to the slower EMA on every
   recorded clip (MediaPipe's errors wander over frames, which a velocity filter
   reads as motion); it is there, off (`TUNE.filter`). Tracks fade in and out.
@@ -154,11 +160,12 @@ in `src/main.ts`.
   of the mesh"): in a frame on the rigid upper face, in outer-eye-corner spans,
   the lips' gap, each lid's opening, each mouth corner's lift, the mouth's
   width, each brow's inner and outer height, each iris across its eye, the chin
-  across the face — each against the person's own resting face (their first
+  across the face — each relative to the person's own resting face (their first
   reading, the mouth shut and eyes open as MediaPipe's canonical face model has
-  them, then learnt slowly; the open eye quickly). The blendshape scores fill
-  in what the mesh cannot say (a puffed cheek, a wrinkled nose) and floor the
-  smiles and brows. On real meshes of a smiling portrait the scores called both
+  them, then learnt over seconds; the open eye quickly, the mouth slowly), so a
+  resting frown or a held scowl levels out and changes surface (founder: "Just
+  do relative plus smoothing"). The blendshape scores only fill in what the
+  mesh cannot say (a puffed cheek, a wrinkled nose). On real meshes of a smiling portrait the scores called both
   eyes 27 % blinked, the mesh open; on an eye painted shut the scores read 0.57
   against 0.24, the mesh 1.00 against 0.00. Gains are assumed from typical
   faces, not measured on live ones. Into `FaceState` (`characters/build.ts`):

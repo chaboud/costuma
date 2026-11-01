@@ -10,7 +10,7 @@
 // on it in this frame) and adapts: slowly on everything (expressions come and go; the face stays), quickly upward on
 // the eyes' opening (blinks are brief, so the open eye is the most common large value). The gains — how far a movement reads as "all the way" — are
 // assumed from typical faces, not measured on live ones.
-import type { FaceState } from '../characters/build';
+import { NEUTRAL_FACE, type FaceState } from '../characters/build';
 
 /** the face's shape this frame, in outer-eye-corner spans, in its own frame (x the person's left, y up) */
 export interface FaceGeo {
@@ -95,7 +95,9 @@ export function faceGeometry(pts: P[], W: number, H: number): FaceGeo | null {
 
 export const GEO_TUNE = {
   /** seconds: the resting face follows the person this slowly; the eyes' opening this fast upward (blinks are brief) */
-  tauRest: 8, tauOpenEye: 2.5, tauShutEye: 20,
+  tauRest: 6, tauOpenEye: 2.5, tauShutEye: 20,
+  /** the mouth's rest: learnt shut quickly, open slowly (a mouth breather levels out, a yawn does not) */
+  tauMouthShut: 1.5, tauMouthOpen: 25,
   /** how far each movement reads as all the way (outer-eye-corner spans; assumed from typical faces) */
   gapFull: 0.42, cornerFull: 0.06, browFull: 0.06, browDownFull: 0.045, lookFull: 0.35, lookYFull: 0.1, chinFull: 0.08,
   /** an eye this much closed (1 - opening over its resting opening) starts to read as a blink, and this much is shut */
@@ -131,41 +133,43 @@ export class FaceCalib {
         this.rest[k] = toward(this.rest[k], g[k], dt, g[k] > this.rest[k] * 0.8 ? T.tauOpenEye : T.tauShutEye);
       } else if (k === 'gap') {
         // the mouth rests shut: only ever learnt downward quickly, upward very slowly
-        this.rest.gap = toward(this.rest.gap, g.gap, dt, g.gap < this.rest.gap ? T.tauOpenEye : T.tauShutEye * 3);
+        this.rest.gap = toward(this.rest.gap, g.gap, dt, g.gap < this.rest.gap ? T.tauMouthShut : T.tauMouthOpen);
       } else this.rest[k] = toward(this.rest[k], g[k], dt, T.tauRest);
     }
   }
 
   /**
    * The expressions this shape makes against the rest. `scores`: the model's blendshape reading of the same face, used
-   * where the mesh says nothing (a puffed cheek, a wrinkled nose) and, for smiles, brows and lips, as a floor: the larger
-   * of the two, so a constant smile the rest has learnt still reads.
+   * only where the mesh says nothing (a puffed cheek, a wrinkled nose).
    */
   express(g: FaceGeo, scores: FaceState): FaceState {
+    // relative throughout (founder: "If someone has resting bitch face, it'll level out. If they hold a scowl, it'll
+    // level out. The changes will surface"): every channel against the learnt rest; the scores only for what the mesh
+    // cannot say (a puffed cheek, a wrinkled nose)
     const T = GEO_TUNE, r = this.rest;
     const jaw = clamp01((g.gap - r.gap) / T.gapFull);
     const close = (ap: number, rest: number) => 1 - ap / Math.max(1e-3, rest);
     const cL = close(g.apL, r.apL), cR = close(g.apR, r.apR);
     const blink = (c: number) => clamp01((c - T.blinkFrom) / (T.blinkTo - T.blinkFrom));
-    const smileL = Math.max(scores.smileL, clamp01((g.cornerL - r.cornerL) / T.cornerFull));
-    const smileR = Math.max(scores.smileR, clamp01((g.cornerR - r.cornerR) / T.cornerFull));
+    const smileL = clamp01((g.cornerL - r.cornerL) / T.cornerFull), smileR = clamp01((g.cornerR - r.cornerR) / T.cornerFull);
     const down = clamp01(-((g.cornerL - r.cornerL) + (g.cornerR - r.cornerR)) / 2 / T.cornerFull) * (1 - jaw);
     const narrow = clamp01((0.9 - g.width / Math.max(1e-3, r.width)) / 0.25);
     const shut = 1 - clamp01((g.gap - r.gap) / 0.12);
     return {
-      ...scores,
+      ...NEUTRAL_FACE,
+      puff: scores.puff, sneer: scores.sneer,
       jaw,
       blinkL: blink(cL), blinkR: blink(cR),
-      squintL: Math.max(scores.squintL * 0.5, clamp01(cL / 0.45)), squintR: Math.max(scores.squintR * 0.5, clamp01(cR / 0.45)),
+      squintL: clamp01(cL / 0.45), squintR: clamp01(cR / 0.45),
       wideL: clamp01(-cL / 0.35), wideR: clamp01(-cR / 0.35),
       smileL, smileR, smile: (smileL + smileR) / 2,
-      frown: Math.max(scores.frown, down),
-      pucker: Math.max(scores.pucker, narrow * shut), funnel: Math.max(scores.funnel, narrow * (1 - shut)),
-      browUp: Math.max(scores.browUp, clamp01(((g.browInL - r.browInL) + (g.browInR - r.browInR)) / 2 / T.browFull)),
-      browDownL: Math.max(scores.browDownL, clamp01(-(g.browInL - r.browInL) / T.browDownFull)),
-      browDownR: Math.max(scores.browDownR, clamp01(-(g.browInR - r.browInR) / T.browDownFull)),
-      browOuterL: Math.max(scores.browOuterL, clamp01((g.browOutL - r.browOutL) / T.browFull)),
-      browOuterR: Math.max(scores.browOuterR, clamp01((g.browOutR - r.browOutR) / T.browFull)),
+      frown: down,
+      pucker: narrow * shut, funnel: narrow * (1 - shut),
+      browUp: clamp01(((g.browInL - r.browInL) + (g.browInR - r.browInR)) / 2 / T.browFull),
+      browDownL: clamp01(-(g.browInL - r.browInL) / T.browDownFull),
+      browDownR: clamp01(-(g.browInR - r.browInR) / T.browDownFull),
+      browOuterL: clamp01((g.browOutL - r.browOutL) / T.browFull),
+      browOuterR: clamp01((g.browOutR - r.browOutR) / T.browFull),
       // toward the person's left: the left iris toward its outer corner, the right toward its inner
       lookX: clamp1(((g.irisXL - r.irisXL) - (g.irisXR - r.irisXR)) / 2 / T.lookFull),
       lookY: clamp1(((g.irisYL - r.irisYL) + (g.irisYR - r.irisYR)) / 2 / T.lookYFull),
