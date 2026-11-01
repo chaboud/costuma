@@ -110,8 +110,11 @@ export const GEO_TUNE = {
   blinkFrom: 0.3, blinkTo: 0.8,
 };
 
-const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
-const clamp1 = (x: number) => Math.max(-1, Math.min(1, x));
+/** 0..1 by a smooth step (a ramp with no corners: the expressions drive motion) */
+const smooth01 = (x: number) => { const t = Math.max(0, Math.min(1, x)); return t * t * (3 - 2 * t); };
+const clamp01 = smooth01;
+/** -1..1, easing into the ends (tanh): a gaze or a sideways jaw never meets a wall */
+const clamp1 = (x: number) => Math.tanh(x);
 const toward = (a: number, b: number, dt: number, tau: number) => a + (b - a) * (1 - Math.exp(-dt / tau));
 type Keys = keyof FaceGeo;
 
@@ -135,11 +138,14 @@ export class FaceCalib {
     const T = GEO_TUNE;
     for (const k of Object.keys(this.rest) as Keys[]) {
       if (k === 'apL' || k === 'apR') {
-        // an eye nearly as open as its rest teaches fast; a closing one barely (a blink or a squint is not the rest)
-        this.rest[k] = toward(this.rest[k], g[k], dt, g[k] > this.rest[k] * 0.8 ? T.tauOpenEye : T.tauShutEye);
+        // an eye nearly as open as its rest teaches fast; a closing one barely (a blink or a squint is not the rest) —
+        // the rate a curve of how open it is, not a switch
+        const open = smooth01((g[k] / Math.max(1e-3, this.rest[k]) - 0.65) / 0.3);
+        this.rest[k] = toward(this.rest[k], g[k], dt, T.tauShutEye + (T.tauOpenEye - T.tauShutEye) * open);
       } else if (k === 'gap') {
-        // the mouth rests shut: only ever learnt downward quickly, upward very slowly
-        this.rest.gap = toward(this.rest.gap, g.gap, dt, g.gap < this.rest.gap ? T.tauMouthShut : T.tauMouthOpen);
+        // the mouth rests shut: learnt downward quickly, upward slowly, the rate a curve of which way and how far
+        const shutting = smooth01(0.5 - (g.gap - this.rest.gap) / 0.08);
+        this.rest.gap = toward(this.rest.gap, g.gap, dt, T.tauMouthOpen + (T.tauMouthShut - T.tauMouthOpen) * shutting);
       } else this.rest[k] = toward(this.rest[k], g[k], dt, T.tauRest);
     }
   }

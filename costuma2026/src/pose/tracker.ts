@@ -85,7 +85,7 @@ export const TUNE = {
    */
   filter: 'ema' as 'kalman' | 'ema',
   /**
-   * The hold after the smoothing (hold()): on, and its bands — the 3D points (metres; depth ×`holdZ`), the picture's
+   * The motor after the smoothing (motor()): on, and its bands — the 3D points (metres; depth ×`holdZ`), the picture's
    * points (a share of the shoulders' width on screen), each for the torso-and-face and for the limbs; the hips' depth
    * (a share of it) — and its creep and follow (seconds). The bands are the model's measured noise. Replayed on a still
    * torso clip, frame-to-frame movement: arms 1.9–2.1° → 0.4–0.7°, chest turn 0.70 → 0.36°, head 0.49 → 0.31°, size
@@ -94,9 +94,6 @@ export const TUNE = {
    */
   hold: true,
   holdWorldCore: 0.008, holdWorldLimb: 0.013, holdZ: 1.5, holdImageCore: 0.007, holdImageLimb: 0.028, holdDepth: 0.015,
-  holdCreep: 1.2, holdFollow: 0.02,
-  /** the shown values follow the smoothed ones by the dead band and snap ('hold') or by the motor ('motor') */
-  follow: 'motor' as 'hold' | 'motor',
   /** the motor's stiffness (rad/s) for the torso-and-face and the limbs, and its faint pull inside the band */
   motorCore: 10, motorLimb: 14, motorCreep: 2.5, motorBoost: 2,
   /** the shared shift's motor (rad/s): stiff, so a hand-held shake is followed nearly at once */
@@ -176,36 +173,22 @@ function filterLM(bank: CVBank, out: LM[], inp: LM[], dims: 2 | 3, dt: number, k
   }
 }
 /**
- * The fader's hold (founder, 2026-11-01: "a smoothing that considers the scale of difference to allow
- * tremble/inaccuracy to not cause jumpiness but allows major changes ... like a PID on a motorized fader"): after the
- * smoothing, each point's shown position moves only once the smoothed one has left a band round it (`band`, sized from
- * the model's measured noise for that kind of point), and then at once, trailing by the band; inside it, it creeps to
- * centre (`holdCreep` s). A still person holds still; a move gets through. Tried first on the raw readings with one noise
- * for every point: it did nothing (best jerk ×1.01) — the limbs are 3× the torso's noise (measured on the still clips:
- * 3D 1.3 against 0.8 cm, picture 2.8 against 0.7 % of the shoulders), and the noise wanders over frames.
- */
-function hold(x: number, z: number, dt: number, band: number): number {
-  const e = z - x, a = Math.abs(e);
-  if (a <= band) return x + e * (1 - Math.exp(-dt / TUNE.holdCreep));
-  // past the band: the motor drives the excess, at once
-  const excess = e - Math.sign(e) * band;
-  return x + excess * (1 - Math.exp(-dt / TUNE.holdFollow)) + Math.sign(e) * band * (1 - Math.exp(-dt / TUNE.holdCreep));
-}
-/**
- * The motorized fader, as asked (founder: "Did you try my PID style thing?"): the shown value is a motor with a
- * position and a velocity driven toward the smoothed reading — P on the error past a dead band the size of the model's
- * noise, D on its own velocity (critically damped: it arrives without overshoot), and inside the band only a faint pull
- * (`motorCreep`, standing in for the I term: the last offset settles away over a second or two). Starts and stops are
- * smooth (the velocity never jumps), a wobble inside the noise never moves it, a real move drives it at once. `w`
- * (rad/s) is how stiff the motor is. Returns the new velocity; writes the position through `set`.
+ * A fader's motor (founder: "I was just relating it to motorized faders, dude. To get rid of tremble"): the shown value
+ * has a position and a velocity, driven toward the smoothed reading by a pull that grows as a curve of the error (a
+ * cube inside the model's noise, the error itself well past it), damped by its own velocity (critically: it arrives
+ * without overshoot), with a faint linear pull (`motorCreep`) that settles the last offset over a second or two. Starts
+ * and stops are smooth (the velocity never jumps); a tremble the size of the noise barely moves it; a real move drives
+ * it at once. `w` (rad/s) is how stiff the motor is. Returns the new position and velocity.
  */
 function motor(x: number, v: number, r: number, dt: number, band: number, w: number): [number, number] {
   const n = Math.max(1, Math.ceil((dt * w * (1 + TUNE.motorBoost)) / 0.35)), h = dt / n, wc = TUNE.motorCreep;
   for (let k = 0; k < n; k++) {
-    const e = r - x, out = Math.max(0, Math.abs(e) - band) * Math.sign(e);
-    // a big error drives harder (the motor's gain scheduled on the error, in bands): a wobble meets the plain motor,
-    // a real move up to (1 + motorBoost)× its stiffness, so it arrives sooner; the velocity stays continuous
-    const b = band > 0 ? Math.min(1, Math.max(0, (Math.abs(e) / band - 2) / 6)) : 1, wk = w * (1 + TUNE.motorBoost * b);
+    // the pull is a curve of the error, never a threshold (founder: "The dead [band] shouldn't be a threshold. It
+    // should be a curve behavior. Smooth. Always smooth ... no booleans in motion"): e·m²/(1+m²), m the error in bands —
+    // a cube (e³/b²) inside the noise, the error itself well past it, every derivative continuous between
+    const e = r - x, m2 = band > 0 ? (e * e) / (band * band) : 1e9, out = (e * m2) / (1 + m2);
+    // and stiffer the further off, by a curve too: half the boost at four bands, most of it by eight
+    const wk = w * (1 + (TUNE.motorBoost * m2) / (m2 + 16));
     const a = wk * wk * out + wc * wc * e - 2 * wk * v;
     v += a * h;
     x += v * h;
@@ -225,14 +208,6 @@ function motorLM(out: LM[], inp: LM[], vel: Float64Array, dims: 2 | 3, dt: numbe
   }
 }
 
-/** hold `out` (shown) against `inp` (smoothed): `band(i, axis)` each coordinate's band */
-function holdLM(out: LM[], inp: LM[], dims: 2 | 3, dt: number, band: (i: number, a: number) => number): void {
-  for (let i = 0; i < N_LANDMARKS; i++) {
-    const o = out[i]!, p = inp[i]!, vis = Math.max(0.25, Math.min(1, p.v));
-    for (let a = 0; a < dims; a++) o[AXES[a]!] = hold(o[AXES[a]!], p[AXES[a]!], dt, band(i, a) / vis);
-    o.v = p.v;
-  }
-}
 function resetBank(bank: CVBank, lm: LM[], dims: 2 | 3): void {
   for (let i = 0; i < N_LANDMARKS; i++) for (let a = 0; a < dims; a++) {
     const r = dims === 2 ? TUNE.rImage : a === 2 ? TUNE.rWorldZ : TUNE.rWorld;
@@ -242,16 +217,16 @@ function resetBank(bank: CVBank, lm: LM[], dims: 2 | 3): void {
 const UP = new THREE.Vector3(0, 1, 0);
 
 /**
- * The smoothing setting (settings → Smoothing, 0 snappy .. 1 steady): one knob over the EMA's times, the dead bands and
- * the motor's stiffness together. Replayed (scripts/stability-sim.test.ts), the motor at the middle setting holds a
- * still torso's arms to ~0.15° a frame (the dead band alone, before it: 0.53°; the EMA alone: 2.0°) and its position to
- * 1.1 px a frame (3.6), at the cost of lag on fast moves (a walking street's chest turn: 17.6° error → ~24°).
+ * The smoothing setting (settings → Smoothing, 0 snappy .. 1 steady): one knob over the EMA's times, the motors' knees
+ * (the band their pull curves up through) and their stiffness together. Replayed (scripts/stability-sim.test.ts) at the
+ * middle setting: a still torso's arms move ~0.16° a frame (the EMA alone: 2.0°), its position 1.1 px (3.2), at the
+ * cost of lag on fast moves (a walking street's chest turn: 15.7° error → ~25°).
  */
 export function setSmoothing(s: number): void {
   const k = Math.max(0, Math.min(1, s)), lerp = (a: number, b: number) => a + (b - a) * k;
-  TUNE.smoothW = lerp(2, 0.55);
-  TUNE.smoothBand = lerp(0.7, 2);
-  TUNE.smoothTau = lerp(0.8, 1.6);
+  TUNE.smoothW = lerp(2.4, 0.8);
+  TUNE.smoothBand = lerp(1.5, 4.5);
+  TUNE.smoothTau = lerp(0.8, 1.2);
 }
 
 const TORSO = [L.shL, L.shR, L.hipL, L.hipR];
@@ -265,16 +240,18 @@ const TORSO = [L.shL, L.shR, L.hipL, L.hipR];
 function pinToPicture(t: Track, K: Intrinsics): void {
   let du = 0, dv = 0, w = 0;
   for (const i of TORSO) {
-    const im = t.image[i]!, wp = t.world[i]!, k = Math.max(0, Math.min(1, (im.v - 0.4) / 0.4));
+    const im = t.image[i]!, wp = t.world[i]!, sv = Math.max(0, Math.min(1, (im.v - 0.4) / 0.4)), k = sv * sv * (3 - 2 * sv);
     if (k <= 0) continue;
     const z = -(t.T.z + wp.z);
     if (z <= 0.05) continue;
     const u = K.cx + (K.f * (t.T.x + wp.x)) / z, v = K.cy - (K.f * (t.T.y + wp.y)) / z;
     du += (im.x * K.w - u) * k; dv += (im.y * K.h - v) * k; w += k;
   }
-  if (w < 0.5) return;
+  if (w <= 1e-6) return;
+  // a torso barely seen pins barely: the pull eases in with how much of it is seen (no switch)
+  const sw = Math.min(1, Math.max(0, (w - 0.25) / 0.75)), take = sw * sw * (3 - 2 * sw);
   const depth = -t.T.z;
-  t.T = { x: t.T.x + ((du / w) * depth) / K.f, y: t.T.y - ((dv / w) * depth) / K.f, z: t.T.z };
+  t.T = { x: t.T.x + ((du / w) * depth * take) / K.f, y: t.T.y - ((dv / w) * depth * take) / K.f, z: t.T.z };
 }
 
 export class Tracker {
@@ -319,8 +296,9 @@ export class Tracker {
       if (usedT.has(pr.ti) || usedD.has(pr.di)) continue;
       usedT.add(pr.ti); usedD.add(pr.di);
       const t = live[pr.ti]!, p = placed[pr.di]!;
-      // a track coming back from lost snaps rather than gliding across the frame
-      const snap = t.lost;
+      // a track coming back from lost snaps rather than gliding across the frame — only while it is faded out
+      // enough not to be seen doing it; still showing, it glides (no jumps on screen)
+      const snap = t.lost && t.presence < 0.05;
       const kv = snap ? 1 : kOf(dt, TUNE.tauVis);
       // the depth for "what an upright torso looks like on screen": the track's, not this detection's (a flip moves it)
       const chk = this.check(t, p.d, t.T, K, up, now);
@@ -348,7 +326,7 @@ export class Tracker {
         // the shared shift: a hand-held camera's shake is followed (the person moved in the picture), the model's own
         // whole-body jitter is not — through a stiff motor with a band the size of the torso's noise (follow 'motor')
         let sdx = shift.dx, sdy = shift.dy;
-        if (TUNE.follow === 'motor') {
+        {
           const c = t.cm ??= { tx: 0, ty: 0, x: 0, y: 0, vx: 0, vy: 0 };
           const sw = Math.hypot(t.ism[L.shL]!.x - t.ism[L.shR]!.x, (t.ism[L.shL]!.y - t.ism[L.shR]!.y) * K.h / K.w) || 0.05;
           const band = TUNE.holdImageCore * sw * TUNE.smoothBand, x0 = c.x, y0 = c.y;
@@ -358,18 +336,13 @@ export class Tracker {
           sdx = c.x - x0; sdy = c.y - y0;
           // the smoothed picture keeps the person where they are; the shown follows by the motor
           for (const o of t.image) { o.x += sdx; o.y += sdy; }
-        } else for (const o of t.image) { o.x += sdx; o.y += sdy; }
+        }
         const shoulders = Math.hypot(t.ism[L.shL]!.x - t.ism[L.shR]!.x, (t.ism[L.shL]!.y - t.ism[L.shR]!.y) * K.h / K.w) || 0.05;
         const bw = (i: number, a: number) => (CORE.has(i) ? TUNE.holdWorldCore : TUNE.holdWorldLimb) * (a === 2 ? TUNE.holdZ : 1) * TUNE.smoothBand;
         const bi = (i: number, a: number) => (CORE.has(i) ? TUNE.holdImageCore : TUNE.holdImageLimb) * shoulders * (a === 1 ? K.w / K.h : 1) * TUNE.smoothBand;
-        if (TUNE.follow === 'motor') {
-          const vel = t.vel ??= { world: new Float64Array(N_LANDMARKS * 3), image: new Float64Array(N_LANDMARKS * 2), z: 0 };
-          motorLM(t.wh, t.wsm, vel.world, 3, dt, bw);
-          motorLM(t.image, t.ism, vel.image, 2, dt, bi);
-        } else {
-          holdLM(t.wh, t.wsm, 3, dt, bw);
-          holdLM(t.image, t.ism, 2, dt, bi);
-        }
+        const vel = t.vel ??= { world: new Float64Array(N_LANDMARKS * 3), image: new Float64Array(N_LANDMARKS * 2), z: 0 };
+        motorLM(t.wh, t.wsm, vel.world, 3, dt, bw);
+        motorLM(t.image, t.ism, vel.image, 2, dt, bi);
       } else { copyInto(t.wh, t.wsm); copyInto(t.image, t.ism); if (t.vel) { t.vel.world.fill(0); t.vel.image.fill(0); t.vel.z = 0; } }
       t.world = this.shaped(t.wh, t.image, t.len.torso, up);
       if (TUNE.upright && Math.min(t.image[L.hipL]!.v, t.image[L.hipR]!.v) < 0.7 && t.verdict === 'kept') t.verdict = 'torso shot';
@@ -382,10 +355,10 @@ export class Tracker {
         const z = (TUNE.filter === 'kalman' || TUNE.kalmanDepth) && t.kf ? t.kf.z.step(0, Ts.z, dt, TUNE.qDepth, TUNE.rDepth ** 2, TUNE.gate)
           : ema(t.zs ?? t.T.z, Ts.z, kOf(dt, TUNE.tauZ * TUNE.smoothTau));
         // the depth shown: held like the points (a still person's costume does not breathe in size)
-        if (TUNE.hold && t.zh !== undefined && TUNE.follow === 'motor') {
+        if (TUNE.hold && t.zh !== undefined) {
           const vel = t.vel ??= { world: new Float64Array(N_LANDMARKS * 3), image: new Float64Array(N_LANDMARKS * 2), z: 0 };
           [t.zh, vel.z] = motor(t.zh, vel.z, z, dt, TUNE.holdDepth * Math.abs(z) * TUNE.smoothBand, TUNE.motorCore * TUNE.smoothW);
-        } else t.zh = TUNE.hold && t.zh !== undefined ? hold(t.zh, z, dt, TUNE.holdDepth * Math.abs(z) * TUNE.smoothBand) : z;
+        } else t.zh = z;
         t.zs = z;
         const r = t.zh / Ts.z;
         t.T = { x: Ts.x * r, y: Ts.y * r, z: t.zh };
@@ -401,7 +374,7 @@ export class Tracker {
     }
     placed.forEach((p, di) => {
       if (usedD.has(di)) return;
-      const state: UprightState = { flatSince: null };
+      const state: UprightState = { belief: 0, at: -1 };
       const chk = this.check({ up: state }, p.d, p.T!, K, up, now);
       const wsm = copyLM(chk.world), image = copyLM(p.d.image), len = bodyLengths(wsm), wh = copyLM(wsm), ism = copyLM(image);
       const world = this.shaped(wsm, image, len.torso, up);

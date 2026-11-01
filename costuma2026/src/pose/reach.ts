@@ -82,7 +82,12 @@ export function reachLimbs(rig: Rig, root: THREE.Object3D, image: LM[], K: Intri
       let target: THREE.Vector3;
       if (disc >= 0) {
         const a = C.clone().addScaledVector(d, -dm + Math.sqrt(disc)), c = C.clone().addScaledVector(d, -dm - Math.sqrt(disc));
-        target = a.distanceToSquared(tip) <= c.distanceToSquared(tip) ? a : c;
+        // the meeting nearer the 3D guess, eased across where both are as near (a hard pick would flip the limb's
+        // depth in a frame: "no booleans in motion")
+        const da = a.distanceTo(tip), dc = c.distanceTo(tip), q = (dc - da) / Math.max(1e-6, da + dc);
+        // (narrow: only where the two are within ~13 % of each other is the end let off the ray, briefly)
+        const t = Math.min(1, Math.max(0, 0.5 + q * 8)), wa = t * t * (3 - 2 * t);
+        target = c.clone().lerp(a, wa);
       } else target = C.clone().addScaledVector(d, -dm);
       // the miss before (for the record): the end's distance from the ray, in pixels at its depth
       const proj = (p: THREE.Vector3) => { const q = p.clone().multiplyScalar(s).add(pos); return [K.cx + (K.f * q.x) / -q.z, K.cy - (K.f * q.y) / -q.z]; };
@@ -91,7 +96,9 @@ export function reachLimbs(rig: Rig, root: THREE.Object3D, image: LM[], K: Intri
         _q.setFromUnitVectors(cur, want);
         const ang = 2 * Math.acos(Math.min(1, Math.abs(_q.w)));
         if (out) out[name] = { reach: disc >= 0, turn: THREE.MathUtils.radToDeg(ang) };
-        const take = w * Math.min(1, ang > 1e-6 ? T.maxTurn / ang : 1);
+        // the turn eases off toward its cap instead of meeting it: ang / (1 + (ang/cap)⁴)^¼ — all of a turn well under
+        // the cap, bending smoothly toward it near (a 45° turn under a 120° cap keeps 99.9 % of itself)
+        const r4 = (ang / T.maxTurn) ** 4, take = w / Math.pow(1 + r4, 0.25);
         // (slerpQuaternions copies its first argument into the result first: the result must not be the second)
         const turn = new THREE.Quaternion().slerpQuaternions(new THREE.Quaternion(), _q, take);
         // the turn in the root's frame, carried into the bone's own: local' = parent⁻¹ · turn · parent · local

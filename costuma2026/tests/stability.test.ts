@@ -74,7 +74,16 @@ describe('upright: people stand up', () => {
     const img = lyingW.map((w) => { const z = -(w.z - 3); return { x: (K.cx + (K.f * w.x) / z) / K.w, y: (K.cy - (K.f * (w.y - 0.2)) / z) / K.h, z: 0, v: w.v }; });
     const det = { ...lying, world: lyingW, image: img };
     const verdicts: string[] = [];
-    for (let i = 0; i < 25; i++) { tr.update([det], (t += 33), K); verdicts.push(tr.tracks[0]!.verdict); }
+    let prevTilt = tilt(tr.tracks[0]!.world), worstStep = 0;
+    for (let i = 0; i < 25; i++) {
+      tr.update([det], (t += 33), K);
+      verdicts.push(tr.tracks[0]!.verdict);
+      const now = tilt(tr.tracks[0]!.world);
+      worstStep = Math.max(worstStep, Math.abs(now - prevTilt));
+      prevTilt = now;
+    }
+    // no booleans in motion: it turns into the floor move frame by frame, never jumping (it jumped ~30° at acceptance)
+    expect(worstStep).toBeLessThan(12);
     expect(verdicts[0]).toBe('holding');
     expect(verdicts.at(-1)).toBe('accepted');
     expect(tilt(tr.tracks[0]!.world)).toBeGreaterThan(60);

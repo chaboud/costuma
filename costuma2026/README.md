@@ -74,21 +74,24 @@ in `src/main.ts`.
   frame-to-frame jitter 2–4× the picture's and now equal to it (6, 10, 6 px);
   the head's biggest jumps ~50 → ~15 px; arms and turns 25–42 % less jerky;
   injected depth flips on a street clip left the body horizontal for 3–6 frames
-  a person and now 0–1. **A motorized fader after the smoothing** (founder:
-  "a smoothing that considers the scale of difference … like a PID on a
-  motorized fader"): each shown value is a motor with a position and a velocity,
-  driven toward the smoothed reading by P on the error past a dead band the
-  size of the model's measured noise for that kind of point (limbs 3× the
-  torso's), D on its velocity (critically damped), a faint pull inside the band
-  for the last offset, and a stiffness that grows with the error so a big move
-  arrives sooner; the whole body's shared shift (a hand-held camera's shake)
-  through a stiff one. **Settings → Smoothing** (0 snappy .. 1 steady, default
-  0.5) scales the EMA's times, the bands and the motors together. Replayed on a
-  still torso clip at the default: arms 0.09° a frame (the EMA alone 2.0°, the
-  dead band alone 0.53°), the costume's position 1.0 px (3.6), its size 0.02
-  cm; on a walking street clip the chest turn's error 17.6° → 26° (lag); at 0,
-  the walking error of the dead band alone with less than half its position
-  jitter. A constant-velocity Kalman filter (`src/pose/kalman.ts`)
+  a person and now 0–1. **A fader's motor after the smoothing** (founder:
+  "to get rid of tremble … no booleans in motion"): each shown value has a
+  position and a velocity, pulled toward the smoothed reading by a curve of the
+  error — e·m²/(1+m²), m the error in units of the model's measured noise for
+  that kind of point (limbs 3× the torso's): a cube inside the noise, the error
+  itself well past it, no threshold anywhere — damped by its velocity
+  (critically), stiffer the further off by another curve, with a faint linear
+  pull that settles the last offset; the whole body's shared shift (a hand-held
+  camera's shake) through a stiff one. **Settings → Smoothing** (0 snappy .. 1
+  steady, default 0.5) scales the EMA's times, the motors' knees and their
+  stiffness together. Replayed on a still torso clip at the default: arms
+  ~0.16° a frame (the EMA alone 2.0°), position 1.1 px (3.2); on a walking
+  street clip the chest turn's error 15.7° → ~25° (lag). The same rule runs
+  through the rest of the motion: the upright check believes a flat body by a
+  curve over time and turns the torso a share of the way (it used to hold, then
+  jump ~30° at acceptance), the reach eases between its two depth answers and
+  toward its turn cap, the picture pin eases in with how much torso is seen,
+  and the face's rest learns at rates that are curves. A constant-velocity Kalman filter (`src/pose/kalman.ts`)
   was tried for the points and the depth and lost to the slower EMA on every
   recorded clip (MediaPipe's errors wander over frames, which a velocity filter
   reads as motion); it is there, off (`TUNE.filter`). Tracks fade in and out.
