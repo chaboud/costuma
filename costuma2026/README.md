@@ -92,6 +92,15 @@ in `src/main.ts`.
   person can make (arms overhead included). Limbs out of view fall back to
   rest. Limbs stretch toward the wearer's lengths (`fit.limb`), the neck
   squashes so the head lands on the wearer's (`fit.head`).
+- **Reach** (`src/pose/reach.ts`): after the retarget, each limb bone is aimed
+  so its far end lands on the person's joint in the picture — the camera's ray
+  through the joint met by a sphere of the bone's own length round where the
+  bone starts (of the two meetings, the one nearer the 3D guess; past the
+  bone's reach, its nearest point), down the chain, weighed by visibility.
+  The costume's proportions are kept (founder: "within skeletal constraints of
+  the character"); joint limits would go here. A person 1.3 m off with arms
+  forward: elbows, wrists, knees and ankles that were 9–493 px off the person's
+  (Howler's forearm the worst) land on them wherever the bone reaches.
 - **Characters** (`src/characters/`): code, no model files. An SDF body
   polygonised by marching cubes, coloured by region, skinned by distance to
   its segments (Strollzilla's `build.ts`, generalised), plus rigid meshes on

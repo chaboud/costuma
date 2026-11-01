@@ -6,6 +6,7 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { buildCharacter, type Built, type CharacterDef, type SurfaceArrays } from '../characters/build';
 import { byId } from '../characters/roster';
 import { Rig, poseFromLandmarks, type BodyPose } from '../pose/rig';
+import { reachLimbs, REACH_TUNE } from '../pose/reach';
 import type { Track } from '../pose/tracker';
 import { project, type Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
@@ -244,7 +245,10 @@ export class Stage {
   }
 
   /** fit the camera and the background to the canvas and the video (cover), with the solve's intrinsics */
+  /** the camera, as last laid out */
+  private K: Intrinsics | null = null;
   layout(K: Intrinsics, mirror: boolean): void {
+    this.K = K;
     const cw = this.canvas.clientWidth || window.innerWidth, ch = this.canvas.clientHeight || window.innerHeight;
     const pr = this.opts.pixelRatio;
     if (this.renderer.getPixelRatio() !== pr) this.renderer.setPixelRatio(pr);
@@ -345,6 +349,8 @@ export class Stage {
     if (def.face?.jaw) rig.setJaw((tr.face?.jaw ?? 0) * def.face.jaw, tr.face?.jawSide ?? 0);
     w.root.position.set(tr.T.x, tr.T.y, tr.T.z);
     w.root.scale.setScalar(s);
+    // the limbs aimed at the person's in the picture, at the costume's own bone lengths (pose/reach.ts)
+    if (this.K && REACH_TUNE.strength > 0) reachLimbs(rig, w.root, tr.image, this.K);
     const f0 = tr.presence * Math.max(0, Math.min(1, w.life));
     const fade = f0 * f0 * (3 - 2 * f0);
     if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade * ((m.userData.baseOpacity as number | undefined) ?? 1); w.fade = fade; }
