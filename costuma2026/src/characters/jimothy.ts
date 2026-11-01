@@ -30,15 +30,16 @@
 // The face follows the wearer's (FaceState, build.ts; `tick` below). The lower jaw is its own mesh, rigid on the `jaw`
 // bone and furred like the rest (wolf.ts furredPart): the head below the mouth line, ahead of the hinge, is cut away and
 // handed to it, so a closed mouth is the old face with a fine line under the whisker pads, and an open one a clean gap
-// with a dark palate, a pink tongue and small fangs. Black bead eyes with a glint that shifts as the wearer looks, under
-// lids a shade lighter than the mask so a blink reads; the pale brows, the ears and the cheek ruffs ride small bones that
+// with a dark palate, a pink tongue and small fangs, its sides closed by a dark membrane (wolf.ts mouthSides). Black bead
+// eyes with a glint that shifts as the wearer looks, under lids of the mask's dark (a blink is the shine going out, a
+// smile pushes the lower lids up); the pale brows, the ears and the cheek ruffs ride small bones that
 // take a smooth share of the head's skin (wolf.ts faceZones), so brows lift and knit, ears perk and flatten, cheeks
 // bunch up in a smile and puff, all in the fur itself; whiskers twitch.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { CharacterDef, Capture, Dresser, FaceState } from './build';
-import { eyelids, faceLids, look, setLids } from './faceparts';
-import { faceZones, furredPart, idleBlink, mouthSides, smax, sstep, type Zone } from './wolf';
+import { eyelids, look, setLids } from './faceparts';
+import { faceZones, furredPart, idleBlink, mouthSides, smax, smileLids, sstep, type Zone } from './wolf';
 import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
 
 type V3 = [number, number, number];
@@ -388,7 +389,7 @@ function dress(d: Dresser): void {
   // under lids of the mask's own dark: a blink is the shine going out of the mask
   const bead = d.std({ color: 0x050505, roughness: 0.06, metalness: 0.1 });
   const glint = d.std({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1.1, roughness: 0.3 });
-  const lid = d.std({ color: 0x211c19, roughness: 0.9 });
+  const lid = d.std({ color: 0x211c19, roughness: 1 });
   for (const [sx, s] of [[1, 'L'], [-1, 'R']] as const) {
     const eye = new THREE.Group();
     eye.name = 'jim-eye' + s;
@@ -408,7 +409,7 @@ function dress(d: Dresser): void {
 
   // the lower jaw, furred; in it a pink tongue and two small fangs, and in the head two more over them, a row of tiny
   // incisors and a dark throat behind: all hidden while the mouth is shut
-  furredPart(d, 'jim-jaw', 'jaw', jawSDF, JAW_BOX, 26, jawColour, JIM_FUR, 6, jawFur);
+  furredPart(d, 'jim-jaw', 'jaw', jawSDF, JAW_BOX, 24, jawColour, JIM_FUR, 5, jawFur);
   const line = (hz: number) => SK[1] + HINGE_Y + MOUTH_SLOPE * (hz - HINGE_Z);
   const tongue = new THREE.SphereGeometry(1, 18, 10).scale(0.34, 0.14, 0.78).translate(0, line(2.05) - 0.12, SK[2] + 2.05);
   d.at(new THREE.Mesh(tongue, d.std({ color: 0xc8646e, roughness: 0.45 })), 'jaw', 0, 0, 0);
@@ -461,7 +462,8 @@ const flick = (t: number, ph: number) => { const u = (t + ph) % 6.1; return u < 
 const twitch = (t: number) => { const u = (t + 2.2) % 3.7; return u < 0.45 ? 0.07 * Math.sin(u * 42) * (1 - u / 0.45) : 0; };
 
 /**
- * The wearer's face on his: lids (blinkL/R, squintL/R, wideL/R; an idle blink with no face), the glints (lookX/Y),
+ * The wearer's face on his: lids (blinkL/R, squintL/R, wideL/R, and smileL/R lifts the lower ones; an idle blink with
+ * no face), the glints (lookX/Y),
  * brows (browUp the inner ends, browOuterL/R the outer, browDownL/R knit and low), ears (perk with wide and raised brows,
  * pinned back with a scowl, drooping with a frown; a flick now and then), cheeks (smileL/R bunch them up, puff swells
  * them, sneer lifts, frown drops), whiskers (forward with a smile, up with a sneer or a puff). The jaw is the stage's
@@ -476,7 +478,7 @@ function tick(root: THREE.Object3D, t: number, face?: FaceState | null): void {
     FACES.set(root, p);
   }
   const f = face ?? null;
-  if (f) faceLids(p.lids[0]!, p.lids[1]!, f);
+  if (f) smileLids(p.lids, f);
   else { const b = idleBlink(t); for (const l of p.lids) if (l) setLids(l, b, 0, 0); }
   for (const e of p.eyes) if (e) look(e, f, 0.75);
   const frown = f?.frown ?? 0, sneer = f?.sneer ?? 0, puff = f?.puff ?? 0, inner = f?.browUp ?? 0;
@@ -528,7 +530,7 @@ export const JIMOTHY: CharacterDef = {
   // little above theirs, short and thick still
   fit: { size: 1.05, limb: 0.5 },
   // the jaw opens this far (radians) at a wide-open mouth; googly eyes over his own, in the mask
-  face: { jaw: 0.5, eyes: [[JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36], [-JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36]] },
+  face: { jaw: 0.55, eyes: [[JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36], [-JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36]] },
   idle: { tail: 0.15 },
   // 84 and eight layers keep body and coat under 150k triangles (88 was 156k)
   res: 84,

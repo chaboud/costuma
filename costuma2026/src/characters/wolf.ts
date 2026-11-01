@@ -6,8 +6,9 @@
 //
 // The face moves with the wearer's (FaceState, build.ts; `howlerTick` below): the lower jaw is a mesh of its own, rigid
 // on the `jaw` bone and furred like the body, so an open mouth is a clean gap with a dark palate, a tongue and fangs
-// (kaiju.ts's jaw, with fur); the eyes glow behind lids that blink, squint and widen, their pupils look where the wearer
-// looks; a brow ridge over each eye, the ears and the upper lips ride small bones (`earL`, `browL`, `lipL`, …) that take
+// (kaiju.ts's jaw, with fur), closed at the sides by a dark membrane (`mouthSides`), the lips' line black; the eyes glow
+// behind lids that blink, squint, widen and narrow in a smile, their pupils look where the wearer looks; a brow ridge
+// over each eye, the ears and the upper lips ride small bones (`earL`, `browL`, `lipL`, …) that take
 // a smooth share of the head's skin (`faceZones`), so a scowl, ears pinned back and a snarl that bares the fangs bend
 // the furred surface itself instead of moving stuck-on pieces.
 import * as THREE from 'three';
@@ -15,7 +16,7 @@ import type { Dresser, FaceState, Field, Fur } from './build';
 import { addFur } from './fur';
 import { createKaijuMaterial } from './material';
 import { isoGeometry } from './skeleton';
-import { eyelids, faceLids, look, setLids } from './faceparts';
+import { eyelids, look, setLids } from './faceparts';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
 
@@ -127,6 +128,17 @@ export function mouthSides(d: Dresser, name: string, edge: readonly (readonly [n
   body.add(m);
   m.bind(body.skeleton, body.bindMatrix);
   return m;
+}
+
+/** the lids from the wearer's (faceparts faceLids), and a smile pushes the lower lids up: happy eyes, the cue a smile
+ *  needs on a face whose mouth is a muzzle's */
+export function smileLids(lids: (THREE.Object3D | null)[], f: FaceState): void {
+  for (let i = 0; i < 2; i++) {
+    const l = lids[i], L = i === 0;
+    if (!l) continue;
+    const sq = Math.max(L ? f.squintL : f.squintR, 0.75 * (L ? f.smileL : f.smileR));
+    setLids(l, Math.max(L ? f.blinkL : f.blinkR, 0.3 * sq), sq, L ? f.wideL : f.wideR);
+  }
 }
 
 /** a blink now and then while no face is read (0 at t = 0.6, the lab's still) */
@@ -246,7 +258,7 @@ export function wolfRegion(x: number, y: number, z: number): number {
   const ax = Math.abs(x);
   if (Math.hypot(x, y - NOSE[1], z - NOSE[2]) < 0.45) return 3;
   if (inMouth(x, y, z)) return 4;
-  if (y > MOUTH_Y - 0.08 && y < MOUTH_Y + 0.1 && z > HINGE_Z + 0.5 && z < 7.4) return 3; // the black lip line
+  if (y > MOUTH_Y - 0.08 && y < MOUTH_Y + 0.1 && z > HINGE_Z + 0.85 && z < 7.4) return 3; // the black lip line
   if ((y < 7.6 && y > 6.2 && z > 3.4 && ax > 2.6) || (y < 0.5 && z > 1.2)) return 3; // claws
   if (y > 17.4 && ax > 0.6 && z < 3.2) return 2; // the ears' backs
   if (z < -6.3) return 2; // the tail's tip
@@ -293,7 +305,7 @@ const ZONES: Zone[] = [1, -1].flatMap((sx) => {
     } },
     // an upper lip: the flew and the muzzle's side over the fangs, up to under the nose
     { bone: 'lip' + s, w: (x: number, y: number, z: number) => {
-      const r = Math.hypot((sx * x - 0.4) / 0.5, (y - 16.15) / 0.55, (z - 6.0) / 1.6);
+      const r = Math.hypot((sx * x - 0.42) / 0.42, (y - 16.12) / 0.48, (z - 5.85) / 1.3);
       return side(x) * (1 - sstep(0.4, 1.0, r)) * sstep(MOUTH_Y - 0.3, MOUTH_Y - 0.05, y + 0.25);
     } },
   ];
@@ -313,7 +325,8 @@ export function howlerDress(d: Dresser): void {
   // eyes that glow amber, a dark pupil each that turns where the wearer looks, under slanted lids
   const glow = d.std({ color: 0xffb020, emissive: 0xffb020, emissiveIntensity: 1.8, roughness: 0.3 });
   const pupil = d.std({ color: 0x0c0806, roughness: 0.3 });
-  const lid = d.std({ color: 0x2c2826, roughness: 0.9 });
+  // lids a shade darker than the face's fur: a shut eye is the glow going out under grey, rimmed dark open
+  const lid = d.std({ color: 0x4e4844, roughness: 0.9 });
   for (const [sx, s] of [[1, 'L'], [-1, 'R']] as const) {
     const eye = new THREE.Group();
     eye.name = 'howl-eye' + s;
@@ -325,7 +338,7 @@ export function howlerDress(d: Dresser): void {
     d.at(eyelids('howl-lid' + s, 0.24, lid, { gap: 0.1, tilt: sx * 0.3, open: 0.85 }), 'head', sx * WOLF_EYES[0], WOLF_EYES[1], WOLF_EYES[2]);
   }
   // the lower jaw, furred, a tongue on it; fangs and incisors in both jaws, the uppers' points just over the lower lip
-  furredPart(d, 'howl-jaw', 'jaw', wolfJawSDF, JAW_BOX, 30, jawColour, HOWL_FUR, 6, jawFur);
+  furredPart(d, 'howl-jaw', 'jaw', wolfJawSDF, JAW_BOX, 26, jawColour, HOWL_FUR, 5, jawFur);
   const tongue = new THREE.SphereGeometry(1, 18, 10).scale(0.3, 0.12, 0.95).translate(0, MOUTH_Y - 0.13, 5.35);
   d.at(new THREE.Mesh(tongue, d.std({ color: 0xb8505c, roughness: 0.45 })), 'jaw', 0, 0, 0);
   const tooth = d.std({ color: 0xf0ead8, roughness: 0.35 });
@@ -336,10 +349,10 @@ export function howlerDress(d: Dresser): void {
   };
   const upper: THREE.BufferGeometry[] = [], lower: THREE.BufferGeometry[] = [];
   for (const sx of [1, -1]) {
-    // the canines' roots go deep, so a snarl lifting the lip half a metre still bares tooth, not a root in the air
-    upper.push(fang(sx * 0.42, 6.3, 0.95, 0.11, true, 0.5), fang(sx * 0.44, 5.6, 0.6, 0.07, true, 0.45), fang(sx * 0.44, 5.05, 0.55, 0.07, true, 0.45));
+    // rooted deep (inside the muzzle, never through its side), so a snarl lifting the lip bares tooth, not a root
+    upper.push(fang(sx * 0.35, 6.3, 0.85, 0.095, true, 0.4), fang(sx * 0.38, 5.6, 0.52, 0.065, true, 0.36), fang(sx * 0.38, 5.05, 0.48, 0.065, true, 0.36));
     lower.push(fang(sx * 0.24, 6.45, 0.55, 0.085, false), fang(sx * 0.27, 5.5, 0.3, 0.06, false));
-    for (const x of [0.07, 0.19]) { upper.push(fang(sx * x, 6.95, 0.5, 0.045, true, 0.38)); lower.push(fang(sx * x, 6.6, 0.34, 0.04, false)); }
+    for (const x of [0.07, 0.19]) { upper.push(fang(sx * x, 6.95, 0.42, 0.045, true, 0.3)); lower.push(fang(sx * x, 6.6, 0.34, 0.04, false)); }
   }
   d.at(new THREE.Mesh(mergeGeometries(upper)!, tooth), 'head', 0, 0, 0);
   d.at(new THREE.Mesh(mergeGeometries(lower)!, tooth), 'jaw', 0, 0, 0);
@@ -361,7 +374,8 @@ const BROW_O = [BROW[0] - HEAD_A[0], BROW[1] - HEAD_A[1], BROW[2] - HEAD_A[2]], 
 const flick = (t: number, ph: number) => { const u = (t + ph) % 7.3; return u < 0.35 ? 0.16 * Math.sin((u / 0.35) * Math.PI * 2) * (1 - u / 0.35) : 0; };
 
 /**
- * The wearer's face on Howler's: lids (blinkL/R, squintL/R, wideL/R; an idle blink with no face), pupils (lookX/Y),
+ * The wearer's face on Howler's: lids (blinkL/R, squintL/R, wideL/R, and smileL/R lifts the lower ones; an idle blink
+ * with no face), pupils (lookX/Y),
  * brows (browUp the inner ends, browOuterL/R the outer, browDownL/R a low scowl), ears (pricked with wide eyes and raised
  * brows, pinned back flat with a scowl, a snarl or a frown), upper lips (sneer bares the fangs, smile pulls the corners
  * up into a grin, frown drops them). The jaw is the stage's (face.jaw, jawSide).
@@ -375,7 +389,7 @@ export function howlerTick(root: THREE.Object3D, t: number, face?: FaceState | n
     FACES.set(root, p);
   }
   const f = face ?? null;
-  if (f) faceLids(p.lids[0]!, p.lids[1]!, f);
+  if (f) smileLids(p.lids, f);
   else { const b = idleBlink(t); for (const l of p.lids) if (l) setLids(l, b, 0, 0); }
   for (const e of p.eyes) if (e) look(e, f, 0.5);
   const inner = f?.browUp ?? 0, frown = f?.frown ?? 0, sneer = f?.sneer ?? 0;
@@ -397,7 +411,7 @@ export function howlerTick(root: THREE.Object3D, t: number, face?: FaceState | n
     const lip = p.lips[i];
     if (lip) {
       // a snarl lifts the lip off the fangs and a little out; a grin lifts the corner behind (the bone's at the front)
-      lip.position.set(sx * (LIP_O[0]! + 0.08 * sneer), LIP_O[1]! + 0.5 * sneer + 0.08 * smile - 0.06 * frown, LIP_O[2]! - 0.14 * smile);
+      lip.position.set(sx * (LIP_O[0]! + 0.06 * sneer), LIP_O[1]! + 0.36 * sneer + 0.08 * smile - 0.06 * frown, LIP_O[2]! - 0.14 * smile);
       lip.rotation.x = 0.16 * smile - 0.1 * frown - 0.06 * sneer;
     }
   }
