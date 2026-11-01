@@ -7,6 +7,7 @@ import { buildCharacter, type Built, type CharacterDef, type SurfaceArrays } fro
 import { byId } from '../characters/roster';
 import { Rig, poseFromLandmarks, type BodyPose } from '../pose/rig';
 import { reachLimbs, REACH_TUNE } from '../pose/reach';
+import { driveFaceField, wearFaceField, type FaceField } from './facemap';
 import type { Track } from '../pose/tracker';
 import { project, type Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
@@ -21,6 +22,8 @@ interface Wearer {
   root: THREE.Object3D;
   rig: Rig;
   mats: THREE.Material[];
+  /** the wearer's face carried onto this costume's (render/facemap.ts), when it has eyes to map to */
+  field: FaceField | null;
   fade: number;
   /** 0..1: how far this costume has faded in (new) or, leaving, how much is left */
   life: number;
@@ -247,6 +250,8 @@ export class Stage {
   /** fit the camera and the background to the canvas and the video (cover), with the solve's intrinsics */
   /** the camera, as last laid out */
   private K: Intrinsics | null = null;
+  /** carry the wearers' faces onto the costumes' (render/facemap.ts) */
+  faceTransfer = true;
   layout(K: Intrinsics, mirror: boolean): void {
     this.K = K;
     const cw = this.canvas.clientWidth || window.innerWidth, ch = this.canvas.clientHeight || window.innerHeight;
@@ -269,6 +274,8 @@ export class Stage {
 
   /** dress the tracked people: `cast(trackId)` says which character each wears */
   sync(tracks: Track[], cast: (trackId: number) => string, t: number): void {
+    // the costumes' matrices are read while posing (reach, the face field): the world group's (its mirror) first
+    this.world.updateWorldMatrix(true, false);
     const dt = this.lastT < 0 ? 1 / 30 : Math.min(0.1, Math.max(0, t - this.lastT));
     this.lastT = t;
     this.frameDt = dt;
@@ -296,15 +303,15 @@ export class Stage {
   }
 
   private dress(trackId: number, id: string): Wearer {
-    const { def, root, rig, mats } = this.instance(id);
-    const w: Wearer = { trackId, def, root, rig, mats, fade: 0, life: 0, leaving: false, poses: [], head: 0, len: null, clones: [] };
+    const { def, root, rig, mats, field } = this.instance(id);
+    const w: Wearer = { trackId, def, root, rig, mats, field, fade: 0, life: 0, leaving: false, poses: [], head: 0, len: null, clones: [] };
     this.world.add(root);
     this.wearers.set(trackId, w);
     return w;
   }
 
   /** a worn copy of a character: its own bones, rig and material copies (each fades on its own) */
-  private instance(id: string): { def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[] } {
+  private instance(id: string): { def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[]; field: FaceField | null } {
     const tpl = this.template(id);
     const root = SkeletonUtils.clone(tpl.root);
     const bones = new Map<string, THREE.Bone>();
@@ -328,7 +335,9 @@ export class Stage {
       };
       m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material);
     });
-    return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()] };
+    // the wearer's face carried onto this one's (render/facemap.ts): its own uniforms, on its own material copies
+    const field = wearFaceField(root, tpl.def);
+    return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], field };
   }
 
   private drop(w: Wearer): void {
@@ -356,6 +365,11 @@ export class Stage {
     if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade * ((m.userData.baseOpacity as number | undefined) ?? 1); w.fade = fade; }
     w.root.visible = fade > 0.01 && !this.hideWearers;
     def.tick?.(w.root, t, tr.face ?? null);
+    // the wearer's face movement on the costume's face, through its head bone as it stands now
+    if (w.field) {
+      w.root.updateMatrixWorld(true);
+      driveFaceField(w.field, this.faceTransfer ? tr.face?.motion?.move ?? null : null, rig.bones.get('head'));
+    }
     // the pose into the ring
     w.head = (w.head + 1) % POSE_HIST;
     w.poses[w.head] = clonePose(p);

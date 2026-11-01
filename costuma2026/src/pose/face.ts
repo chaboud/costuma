@@ -22,7 +22,7 @@ import type { Intrinsics } from './solve';
 import { L } from './landmarks';
 import { poseFromLandmarks } from './rig';
 import { NEUTRAL_FACE, type FaceState } from '../characters/build';
-import { FaceCalib, faceGeometry, type FaceGeo } from './facegeo';
+import { FaceCalib, FaceMotion, faceGeometry, type FaceGeo } from './facegeo';
 
 export interface FaceDet {
   /** the face mesh in the frame's image coordinates (0..1, y down) */
@@ -65,6 +65,8 @@ export interface FaceTrack extends FaceState {
   last: { read: Read; nose: { x: number; y: number }; at: number } | null;
   /** this person's resting face, which their expressions are read against (pose/facegeo.ts) */
   calib: FaceCalib | null;
+  /** the face as movement, carried onto the costume's face (pose/facegeo.ts FaceMotion, render/facemap.ts) */
+  motion: FaceMotion | null;
 }
 
 export const FACE_TUNE = {
@@ -244,8 +246,11 @@ export function attachFaces(tracks: Track[], faces: Map<number, FaceDet> | null,
     const bodyHead = poseFromLandmarks(t.world).head;
     if (!ft) {
       ft = t.face = { ...NEUTRAL_FACE, eyes: fresh.eyes.map((e) => ({ ...e })), mouth: { ...fresh.mouth }, read: !!f, seen: now,
-        head: bodyHead.clone(), headW: 0, turn: null, bias: new THREE.Quaternion(), trust: 0, last: null, calib: null };
+        head: bodyHead.clone(), headW: 0, turn: null, bias: new THREE.Quaternion(), trust: 0, last: null, calib: null, motion: null };
     }
+    // the face as movement, for the costume's face (a reading moves it; none relaxes it)
+    if (det) { ft.motion ??= new FaceMotion(); ft.motion.update(det.pts, K.w, K.h, dt); }
+    else if (!recent) ft.motion?.relax(dt);
     // the expressions from the mesh's shape against this person's resting face (the scores fill in what it cannot say)
     if (f?.geo && FACE_TUNE.mesh) {
       const calib = ft.calib ??= new FaceCalib();

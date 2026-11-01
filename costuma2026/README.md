@@ -174,7 +174,20 @@ in `src/main.ts`.
   them, then learnt over seconds; the open eye quickly, the mouth slowly), so a
   resting frown or a held scowl levels out and changes surface (founder: "Just
   do relative plus smoothing"). The blendshape scores only fill in what the
-  mesh cannot say (a puffed cheek, a wrinkled nose). On real meshes of a smiling portrait the scores called both
+  mesh cannot say (a puffed cheek, a wrinkled nose). **The face is carried
+  onto the costume's** (`render/facemap.ts`; founder: "Not expression
+  triggers. Mappings … Performance transfer"): 23 mesh points (mouth corners,
+  lips, cheeks, nostrils, brows, chin, jaw) move against their own learnt rest
+  (`FaceMotion`), and a map from the human face's frame to the costume's — its
+  eyes on the person's eyes, its mouth (`face.mouth`, else where a face's would
+  be) on the mouth — lays that movement on the costume's surface as a smooth
+  field, in every one of its materials' vertex shaders before skinning (fur
+  follows: the coat is the body pushed out); rigid parts on the head move whole
+  by the field where they stand (bent, Violet's glasses buckled). Where a costume
+  opens its jaw by a bone, the lower lip's and chin's up-and-down are left to
+  it. Lids and pupils stay the costumes' own rigs, read from the mesh. Lab:
+  `lab.html?c=<id>&focus=head&ctl=smile|scowl|o|raise` (or
+  `ctl=mouthL:0,0.08,0;…`). On real meshes of a smiling portrait the scores called both
   eyes 27 % blinked, the mesh open; on an eye painted shut the scores read 0.57
   against 0.24, the mesh 1.00 against 0.00. Gains are assumed from typical
   faces, not measured on live ones. Into `FaceState` (`characters/build.ts`):

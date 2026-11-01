@@ -6,6 +6,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { ROSTER } from './characters/roster';
 import { buildCharacter, parseFace } from './characters/build';
 import { Rig, demoPose } from './pose/rig';
+import { driveFaceField, wearFaceField } from './render/facemap';
+import { CONTROLS } from './pose/facegeo';
 
 const q = new URLSearchParams(location.search);
 const id = q.get('c') ?? ROSTER[0]!.id;
@@ -54,6 +56,29 @@ const s = 0.1;
 built.root.scale.setScalar(s);
 built.root.position.set(0, rig.hipRest.y * s, 0);
 scene.add(built.root);
+// ?ctl=mouthL:0,0.08,0;browInR:0,0.06,0 — the wearer's face movement (outer-eye-corner spans) carried onto the costume's
+// face (render/facemap.ts); ?ctl=smile|scowl|o|raise for a few made ones
+{
+  const made: Record<string, string> = {
+    smile: 'mouthL:0.04,0.07,0;mouthR:-0.04,0.07,0;cheekL:0.01,0.04,0.02;cheekR:-0.01,0.04,0.02;cheekHiL:0,0.025,0;cheekHiR:0,0.025,0',
+    scowl: 'browInL:-0.03,-0.07,0;browInR:0.03,-0.07,0;browMidL:0,-0.05,0;browMidR:0,-0.05,0;alaL:0,0.03,0;alaR:0,0.03,0;mouthL:0,-0.04,0;mouthR:0,-0.04,0',
+    o: 'mouthL:-0.09,0,0.03;mouthR:0.09,0,0.03;lipTop:0,0.02,0.05;lipUpL:-0.03,0.02,0.05;lipUpR:0.03,0.02,0.05;lipBot:0,-0.02,0.05;lipLoL:-0.03,-0.02,0.05;lipLoR:0.03,-0.02,0.05',
+    raise: 'browInL:0,0.08,0;browInR:0,0.08,0;browMidL:0,0.09,0;browMidR:0,0.09,0;browOutL:0,0.07,0;browOutR:0,0.07,0',
+  };
+  const spec = q.get('ctl');
+  const field = spec ? wearFaceField(built.root, def) : null;
+  if (field) {
+    const move = new Float32Array(CONTROLS.length * 3);
+    for (const part of (made[spec!] ?? spec!).split(';')) {
+      const [name, v] = part.split(':');
+      const k = CONTROLS.findIndex((c) => c.name === name);
+      if (k < 0 || !v) continue;
+      v.split(',').forEach((x, a) => { move[k * 3 + a] = Number(x) || 0; });
+    }
+    built.root.updateMatrixWorld(true);
+    driveFaceField(field, move, built.bones.get('head'));
+  }
+}
 
 const yaw = THREE.MathUtils.degToRad(Number(q.get('yaw') ?? 0)), pitch = THREE.MathUtils.degToRad(Number(q.get('pitch') ?? 6));
 const zoom = Number(q.get('zoom') ?? 1);

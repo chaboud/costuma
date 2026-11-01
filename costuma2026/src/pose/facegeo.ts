@@ -47,7 +47,9 @@ const cross = (a: number[], b: number[]) => [a[1]! * b[2]! - a[2]! * b[1]!, a[2]
  * The face's shape from its mesh (MediaPipe's 478 points: x, y in 0..1 of a W×H picture, y down; z depth in the units of
  * x, smaller nearer). Null if the mesh is too small or degenerate.
  */
-export function faceGeometry(pts: P[], W: number, H: number): FaceGeo | null {
+/** the face's own frame: a point of the mesh in it (outer-eye-corner spans; x the person's left, y up, z out of the
+ *  face), or null if the mesh is too small or degenerate */
+export function faceFrame(pts: P[], W: number, H: number): ((i: number) => number[]) | null {
   if (pts.length < 468) return null;
   // in pixels, y up, z toward the camera: a right-handed frame like the canonical model's
   const v = (i: number) => [pts[i]!.x * W, -pts[i]!.y * H, -pts[i]!.z * W];
@@ -62,8 +64,12 @@ export function faceGeometry(pts: P[], W: number, H: number): FaceGeo | null {
   if (ly < 1e-6) return null;
   y = scale(y, 1 / ly);
   const z = cross(x, y);
-  const local = (i: number) => { const d = sub(v(i), o); return [dot(d, x) / s, dot(d, y) / s, dot(d, z) / s]; };
-  const L = (i: number) => local(i);
+  return (i: number) => { const d = sub(v(i), o); return [dot(d, x) / s, dot(d, y) / s, dot(d, z) / s]; };
+}
+
+export function faceGeometry(pts: P[], W: number, H: number): FaceGeo | null {
+  const L = faceFrame(pts, W, H);
+  if (!L) return null;
   const l13 = L(13), l14 = L(14);
   const eyeL = [L(263), L(362)], eyeR = [L(33), L(133)];
   const midL = [(eyeL[0]![0]! + eyeL[1]![0]!) / 2, (eyeL[0]![1]! + eyeL[1]![1]!) / 2];
@@ -175,5 +181,78 @@ export class FaceCalib {
       lookY: clamp1(((g.irisYL - r.irisYL) + (g.irisYR - r.irisYR)) / 2 / T.lookYFull),
       jawSide: clamp1((g.chinX - r.chinX) / T.chinFull),
     };
+  }
+}
+
+/**
+ * The points whose movement is carried onto a costume's face (render/facemap.ts): the mesh's index, where it rests on
+ * the canonical face in the frame above (computed from canonical_face_model.obj, 2026-11-01), and what it is. `jaw`:
+ * its up-and-down is the jaw's (a costume with a jaw bone opens by it, so the surface must not open again); `mouth`: its
+ * rest is learnt slowly (founder: a mouth breather "is more absolute").
+ */
+export const CONTROLS: { i: number; at: [number, number, number]; name: string; jaw?: boolean; mouth?: boolean }[] = [
+  { i: 61, at: [-0.2762, -0.7887, -0.1204], name: 'mouthR', mouth: true },
+  { i: 291, at: [0.2762, -0.7887, -0.1204], name: 'mouthL', mouth: true },
+  { i: 0, at: [0, -0.7463, 0.0932], name: 'lipTop', mouth: true },
+  { i: 37, at: [-0.08, -0.7346, 0.0849], name: 'lipUpR', mouth: true },
+  { i: 267, at: [0.08, -0.7346, 0.0849], name: 'lipUpL', mouth: true },
+  { i: 17, at: [0, -0.941, -0.0213], name: 'lipBot', mouth: true, jaw: true },
+  { i: 84, at: [-0.0787, -0.9302, -0.0281], name: 'lipLoR', mouth: true, jaw: true },
+  { i: 314, at: [0.0787, -0.9302, -0.0281], name: 'lipLoL', mouth: true, jaw: true },
+  { i: 205, at: [-0.4311, -0.4831, -0.0402], name: 'cheekR' },
+  { i: 425, at: [0.4311, -0.4831, -0.0402], name: 'cheekL' },
+  { i: 50, at: [-0.5359, -0.373, -0.0763], name: 'cheekHiR' },
+  { i: 280, at: [0.5359, -0.373, -0.0763], name: 'cheekHiL' },
+  { i: 64, at: [-0.1791, -0.4982, 0.1107], name: 'alaR' },
+  { i: 294, at: [0.1791, -0.4982, 0.1107], name: 'alaL' },
+  { i: 107, at: [-0.157, 0.1784, 0.3098], name: 'browInR' },
+  { i: 105, at: [-0.4483, 0.2179, 0.2221], name: 'browMidR' },
+  { i: 70, at: [-0.6434, 0.1821, 0.0176], name: 'browOutR' },
+  { i: 336, at: [0.157, 0.1784, 0.3098], name: 'browInL' },
+  { i: 334, at: [0.4483, 0.2179, 0.2221], name: 'browMidL' },
+  { i: 300, at: [0.6434, 0.1821, 0.0176], name: 'browOutL' },
+  { i: 152, at: [0, -1.3303, -0.2954], name: 'chin', mouth: true, jaw: true },
+  { i: 172, at: [-0.6681, -0.8223, -0.7114], name: 'jawR', jaw: true },
+  { i: 397, at: [0.6681, -0.8223, -0.7114], name: 'jawL', jaw: true },
+];
+
+export const TRANSFER_TUNE = {
+  /** seconds: a control's rest follows the face (a held expression levels out), the mouth's more slowly; the movement
+   *  shown is smoothed this much */
+  tauRest: 6, tauMouthRest: 25, tauMove: 0.05,
+};
+
+/**
+ * One person's face as movement (founder, 2026-11-01: "Our face mesh should apply/map to boned faces. Not expression
+ * triggers. Mappings ... Performance transfer"): where each control point is against where it rests, in the face's own
+ * frame and units, relative and smoothed ("Just do relative plus smoothing").
+ */
+export class FaceMotion {
+  readonly rest = new Float32Array(CONTROLS.length * 3);
+  /** each control's movement, smoothed (x, y, z per control, outer-eye-corner spans) */
+  readonly move = new Float32Array(CONTROLS.length * 3);
+  private primed = false;
+
+  update(pts: P[], W: number, H: number, dt: number): boolean {
+    const L = faceFrame(pts, W, H);
+    if (!L) return false;
+    const T = TRANSFER_TUNE, kMove = 1 - Math.exp(-dt / T.tauMove);
+    CONTROLS.forEach((c, k) => {
+      const p = L(c.i);
+      for (let a = 0; a < 3; a++) {
+        const j = k * 3 + a, x = p[a]!;
+        if (!this.primed) this.rest[j] = x;
+        else this.rest[j] = this.rest[j]! + (x - this.rest[j]!) * (1 - Math.exp(-dt / (c.mouth ? T.tauMouthRest : T.tauRest)));
+        this.move[j] = this.move[j]! + (x - this.rest[j]! - this.move[j]!) * kMove;
+      }
+    });
+    this.primed = true;
+    return true;
+  }
+
+  /** a still face: the movement eases back to none (the face model lost it) */
+  relax(dt: number): void {
+    const k = 1 - Math.exp(-dt / 0.2);
+    for (let j = 0; j < this.move.length; j++) this.move[j] = this.move[j]! * (1 - k);
   }
 }

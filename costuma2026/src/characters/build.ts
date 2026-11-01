@@ -74,6 +74,9 @@ export interface CharacterDef {
    */
   face?: {
     jaw?: number; eyes?: [number, number, number, number][];
+    /** where its mouth is (model coordinates), for carrying the wearer's face onto it (render/facemap.ts); without it,
+     *  where a face's would be for its eyes. `transfer`: how much of the wearer's face movement it takes (1) */
+    mouth?: [number, number, number]; transfer?: number;
     /** what an open mouth breathes (render/breath.ts): its colours, and how much more of it, how fast, how big (1 = the
      *  default sparks); a kaiju's atomic breath is a lot more, faster and blue */
     breath?: { colors: number[]; rate?: number; speed?: number; size?: number };
