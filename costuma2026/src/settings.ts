@@ -39,7 +39,7 @@ export interface Settings {
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: true, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 6 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
@@ -65,6 +65,8 @@ export function loadSettings(): Settings {
     // threshold is too low. Some acquisition issues")
     if (v < 6) s.poseConf = DEFAULTS.poseConf;
     if (!(s.poseConf >= 0.3 && s.poseConf <= 0.95)) s.poseConf = DEFAULTS.poseConf;
+    // v7 (2026-11-01): the sparks from open mouths are off unless asked for (founder: "Default the sparks to off")
+    if (v < 7) s.breath = false;
     if (!s.zoom || typeof s.zoom !== 'object') s.zoom = {};
     // Violet took the Valkyrie's place: whoever wore the Valkyrie wears Violet
     if (s.costume === 'valkyrie') s.costume = 'violet';

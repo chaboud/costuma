@@ -22,6 +22,7 @@ import type { Intrinsics } from './solve';
 import { L } from './landmarks';
 import { poseFromLandmarks } from './rig';
 import { NEUTRAL_FACE, type FaceState } from '../characters/build';
+import { FaceCalib, faceGeometry, type FaceGeo } from './facegeo';
 
 export interface FaceDet {
   /** the face mesh in the frame's image coordinates (0..1, y down) */
@@ -33,6 +34,8 @@ export interface FaceDet {
 }
 
 interface Read extends FaceState {
+  /** the mesh's own shape (pose/facegeo.ts): what the expressions are read from */
+  geo: FaceGeo | null;
   eyes: { x: number; y: number; r: number }[];
   mouth: { x: number; y: number; w: number };
   nose: { x: number; y: number };
@@ -60,6 +63,8 @@ export interface FaceTrack extends FaceState {
   trust: number;
   /** the last reading and where the pose's nose was then (carried along between readings) */
   last: { read: Read; nose: { x: number; y: number }; at: number } | null;
+  /** this person's resting face, which their expressions are read against (pose/facegeo.ts) */
+  calib: FaceCalib | null;
 }
 
 export const FACE_TUNE = {
@@ -67,6 +72,8 @@ export const FACE_TUNE = {
   /** the face mesh's turn; trust in it rising and falling; the pose model's correction learnt, and let go */
   tauTurn: 0.07, tauTrust: 0.25, tauBias: 0.6, tauBiasRelax: 2.5,
   forgetMs: 400,
+  /** read the expressions from the mesh's shape (pose/facegeo.ts); false: the model's blendshape scores alone */
+  mesh: true,
   /** faces read a frame (more people take turns); the crop's side over the head's size, and its pixels */
   perFrame: 2, crop: 2.4, cropPx: 320,
   /** past this many milliseconds of face reading in a frame, the next person waits for the next frame */
@@ -170,14 +177,15 @@ const dist = (a: { x: number; y: number }, b: { x: number; y: number }, aspect: 
 
 /** what a face reading says, in image coordinates: the eyes from their corners, the mouth from its inner lips, and every
  *  expression the costumes use */
-function readFace(f: FaceDet, aspect: number): Read {
-  const p = f.pts;
+function readFace(f: FaceDet, K: Intrinsics): Read {
+  const p = f.pts, aspect = K.w / K.h;
   // the face mesh's "left" eye is the person's left (263/362), its "right" the person's right (33/133); the
   // blendshapes' Left is the person's left too (measured: an eye painted shut on a photo read 0.57 against 0.24)
   const eye = (outer: number, inner: number) => { const c = mid(p[outer]!, p[inner]!); return { ...c, r: dist(p[outer]!, p[inner]!, aspect) * 0.62 / aspect }; };
   const s = (k: string) => f.shapes.get(k) ?? 0;
   // the gains: the model's scores seldom reach 1 for the whole movement (assumed from its demos, not measured here)
   return {
+    geo: faceGeometry(p, K.w, K.h),
     eyes: [eye(263, 362), eye(33, 133)],
     mouth: { ...mid(p[13]!, p[14]!), w: dist(p[61]!, p[291]!, aspect) / aspect },
     nose: p[1]!,
@@ -228,7 +236,7 @@ export function attachFaces(tracks: Track[], faces: Map<number, FaceDet> | null,
     const det = faces?.get(t.id) ?? null;
     const nose = t.image[L.nose]!;
     let ft = t.face;
-    const f = det ? readFace(det, aspect) : null;
+    const f = det ? readFace(det, K) : null;
     // not read this frame (another person's turn): the last reading carried along by the pose's nose, until it is old
     const recent = !f && ft?.last && now - ft.last.at < FACE_TUNE.forgetMs ? carried(ft.last.read, nose.x - ft.last.nose.x, nose.y - ft.last.nose.y) : null;
     const known = f ?? recent;
@@ -236,7 +244,13 @@ export function attachFaces(tracks: Track[], faces: Map<number, FaceDet> | null,
     const bodyHead = poseFromLandmarks(t.world).head;
     if (!ft) {
       ft = t.face = { ...NEUTRAL_FACE, eyes: fresh.eyes.map((e) => ({ ...e })), mouth: { ...fresh.mouth }, read: !!f, seen: now,
-        head: bodyHead.clone(), headW: 0, turn: null, bias: new THREE.Quaternion(), trust: 0, last: null };
+        head: bodyHead.clone(), headW: 0, turn: null, bias: new THREE.Quaternion(), trust: 0, last: null, calib: null };
+    }
+    // the expressions from the mesh's shape against this person's resting face (the scores fill in what it cannot say)
+    if (f?.geo && FACE_TUNE.mesh) {
+      const calib = ft.calib ??= new FaceCalib();
+      calib.update(f.geo, dt);
+      Object.assign(f, calib.express(f.geo, f));
     }
     // where: what the eyes and mouth do together (a hand-held camera shaking the face) is followed at once; what each
     // does alone glides (a read face and the pose's points differ by a little: never a jump between them)

@@ -149,11 +149,22 @@ in `src/main.ts`.
   rest, 13° off mirrored, and called near-profile heads 19–31°). Turned too far
   for the face model, the pose model's head takes over, corrected by what the
   face last said, the correction relaxing over seconds (`tests/face.test.ts`:
-  never more than 4° a frame). Every blendshape a costume can use is read into
-  `FaceState` (`characters/build.ts`): jaw, blinks, squints, wide eyes, gaze,
-  per-side smiles and brows, frown, pucker, funnel, sideways jaw, puff, sneer —
-  the blendshapes' "Left" is the person's own left (measured with an eye
-  painted shut). Smoothed by EMA, quick for the jaw and blinks. A face not read
+  never more than 4° a frame). **The expressions are read from the mesh's
+  shape** (`pose/facegeo.ts`; founder: "more responsive to actual deformation
+  of the mesh"): in a frame on the rigid upper face, in outer-eye-corner spans,
+  the lips' gap, each lid's opening, each mouth corner's lift, the mouth's
+  width, each brow's inner and outer height, each iris across its eye, the chin
+  across the face — each against the person's own resting face (their first
+  reading, the mouth shut and eyes open as MediaPipe's canonical face model has
+  them, then learnt slowly; the open eye quickly). The blendshape scores fill
+  in what the mesh cannot say (a puffed cheek, a wrinkled nose) and floor the
+  smiles and brows. On real meshes of a smiling portrait the scores called both
+  eyes 27 % blinked, the mesh open; on an eye painted shut the scores read 0.57
+  against 0.24, the mesh 1.00 against 0.00. Gains are assumed from typical
+  faces, not measured on live ones. Into `FaceState` (`characters/build.ts`):
+  jaw, blinks, squints, wide eyes, gaze, per-side smiles and brows, frown,
+  pucker, funnel, sideways jaw, puff, sneer. Smoothed by EMA, quick for the jaw
+  and blinks. A face not read
   this frame is carried along by the pose's nose for 0.4 s; then the pose
   model's own face points give eyes and a mouth. Costumes move their faces in
   their `tick` (`characters/faceparts.ts`: lids that blink, squint and widen;
@@ -165,9 +176,10 @@ in `src/main.ts`.
   is a clean gap with a palate, tongue and teeth, not a stretched sheet. Jack's
   carving moves in his shell's vertex shader. An open mouth opens the
   costume's jaw (`face.jaw`,
-  `rig.setJaw`, sideways too) and breathes sparks (`render/breath.ts`, colours,
-  rate and speed per costume: `face.breath`; sparks fade within half a metre of
-  the lens and never grow past a tenth of the frame). **Googly eyes**
+  `rig.setJaw`, sideways too) and, if settings ask (off by default since
+  2026-11-01), breathes sparks (`render/breath.ts`, colours, rate and speed per
+  costume: `face.breath`; sparks fade within half a metre of the lens and never
+  grow past a tenth of the frame). **Googly eyes**
   (`render/googly.ts`) go on the person's eyes, or over the costume's
   (`face.eyes` anchors on the head bone); their pupils are physics in
   eye-radius units — gravity from the floor's up, the eye's own acceleration

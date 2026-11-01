@@ -31,7 +31,7 @@ const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('pageerror', e.message));
 page.on('console', (m) => { if (m.type() === 'error') console.log('console', m.text().slice(0, 200)); });
 await page.goto(url);
-const out = await page.evaluate(async (n) => {
+const { rows: out, dump } = await page.evaluate(async ({ n, wantDump }) => {
   const { FilesetResolver, FaceLandmarker, PoseLandmarker } = await import('/tv/vision_bundle.mjs');
   const fs = await FilesetResolver.forVisionTasks('/mediapipe');
   const face = await FaceLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: '/models/face_landmarker.task', delegate: 'CPU' },
@@ -96,9 +96,14 @@ const out = await page.evaluate(async (n) => {
     }
   }
   const crop = canvas(256, 256), cg = crop.getContext('2d');
-  const rows = [];
+  const rows = [], dump = [];
   for (const [name, c] of variants) {
     const full = face.detect(c);
+    // the mesh and the scores of the stills a test reads (DUMP=file.json): the portrait and the winks
+    if (wantDump && full.faceLandmarks[0] && (name === 'portrait' || name.startsWith('wink'))) {
+      dump.push({ name: name.split(':')[0], W: c.width, H: c.height, pts: full.faceLandmarks[0].map((q) => ({ x: q.x, y: q.y, z: q.z })),
+        shapes: Object.fromEntries(full.faceBlendshapes[0].categories.map((q) => [q.categoryName, q.score])) });
+    }
     const P = pose.detect(c);
     const people = [];
     for (let i = 0; i < P.landmarks.length; i++) {
@@ -123,8 +128,9 @@ const out = await page.evaluate(async (n) => {
     }
     rows.push({ name, facesFull: full.faceLandmarks.length, people });
   }
-  return rows;
-}, imgs.length);
+  return { rows, dump };
+}, { n: imgs.length, wantDump: !!process.env.DUMP });
+if (process.env.DUMP) { (await import('node:fs')).writeFileSync(process.env.DUMP, JSON.stringify(dump)); console.log(`wrote ${dump.length} meshes to ${process.env.DUMP}`); }
 for (const r of out) {
   console.log(`${r.name}: faces on the full frame ${r.facesFull}`);
   for (const p of r.people) {
