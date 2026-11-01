@@ -557,7 +557,8 @@ function loop(now: number): void {
     lastVideoTime = video.currentTime;
     try { dets = detector.detect(detectionInput(), now); } catch (e) { console.error(e); }
   }
-  if (dets) tracker.update(dets.slice(0, settings.people), now, K);
+  // up for the upright check (pose/upright.ts): the floor's, from the phone's gravity or the people (last frame's)
+  if (dets) tracker.update(dets.slice(0, settings.people), now, K, stage.ground.n);
   // faces from the full-resolution frame, each read from a crop round a person's head (pose/face.ts)
   if (dets) {
     let faces: Map<number, FaceDet> | null = null;

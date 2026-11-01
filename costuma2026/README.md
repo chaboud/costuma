@@ -30,6 +30,9 @@ node scripts/thumbs.mjs              # the picker's thumbnails → public/thumbs
 node scripts/app-shots.mjs <dir>     # the built app with synthetic people (C=ids N=2 T=0,1.5 DEBUG=1); build first
 node scripts/camera-e2e.mjs <clip.y4m> <dir>   # the built app on Chromium's fake camera: real MediaPipe (C= FACING= MODEL= W= H=)
 node scripts/face-probe.mjs <portrait.jpg> [profiles.jpg]   # what the face model finds: full frame vs head crops, head turn vs the truth
+node scripts/pose-record.mjs <clip|photo> <out.json>   # every frame through the real pose model, in order (FPS= SECS= VF='ffmpeg filter' N=)
+STAB=a.json,b.json npx vitest run scripts/stability-sim.test.ts   # replay through the tracker: lean, error, jerk, jumps; INJECT=1 adds depth flips
+STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
 node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill
 ```
 
@@ -54,8 +57,27 @@ in `src/main.ts`.
   changes depth and perspective strength (settings → Lens).
 - **Tracking** (`src/pose/tracker.ts`): detections come in no fixed order;
   each joins the nearest track within a torso length (greedy). The track id is
-  the identity — never a position key (2024's flicker). EMA smoothing, the
-  house smoother, with depth smoothed hardest. Tracks fade in and out.
+  the identity — never a position key (2024's flicker). A new person shows
+  after three frames found. EMA smoothing (the house smoother; time constants
+  1.5× the first ones since 2026-11-01), the torso and face harder than the
+  limbs, depth hardest. **People stand up** (`src/pose/upright.ts`): with the
+  hips out of the picture (a torso shot) the smoothed pose is hung from the
+  shoulders — the torso square to the shoulder line, as upright as they allow,
+  the hips one measured torso length below — so a guessed body cannot tip over;
+  with the hips in view, a body flat in 3D that the picture shows upright (a
+  depth flip) is stood up, and one the picture agrees with is accepted after
+  0.35 s. **The costume is pinned to the picture**: the 3D placement slides
+  sideways at its depth until the torso lands on the smoothed picture's torso.
+  Measured by replaying clips recorded frame by frame through the real model
+  (`scripts/pose-record.mjs`, `scripts/stability-sim.test.ts`): in torso shots
+  the costume's shoulders sat 20–27 px off the person's (RMS) and now 3–5, their
+  frame-to-frame jitter 2–4× the picture's and now equal to it (6, 10, 6 px);
+  the head's biggest jumps ~50 → ~15 px; arms and turns 25–42 % less jerky;
+  injected depth flips on a street clip left the body horizontal for 3–6 frames
+  a person and now 0–1. A constant-velocity Kalman filter (`src/pose/kalman.ts`)
+  was tried for the points and the depth and lost to the slower EMA on every
+  recorded clip (MediaPipe's errors wander over frames, which a velocity filter
+  reads as motion); it is there, off (`TUNE.filter`). Tracks fade in and out.
 - **Retargeting** (`src/pose/rig.ts`): onto Strollzilla's rig bone names. Each
   bone swings from a *canonical* direction in its parent's frame (an arm out
   sideways, a thigh straight down, a shin along its thigh) to the person's
@@ -229,6 +251,7 @@ that means here, and where each lives:
 | Mirror the render | mirror the landmarks | a mirrored skeleton is a different-handed person; the costume faced away |
 | Static build committed to `2026/` | a deploy branch | costuma's Pages already serves `main`; one merge publishes it |
 | Faces from a crop round each head | the face model on the whole frame | the whole frame lost faces past ~1 m (its detector sees 128 px); crops read them to ~3 m and name whose face it is; costs one face read per person (two a frame, 12 ms budget) |
+| EMA ×1.5, an upright prior, the costume pinned to the picture | a Kalman filter (founder's suggestion) | replayed over five recorded clips the Kalman filter lost to the slower EMA on error and jerk, and doubled the size's jumps on depth; pinning and the prior did the most (torso-shot shoulders 20–27 px off → 3–5) |
 | The head's turn from the face mesh | the pose model's ears and nose | measured: rolls within 1–2° against 7–13° off; profiles still fall back to the pose model |
 
 ## Things that bit already

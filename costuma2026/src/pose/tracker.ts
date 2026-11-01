@@ -5,8 +5,11 @@
 // A track fades in when found and out when lost, so a costume never pops (Strollzilla ADR-0018: smooth, always smooth).
 import type { LM } from './landmarks';
 import { L, N_LANDMARKS } from './landmarks';
+import * as THREE from 'three';
 import { bodyLengths, solveTranslation, type Intrinsics } from './solve';
 import type { FaceTrack } from './face';
+import { CVBank } from './kalman';
+import { anchorTorsoShot, upright, type UprightState, type UprightVerdict } from './upright';
 
 /** `mask`: the person's cut-out (0..1 per pixel, the detection input's size), when asked for */
 export interface Detection { image: LM[]; world: LM[]; mask?: { data: Float32Array; w: number; h: number } }
@@ -16,7 +19,10 @@ export interface Track {
   born: number;
   seen: number;
   image: LM[];
+  /** the 3D pose the rest of the app uses: the smoothed one, hung from the shoulders in a torso shot (upright.ts) */
   world: LM[];
+  /** the smoothed 3D pose in the model's own frame (what the smoothing works on) */
+  wsm: LM[];
   /** hip centre in camera space, metres (three's axes) */
   T: { x: number; y: number; z: number };
   len: ReturnType<typeof bodyLengths>;
@@ -29,25 +35,60 @@ export interface Track {
   det: Detection | null;
   /** the face (pose/face.ts attachFaces): eyes, mouth, expressions */
   face?: FaceTrack;
+  /** the upright check's memory and its last verdict (pose/upright.ts) */
+  up: UprightState;
+  verdict: UprightVerdict;
+  /** the Kalman filters: the picture's points (x, y), the 3D points (x, y, z), the hips' depth */
+  kf: { image: CVBank; world: CVBank; z: CVBank } | null;
 }
 
 export const TUNE = {
-  /** seconds: world landmarks (shape), image landmarks (what is left after the shared shake), depth, body lengths */
-  tauWorld: 0.045, tauImage: 0.035, tauZ: 0.14, tauLen: 1.5,
+  /**
+   * seconds: world landmarks (shape), image landmarks (what is left after the shared shake), depth, body lengths.
+   * 1.5× the first settings (2026-11-01): replayed over five recorded clips (torso shots hand-held and still, a selfie,
+   * a street with three people walking; scripts/kalman-tune.test.ts) it kept the error against what the person did
+   * (×1.02) with 31 % less jerk and 24 % smaller frame-to-frame jumps
+   */
+  tauWorld: 0.068, tauImage: 0.053, tauZ: 0.21, tauLen: 1.5,
   /** visibility decides pose-or-rest per limb: slow, or a limb at the frame's edge flickers between the two */
   tauVis: 0.25,
   /**
    * the torso and the face (shoulders, hips, the head's points) smoothed harder than the limbs: they turn slower, and
    * their jitter is what shows on a big costume. Measured on a noisy still replayed at 30 fps (scripts/jitter-sim):
-   * raw pelvis 1.13°, head 1.19°; at the limbs' 45 ms they keep 0.78° / 0.71°, at 90 ms 0.56° / 0.51°
+   * raw pelvis 1.13°, head 1.19°; at the limbs' 45 ms they keep 0.78° / 0.71°, at 90 ms 0.56° / 0.51°; now 135 ms
    */
-  tauCore: 0.09,
+  tauCore: 0.135,
   fadeIn: 0.22, fadeOut: 0.35, forgetAfter: 0.6,
   /** frames a new person must be found in before they show: a one-frame false find (a coat, a poster) never flashes a
    *  costume (founder, 2026-11-01: "some acquisition issues") — ~0.1 s at 30 fps, under the fade-in anyway */
   confirm: 3,
   /** a detection joins a track within this many of the track's torso lengths (in the image) */
   matchRadius: 1.3,
+  /** stand guessed bodies up (pose/upright.ts) */
+  upright: true,
+  /**
+   * 'ema' or 'kalman' (constant velocity, gated, per coordinate: pose/kalman.ts) for the points. The Kalman filter
+   * predicts, so on a steady move it has no lag where an EMA lags speed × tau (checked on a synthetic ramp: 0.1 cm
+   * against 3.8), but on the recorded clips no setting of it beat the EMA slowed to the same jerk (best: error ×1.12 at
+   * jerk ×0.68, against ×1.02 at ×0.69), and on the hips' depth it doubled the size's frame-to-frame jumps (29 → 56 cm
+   * on the street): MediaPipe's errors wander over several frames (it tracks from its last answer), and a filter that
+   * estimates velocity reads the wander as motion. Kept for footage it might suit (dance, unrecorded); off.
+   */
+  filter: 'ema' as 'kalman' | 'ema',
+  /**
+   * The Kalman filters' noise. `r*`: a reading's standard deviation (the picture in image widths/heights, 3D and depth
+   * in metres), divided by its visibility; `q*`: how hard a point may accelerate (spectral density, units²/s³). The
+   * torso and face (core) are let accelerate less than the limbs. Tuned on recorded clips replayed through the tracker
+   * (scripts/stability-sim.test.ts).
+   */
+  rImage: 0.004, qImageCore: 0.4, qImageLimb: 6,
+  rWorld: 0.02, rWorldZ: 0.04, qWorldCore: 0.6, qWorldLimb: 12,
+  rDepth: 0.03, qDepth: 1,
+  gate: 4,
+  /** with 'ema' for the points, the hips' depth through its Kalman filter anyway (measured worse: see `filter`) */
+  kalmanDepth: false,
+  /** slide each person's 3D placement onto the smoothed picture's torso (pinToPicture) */
+  pin: true,
 };
 
 const center = (im: LM[]): { x: number; y: number; s: number } => {
@@ -75,17 +116,65 @@ const copyLM = (a: LM[]): LM[] => a.map((p) => ({ ...p }));
 
 /** the points the shared shift is read from: the torso and the face, steady and usually seen */
 const STEADY = [L.nose, L.eyeL, L.eyeR, L.earL, L.earR, L.shL, L.shR, L.hipL, L.hipR];
-/** move every smoothed point by how far the steady ones moved together (visibility-weighted mean of their change) */
-function shiftTogether(out: LM[], inp: LM[]): void {
+/** move every smoothed point by how far the steady ones moved together (visibility-weighted mean of their change);
+ *  returns the shift */
+function shiftTogether(out: LM[], inp: LM[]): { dx: number; dy: number } {
   let dx = 0, dy = 0, w = 0;
   for (const i of STEADY) {
     const o = out[i]!, p = inp[i]!, k = Math.min(o.v, p.v);
     if (k < 0.5) continue;
     dx += (p.x - o.x) * k; dy += (p.y - o.y) * k; w += k;
   }
-  if (w < 1.5) return;
+  if (w < 1.5) return { dx: 0, dy: 0 };
   dx /= w; dy /= w;
   for (const o of out) { o.x += dx; o.y += dy; }
+  return { dx, dy };
+}
+
+const AXES = ['x', 'y', 'z'] as const;
+/** Kalman-filter `inp` into `out` through `bank` (`dims` 2: the picture, 3: the 3D points); visibility by EMA */
+function filterLM(bank: CVBank, out: LM[], inp: LM[], dims: 2 | 3, dt: number, kv: number): void {
+  const T = TUNE;
+  for (let i = 0; i < N_LANDMARKS; i++) {
+    const o = out[i]!, p = inp[i]!, core = CORE.has(i);
+    const vis = Math.max(0.15, Math.min(1, p.v));
+    for (let a = 0; a < dims; a++) {
+      const r = dims === 2 ? T.rImage : a === 2 ? T.rWorldZ : T.rWorld;
+      const q = dims === 2 ? (core ? T.qImageCore : T.qImageLimb) : (core ? T.qWorldCore : T.qWorldLimb);
+      o[AXES[a]!] = bank.step(i * dims + a, p[AXES[a]!], dt, q, (r / vis) ** 2, T.gate);
+    }
+    o.v = ema(o.v, p.v, kv);
+  }
+}
+function resetBank(bank: CVBank, lm: LM[], dims: 2 | 3): void {
+  for (let i = 0; i < N_LANDMARKS; i++) for (let a = 0; a < dims; a++) {
+    const r = dims === 2 ? TUNE.rImage : a === 2 ? TUNE.rWorldZ : TUNE.rWorld;
+    bank.reset(i * dims + a, lm[i]![AXES[a]!], r * r);
+  }
+}
+const UP = new THREE.Vector3(0, 1, 0);
+
+const TORSO = [L.shL, L.shR, L.hipL, L.hipR];
+/**
+ * Slide the hips sideways, at their depth, until the torso lands on the smoothed picture's torso: the 3D solve fits
+ * every visible point at once and its depth wobbles, which put the costume's shoulders 2–4× jumpier on screen than the
+ * smoothed picture's own (measured on three torso clips: 16 against 6 px, 21 against 11, 20 against 5 px RMS second
+ * difference). The picture is the better witness of where things are on screen; the 3D keeps the depth and the shape.
+ * Each torso point weighs by its visibility (a torso shot pins on the shoulders).
+ */
+function pinToPicture(t: Track, K: Intrinsics): void {
+  let du = 0, dv = 0, w = 0;
+  for (const i of TORSO) {
+    const im = t.image[i]!, wp = t.world[i]!, k = Math.max(0, Math.min(1, (im.v - 0.4) / 0.4));
+    if (k <= 0) continue;
+    const z = -(t.T.z + wp.z);
+    if (z <= 0.05) continue;
+    const u = K.cx + (K.f * (t.T.x + wp.x)) / z, v = K.cy - (K.f * (t.T.y + wp.y)) / z;
+    du += (im.x * K.w - u) * k; dv += (im.y * K.h - v) * k; w += k;
+  }
+  if (w < 0.5) return;
+  const depth = -t.T.z;
+  t.T = { x: t.T.x + ((du / w) * depth) / K.f, y: t.T.y - ((dv / w) * depth) / K.f, z: t.T.z };
 }
 
 export class Tracker {
@@ -96,8 +185,21 @@ export class Tracker {
   private nextId = 1;
   private last = -1;
 
-  /** `now` in ms. Returns the tracks (lost ones still fading out included). */
-  update(dets: Detection[], now: number, K: Intrinsics): Track[] {
+  /** the smoothed pose as the app gets it: hung from the shoulders while the hips are out of the picture */
+  private shaped(wsm: LM[], image: LM[], len: number, up: THREE.Vector3): LM[] {
+    if (!TUNE.upright) return copyLM(wsm);
+    return anchorTorsoShot(wsm, up, len, Math.min(image[L.hipL]!.v, image[L.hipR]!.v));
+  }
+
+  /** a detection's 3D pose, stood up where it is a guess (pose/upright.ts) */
+  private check(t: { up: UprightState; len?: Track['len'] }, d: Detection, T: { z: number }, K: Intrinsics, up: THREE.Vector3, now: number): { world: LM[]; verdict: UprightVerdict } {
+    if (!TUNE.upright) return { world: d.world, verdict: 'kept' };
+    return upright(d.world, d.image, up, { len: t.len?.torso, f: K.f / K.h, aspect: K.w / K.h, depth: -T.z, now, state: t.up });
+  }
+
+  /** `now` in ms; `up` the floor's up in camera axes (the phone's gravity, ground.ts). Returns the tracks (lost ones
+   *  still fading out included). */
+  update(dets: Detection[], now: number, K: Intrinsics, up: THREE.Vector3 = UP): Track[] {
     const dt = this.last < 0 ? 1 / 30 : Math.min(0.25, Math.max(0.001, (now - this.last) / 1000));
     this.last = now;
     // a detection we cannot place is no detection
@@ -120,22 +222,41 @@ export class Tracker {
       // a track coming back from lost snaps rather than gliding across the frame
       const snap = t.lost;
       const kv = snap ? 1 : kOf(dt, TUNE.tauVis);
-      blendLM(t.world, p.d.world, snap ? 1 : kOf(dt, TUNE.tauWorld), kv, snap ? 1 : kOf(dt, TUNE.tauCore));
-      // what moves together is followed at once, what jitters alone is smoothed: a hand-held camera shakes the whole
-      // person in the frame, and an EMA on that lags it (measured: the costume trembled 1.6 px against the person
-      // under a simulated tremor, 0.7 px unsmoothed). The torso's shared shift moves every smoothed point first; only
-      // what is left over — each point's own noise — goes through the EMA.
-      if (!snap) shiftTogether(t.image, p.d.image);
-      blendLM(t.image, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage), kv);
+      // the depth for "what an upright torso looks like on screen": the track's, not this detection's (a flip moves it)
+      const chk = this.check(t, p.d, t.T, K, up, now);
+      t.verdict = chk.verdict;
+      if (TUNE.filter === 'kalman') {
+        const fresh = !t.kf;
+        const kf = t.kf ??= { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) };
+        if (snap || fresh) { resetBank(kf.world, chk.world, 3); resetBank(kf.image, p.d.image, 2); kf.z.reset(0, t.T.z, TUNE.rDepth ** 2); }
+        filterLM(kf.world, t.wsm, chk.world, 3, dt, kv);
+        // the hand-held shake (below) moves the picture's filters too, so their predictions start from where it put them
+        if (!snap) { const { dx, dy } = shiftTogether(t.image, p.d.image); for (let i = 0; i < N_LANDMARKS; i++) { kf.image.shift(i * 2, dx); kf.image.shift(i * 2 + 1, dy); } }
+        filterLM(kf.image, t.image, p.d.image, 2, dt, kv);
+      } else {
+        blendLM(t.wsm, chk.world, snap ? 1 : kOf(dt, TUNE.tauWorld), kv, snap ? 1 : kOf(dt, TUNE.tauCore));
+        // what moves together is followed at once, what jitters alone is smoothed: a hand-held camera shakes the whole
+        // person in the frame, and an EMA on that lags it (measured: the costume trembled 1.6 px against the person
+        // under a simulated tremor, 0.7 px unsmoothed). The torso's shared shift moves every smoothed point first; only
+        // what is left over — each point's own noise — goes through the EMA.
+        if (!snap) shiftTogether(t.image, p.d.image);
+        blendLM(t.image, p.d.image, snap ? 1 : kOf(dt, TUNE.tauImage), kv);
+      }
+      t.world = this.shaped(t.wsm, t.image, t.len.torso, up);
+      if (TUNE.upright && Math.min(t.image[L.hipL]!.v, t.image[L.hipR]!.v) < 0.7 && t.verdict === 'kept') t.verdict = 'torso shot';
       // the hips from the smoothed shape and the smoothed (shake-following) picture; their depth smoothed again on its
       // own, keeping where they land on screen (x and y scale with depth along the same ray)
       const Ts = solveTranslation(t.world, t.image, K) ?? p.T!;
-      if (snap) t.T = { ...Ts };
+      if (snap) { t.T = { ...Ts }; t.kf?.z.reset(0, Ts.z, TUNE.rDepth ** 2); }
       else {
-        const z = ema(t.T.z, Ts.z, kOf(dt, TUNE.tauZ)), r = z / Ts.z;
+        if ((TUNE.filter === 'kalman' || TUNE.kalmanDepth) && !t.kf) { t.kf = { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) }; t.kf.z.reset(0, t.T.z, TUNE.rDepth ** 2); }
+        const z = (TUNE.filter === 'kalman' || TUNE.kalmanDepth) && t.kf ? t.kf.z.step(0, Ts.z, dt, TUNE.qDepth, TUNE.rDepth ** 2, TUNE.gate) : ema(t.T.z, Ts.z, kOf(dt, TUNE.tauZ));
+        const r = z / Ts.z;
         t.T = { x: Ts.x * r, y: Ts.y * r, z };
       }
-      const nl = bodyLengths(t.world), kl = kOf(dt, TUNE.tauLen);
+      if (TUNE.pin) pinToPicture(t, K);
+      // the person's lengths from the model's own pose (the anchored torso is the measured one, by construction)
+      const nl = bodyLengths(t.wsm), kl = kOf(dt, TUNE.tauLen);
       for (const key of Object.keys(nl) as (keyof typeof nl)[]) t.len[key] = ema(t.len[key], nl[key], kl);
       t.seen = now;
       t.lost = false;
@@ -144,8 +265,17 @@ export class Tracker {
     }
     placed.forEach((p, di) => {
       if (usedD.has(di)) return;
-      const world = copyLM(p.d.world);
-      this.all.push({ id: this.nextId++, born: now, seen: now, image: copyLM(p.d.image), world, T: { ...p.T! }, len: bodyLengths(world), presence: 0, hits: 1, lost: false, det: p.d });
+      const state: UprightState = { flatSince: null };
+      const chk = this.check({ up: state }, p.d, p.T!, K, up, now);
+      const wsm = copyLM(chk.world), image = copyLM(p.d.image), len = bodyLengths(wsm);
+      const world = this.shaped(wsm, image, len.torso, up);
+      const T0 = solveTranslation(world, image, K) ?? p.T!;
+      let kf: Track['kf'] = null;
+      if (TUNE.filter === 'kalman') {
+        kf = { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) };
+        resetBank(kf.world, wsm, 3); resetBank(kf.image, image, 2); kf.z.reset(0, T0.z, TUNE.rDepth ** 2);
+      }
+      this.all.push({ id: this.nextId++, born: now, seen: now, image, world, wsm, T: { ...T0 }, len, presence: 0, hits: 1, lost: false, det: p.d, up: state, verdict: chk.verdict, kf });
     });
     for (const t of this.all) {
       if (t.seen !== now) { t.lost = true; t.det = null; }
