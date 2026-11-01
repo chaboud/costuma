@@ -5,8 +5,12 @@
 // distance fields polygonised by marching cubes and hung rigidly on the head and the pelvis. Everything is about a
 // third chunkier than anatomy so a rib still reads at phone resolution over a person, and the skull is a head-and-a-bit
 // wide so it hides the wearer's own head. The ivory carries a faint self-glow (glow-in-the-dark costume paint) so the
-// figure does not go muddy in a dim room lit only by the camera's own picture (render/envlight.ts); the eye sockets
-// hold a green ember that breathes, and the jaw clacks now and then (`tick`).
+// figure does not go muddy in a dim room lit only by the camera's own picture (render/envlight.ts). Each eye socket
+// holds a green ember (a pupil with a white-hot core in a soft additive glow) that is the face's whole expression, since
+// a skull has no lids or brows: it follows the wearer's gaze, pinches shut on their blink (one side for a wink), narrows
+// to a slit with a squint, flares with wide eyes or raised brows, slants into an angry slit that burns red with a scowl
+// and droops with a frown. The jaw follows the wearer's mouth, sideways too; with no face read it clacks now and then
+// and the embers blink and glance about (`tick`).
 //
 // Model frame: the hero's (hero.ts) — 20 units tall on y = 0, +y up, +z forward, +x the skeleton's own left. Geometry
 // is authored in model coordinates and hung with `d.at(mesh, bone, 0, 0, 0)`, which puts the mesh's origin at the model
@@ -21,14 +25,15 @@ import { sdCapsule, sdEllipsoid, sdSphere, smin } from './sdf';
 type V3 = [number, number, number];
 
 // The hero's joints, so the torso fit (hips to shoulders) matches every other costume's; the jaw hinges at the
-// temporomandibular joint behind the cheek, not at the chin, so a clack swings the chin down.
+// temporomandibular joint behind the cheek, not at the chin, so a clack swings the chin down. Its far end is the front of
+// the lower teeth: where an open mouth breathes from (stage.ts faces).
 export const SKELLY_SEGMENTS: Seg[] = [
   { name: 'pelvis', a: [0, 9.6, 0], b: [0, 10.6, 0], parent: null },
   { name: 'spine1', a: [0, 10.6, 0], b: [0, 12.4, 0.1], parent: 'pelvis' },
   { name: 'spine2', a: [0, 12.4, 0.1], b: [0, 15.0, 0.1], parent: 'spine1' },
   { name: 'neck', a: [0, 15.0, 0.1], b: [0, 15.9, 0.15], parent: 'spine2' },
   { name: 'head', a: [0, 15.9, 0.15], b: [0, 18.4, 0.3], parent: 'neck' },
-  { name: 'jaw', a: [0, 16.5, -0.3], b: [0, 15.55, 1.0], parent: 'head', reach: 0 },
+  { name: 'jaw', a: [0, 16.5, -0.3], b: [0, 16.0, 1.25], parent: 'head', reach: 0 },
   { name: 'tail1', a: [0, 10.4, -1.0], b: [0, 9.6, -1.1], parent: 'pelvis', reach: 0 },
   { name: 'tail2', a: [0, 9.6, -1.1], b: [0, 8.8, -1.2], parent: 'tail1', reach: 0 },
   { name: 'tail3', a: [0, 8.8, -1.2], b: [0, 8.0, -1.3], parent: 'tail2', reach: 0 },
@@ -98,9 +103,6 @@ function merge(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
   return g;
 }
 
-/** a mirrored copy of `x → -x` points, for curves authored on the left */
-const mx = (p: V3): V3 => [-p[0], p[1], p[2]];
-
 /**
  * A signed distance field polygonised by three's MarchingCubes over `box` at `res` cells a side: positions and normals
  * in model units, optionally vertex colours. The field index i maps to 2i/res - 1 exactly as MarchingCubes places its
@@ -159,7 +161,8 @@ const smax = (a: number, b: number, k: number) => -smin(-a, -b, k);
 // the skull and the pelvis as fields
 
 const SOCKET: V3 = [0.43, 17.02, 1.06];
-const EMBER: V3 = [0.43, 16.99, 0.74];
+/** where the left ember rests, a little forward of the pit's floor so it still shows when it looks aside */
+const EMBER: V3 = [0.43, 16.99, 0.8];
 
 /** 2D distance to an isosceles triangle, apex up at (0, top), base half-width `w` at `bot` (negative inside) */
 function sdTri(x: number, y: number, top: number, bot: number, w: number): number {
@@ -319,6 +322,28 @@ function foot(): THREE.BufferGeometry[] {
   return g;
 }
 
+/**
+ * A glow: additive, brightest where it faces the eye and fading to nothing at its rim, so a ball reads as light in the
+ * air rather than a disc. Not written to depth, so it lights what it overlaps; tested against depth, so a wall in front
+ * of it hides it. `falloff` concentrates it toward its middle (the facing ratio's power). The stage fades an additive
+ * material by its opacity (`keepBlend`), so a tick dims one by its colour.
+ * (pumpkin.ts uses it for the hot spots in Jack's eyes.)
+ */
+export function glowMaterial(color: number, falloff = 2.2): THREE.MeshBasicMaterial {
+  const m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  m.userData.keepBlend = true;
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n varying vec3 vGlowN; varying vec3 vGlowV;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\n vGlowN = normalize(normalMatrix * normal); vGlowV = -mvPosition.xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n varying vec3 vGlowN; varying vec3 vGlowV;')
+      .replace('#include <color_fragment>', `#include <color_fragment>\n diffuseColor.a *= pow(clamp(dot(normalize(vGlowN), normalize(vGlowV)), 0.0, 1.0), ${falloff.toFixed(2)});`);
+  };
+  m.customProgramCacheKey = () => `skelly-glow-v1-${falloff.toFixed(2)}`;
+  return m;
+}
+
 const IVORY = 0xeee5cc;
 const IVORY_C = new THREE.Color(IVORY);
 const SOOT = new THREE.Color(0x1d120c);
@@ -329,7 +354,6 @@ function dress(d: Dresser): void {
   const bone = d.std({ color: IVORY, roughness: 0.42, metalness: 0, emissive: 0x2c2a20, emissiveIntensity: 1 });
   const boneV = d.std({ color: 0xffffff, vertexColors: true, roughness: 0.42, metalness: 0, emissive: 0x2c2a20, emissiveIntensity: 1 });
   const dark = d.std({ color: 0x120a06, roughness: 0.9 });
-  const ember = d.std({ color: 0x000000, emissive: EMBER_GREEN, emissiveIntensity: 1.0, roughness: 1 });
   const both = (geo: THREE.BufferGeometry, name: string, mat: THREE.Material = bone) => {
     for (const side of ['L', 'R'] as const) {
       const m = new THREE.Mesh(geo, mat);
@@ -348,8 +372,28 @@ function dress(d: Dresser): void {
   // --- the head: skull, embers in the sockets, upper teeth, the dark of the mouth behind them
   const skull = isoGeometry(skullSDF, { min: [-1.25, 15.95, -1.5], max: [1.25, 18.65, 1.4] }, 52, skullColor, 40000);
   one(skull, 'head', boneV);
-  const embers = merge([ball(EMBER, 0.1, [1, 1.1, 0.7], 10), ball(mx(EMBER), 0.1, [1, 1.1, 0.7], 10)]);
-  one(embers, 'head', ember, 'skelly-embers');
+  // each ember is its own group (`tick` moves, turns and squashes it), with its own materials so one side can wink or
+  // burn red alone: a pupil with a white-hot core, in a soft glow that lights the pit round it. None casts a shadow.
+  const pupilGeo = new THREE.SphereGeometry(0.1, 14, 10), coreGeo = new THREE.SphereGeometry(0.042, 10, 8);
+  const haloGeo = new THREE.SphereGeometry(0.1, 16, 10);
+  const core = d.std({ color: 0x000000, emissive: 0xf2ffe6, emissiveIntensity: 1.4, roughness: 1 });
+  for (const side of ['L', 'R'] as const) {
+    const g = new THREE.Group();
+    g.name = `skelly-eye${side}`;
+    const pupil = new THREE.Mesh(pupilGeo, new THREE.MeshStandardMaterial({ color: 0x000000, emissive: EMBER_GREEN, emissiveIntensity: 1, roughness: 1 }));
+    pupil.name = `skelly-pupil${side}`;
+    pupil.scale.set(1, 1.1, 0.7);
+    const c = new THREE.Mesh(coreGeo, core);
+    c.position.z = 0.075; // proud of the pupil's front (the pupil is squashed to 0.7 deep), so the core shows
+    pupil.add(c);
+    const halo = new THREE.Mesh(haloGeo, glowMaterial(EMBER_GREEN, 4));
+    halo.name = `skelly-halo${side}`;
+    halo.scale.set(2.1, 2, 1.2);
+    halo.renderOrder = 2;
+    g.add(pupil, halo);
+    d.at(g, 'head', side === 'L' ? EMBER[0] : -EMBER[0], EMBER[1], EMBER[2]);
+    g.traverse((o) => { o.castShadow = false; o.receiveShadow = false; });
+  }
   const teeth = (y: number, h: number, rx: number, rz: number, zc: number): THREE.BufferGeometry[] => {
     const out: THREE.BufferGeometry[] = [];
     for (let i = 0; i < 10; i++) {
@@ -415,7 +459,22 @@ function dress(d: Dresser): void {
   both(merge(foot()), 'foot');
 }
 
-const ECHO = new WeakMap<THREE.Object3D, { jaw: THREE.Object3D | null; embers: THREE.MeshStandardMaterial[] }>();
+/** one ember: its group (moved and turned), the pupil (squashed), the glow round it, their own materials; `sx` +1 left */
+interface Ember { g: THREE.Object3D; pupil: THREE.Object3D; halo: THREE.Object3D; pm: THREE.MeshStandardMaterial; hm: THREE.MeshBasicMaterial; sx: number }
+const ECHO = new WeakMap<THREE.Object3D, { jaw: THREE.Object3D | null; eyes: Ember[] }>();
+
+/** the jaw at rest stands a hair open so the two rows of teeth meet rather than pass into each other; open, it drops by
+ *  JAW_OPEN more (radians); sideways it swings JAW_SIDE about its hinge's up at a full shift (rig.ts setJaw swings 0.16:
+ *  a bare mandible reads its shift less than a fleshed jaw, so a little more) */
+const JAW_REST = 0.015, JAW_OPEN = 0.55, JAW_SIDE = 0.22;
+/** how far an ember wanders from its rest in its pit at a full look (model units): the pit is ~0.3 across there */
+const LOOK_X = 0.12, LOOK_Y = 0.11;
+const HEAD_A = SKELLY_SEGMENTS.find((s) => s.name === 'head')!.a;
+// tick's scratch: never allocate per frame
+const X_AXIS = new THREE.Vector3(1, 0, 0), Y_AXIS = new THREE.Vector3(0, 1, 0);
+const QA = new THREE.Quaternion(), QB = new THREE.Quaternion();
+const GREEN = new THREE.Color(EMBER_GREEN), RAGE = new THREE.Color(0xff3a12), HUE = new THREE.Color();
+const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
 export const SKELETON: CharacterDef = {
   id: 'skeleton', name: 'Skelly', blurb: 'Bones, a grin, and green embers for eyes',
@@ -424,25 +483,68 @@ export const SKELETON: CharacterDef = {
   // the skull is drawn a head-and-a-bit wide; the torso fit at 1.04 lets the ribcage cover a chest in a coat. Rigid
   // limbs only stretch a little toward the wearer: further, and every joint opens a visible gap.
   fit: { size: 1.04, limb: 0.3 },
-  face: { eyes: [[0.43, 17.02, 1.3, 0.36], [-0.43, 17.02, 1.3, 0.36]] },
+  face: {
+    // the stage opens the jaw by this (and swings it sideways); `tick` sets the same turn again with the rest gap added
+    jaw: JAW_OPEN,
+    eyes: [[0.43, 17.02, 1.3, 0.36], [-0.43, 17.02, 1.3, 0.36]],
+    // what a skull breathes: the embers' own green, gone ghostly
+    breath: { colors: [0x58ff2a, 0xb4ff86, 0xe8ffd6, 0x2affa0] },
+  },
   tick(root, t, face) {
     let e = ECHO.get(root);
     if (!e) {
-      // the wearer's own material copies (stage.ts clones them per wearer), found once; a WeakMap, not userData,
-      // because the stage clones roots and userData is cloned through JSON
-      const embers: THREE.MeshStandardMaterial[] = [];
-      root.traverse((o) => { if (o.name === 'skelly-embers') embers.push((o as THREE.Mesh).material as THREE.MeshStandardMaterial); });
-      e = { jaw: root.getObjectByName('jaw') ?? null, embers };
+      // the wearer's own parts and material copies (stage.ts clones them per wearer), found once; a WeakMap, not
+      // userData, because the stage clones roots and userData is cloned through JSON
+      const eyes: Ember[] = [];
+      for (const side of ['L', 'R'] as const) {
+        const g = root.getObjectByName(`skelly-eye${side}`), pupil = root.getObjectByName(`skelly-pupil${side}`) as THREE.Mesh | undefined;
+        const halo = root.getObjectByName(`skelly-halo${side}`) as THREE.Mesh | undefined;
+        if (g && pupil && halo) eyes.push({ g, pupil, halo, pm: pupil.material as THREE.MeshStandardMaterial, hm: halo.material as THREE.MeshBasicMaterial, sx: side === 'L' ? 1 : -1 });
+      }
+      e = { jaw: root.getObjectByName('jaw') ?? null, eyes };
       ECHO.set(root, e);
     }
-    // the embers breathe, with a flutter on top
-    const k = 0.95 + 0.3 * Math.sin(t * 2.1) + 0.1 * Math.sin(t * 7.3 + 1.1);
-    for (const m of e.embers) m.emissiveIntensity = k;
-    // a clack of the jaw every few seconds: a short chatter, then shut
+    const f = face ?? null;
+    // the embers breathe, with a flutter on top; an open mouth fans them
+    const breath = (0.95 + 0.3 * Math.sin(t * 2.1) + 0.1 * Math.sin(t * 7.3 + 1.1)) * (1 + 0.45 * (f?.jaw ?? 0));
+    // with no face read, a blink every few seconds and a slow, shifty look round the room
+    const idleBlink = (t + 1.3) % 6.1 < 0.16 ? 1 : 0;
+    const lookX = f ? f.lookX : 0.5 * Math.sin(t * 0.31 + 0.8 * Math.sin(t * 0.13));
+    const lookY = f ? f.lookY : 0.2 * Math.sin(t * 0.23 + 1.0);
+    for (const m of e.eyes) {
+      const L = m.sx > 0;
+      const blink = clamp01(f ? (L ? f.blinkL : f.blinkR) : idleBlink);
+      const squint = f ? (L ? f.squintL : f.squintR) : 0;
+      // raised brows (the inner pair, or this side's outer end) open the eye as wide eyes do
+      const wide = f ? clamp01(Math.max(L ? f.wideL : f.wideR, f.browUp, 0.8 * (L ? f.browOuterL : f.browOuterR))) : 0;
+      // a scowl (this side's brow down, or a sneer) slants the ember into a slit, inner end down, and heats it red
+      const down = f ? clamp01(Math.max(L ? f.browDownL : f.browDownR, 0.6 * f.sneer)) : 0;
+      const sad = f ? clamp01(f.frown) : 0;
+      const smile = f ? clamp01(Math.max(L ? f.smileL : f.smileR, f.smile)) : 0;
+      const open = 1 - blink;
+      const size = 1 + 0.5 * wide - 0.1 * down;
+      // a blink pinches it to a line, widening a little as it goes, then out
+      const sy = 1.1 * size * open * (1 - 0.5 * squint) * (1 - 0.55 * down) * (1 - 0.3 * smile) * (1 - 0.3 * sad);
+      m.pupil.scale.set(size * (1 + 0.35 * blink + 0.15 * squint + 0.25 * down), Math.max(1e-3, sy), 0.7 * size);
+      m.g.position.set(m.sx * EMBER[0] - HEAD_A[0] + LOOK_X * lookX, EMBER[1] - HEAD_A[1] + LOOK_Y * lookY - 0.03 * down + 0.025 * smile - 0.02 * sad, EMBER[2] - HEAD_A[2]);
+      m.g.rotation.z = m.sx * (0.5 * down - 0.4 * sad);
+      HUE.copy(GREEN).lerp(RAGE, down);
+      m.pm.emissive.copy(HUE);
+      m.pm.emissiveIntensity = breath * (0.5 + 0.5 * open) * (1 + 0.35 * wide + 0.3 * down);
+      // the glow stays inside the pit (bigger, it shows through the temples and the nose): it brightens rather than grows
+      m.halo.scale.set(2.1 * (1 + 0.15 * wide), 2 * (0.4 + 0.6 * open) * (1 + 0.15 * wide) * (1 - 0.3 * down), 1.2);
+      m.hm.color.copy(HUE).multiplyScalar(0.2 * breath * open * (1 + 0.9 * wide + 0.4 * down));
+    }
     if (e.jaw) {
-      const ph = t % 4.6;
-      // the wearer's mouth when it is read (face tracking); its own clack every few seconds when it is not
-      e.jaw.rotation.x = face && face.jaw > 0.05 ? 0.02 + 0.55 * face.jaw : ph < 0.75 ? 0.05 + 0.07 * Math.abs(Math.sin(ph * 25)) : 0.02;
+      if (f) {
+        // the wearer's mouth, open and sideways (what rig.setJaw did before this tick, with the rest gap)
+        QA.setFromAxisAngle(Y_AXIS, JAW_SIDE * f.jawSide);
+        e.jaw.quaternion.copy(QA).multiply(QB.setFromAxisAngle(X_AXIS, JAW_REST + JAW_OPEN * f.jaw));
+      } else {
+        // its own clack every few seconds when no face is read: a short chatter, then shut
+        const ph = t % 4.6;
+        e.jaw.quaternion.setFromAxisAngle(X_AXIS, ph < 0.75 ? 0.05 + 0.07 * Math.abs(Math.sin(ph * 25)) : JAW_REST);
+      }
     }
   },
 };

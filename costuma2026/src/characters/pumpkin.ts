@@ -12,10 +12,10 @@
 // the head segment's midpoint, which is where the stage's neck fit puts the wearer's head (rig.ts neckFit).
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { Capture, CharacterDef, Dresser } from './build';
+import type { Capture, CharacterDef, Dresser, FaceState } from './build';
 import type { Seg } from './sdf';
 import { sdCapsule, sdEllipsoid, smin } from './sdf';
-import { isoGeometry } from './skeleton';
+import { glowMaterial, isoGeometry } from './skeleton';
 
 type V3 = [number, number, number];
 
@@ -197,13 +197,19 @@ const box2 = (u: number, v: number, cx: number, cy: number, hx: number, hy: numb
   return Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0);
 };
 
+// The carving's numbers, which the shell's shader moves too (FACE_GLSL): the left eye, a triangle apex up turned by
+// `tilt` about its middle (its inner corner raised a touch: up to mischief); the grin, the part of the `lo` ellipse
+// below the `up` one, so its corners turn up, meeting at CORNER.
+const EYE = { cx: 0.66, top: 0.74, bot: 0.14, w: 0.36, tilt: -0.12 };
+const GRIN = { lo: { cy: -0.36, rx: 1.2, ry: 0.64 }, up: { cy: -0.08, rx: 1.34, ry: 0.56 } };
+const CORNER = { u: 1.2, v: -0.36 };
+
 /** the carved face in the front plane (u across, v up from the centre): triangle eyes and nose, a toothy grin */
 function face(u: number, v: number): number {
   const au = Math.abs(u);
-  let d = tri2(au, v, 0.66, 0.74, 0.14, 0.36, -0.12); // the eyes, their inner corners raised a touch: up to mischief
+  let d = tri2(au, v, EYE.cx, EYE.top, EYE.bot, EYE.w, EYE.tilt);
   d = Math.min(d, tri2(u, v, 0, 0.1, -0.2, 0.17));
-  // the grin: the part of one ellipse below another, so its corners turn up
-  let m = Math.max(ell2(u, v, 0, -0.36, 1.2, 0.64), -ell2(u, v, 0, -0.08, 1.34, 0.56));
+  let m = Math.max(ell2(u, v, 0, GRIN.lo.cy, GRIN.lo.rx, GRIN.lo.ry), -ell2(u, v, 0, GRIN.up.cy, GRIN.up.rx, GRIN.up.ry));
   m = Math.max(m, -box2(au, v, 0.32, -0.7, 0.11, 0.12)); // two teeth hang from the top lip...
   m = Math.max(m, -box2(u, v, 0, -0.93, 0.12, 0.13)); // ...one stands up from the bottom
   return Math.min(d, m);
@@ -231,22 +237,105 @@ function pumpkinColor(x: number, y: number, z: number, c: THREE.Color): void {
 }
 
 /**
+ * The carved face moves (the wearer's face, through four uniforms a wearer's material holds: `faceUniforms`). The
+ * shell is one marching-cubes mesh with real holes, so the carving cannot be re-cut per frame; instead the vertex shader
+ * slides the rind round each hole in the face's plane, and the hole changes shape with it, its glowing cut walls
+ * included. A blink squashes an eye's carving to a glowing line (the rind above slides down over it), a squint lifts its
+ * bottom, wide eyes or raised brows open it, a scowl closes its inner corner more than its outer (a slant down to the
+ * nose), a frown the outer, and raised brows lift it. The grin's corners lift with a smile and drop with a frown, a
+ * pucker draws it narrow, and an open mouth drops everything below the line the grin parts along (between the teeth:
+ * the bottom tooth goes with it, the top two stay) — the chin drops out of the pumpkin's outline, a cartoon jaw. The
+ * sliding moves keep each vertex on its own ellipsoid shell, so the rind does not dent; the jaw's drop is meant to
+ * stick out. Shadows are cast by the unmoved shell (the depth pass has no warp), which nobody will notice.
+ *
+ * uEyeL/R: (close 0..1, negative opens; where it closes to, 0 the base .. 1 the apex; slant + inner / - outer; lift)
+ * uMouth: (open, left corner up, right corner up, narrow); uMouth2.x: sideways
+ */
+const FACE_GLSL = /* glsl */ `
+  uniform vec4 uEyeL; uniform vec4 uEyeR; uniform vec4 uMouth; uniform vec4 uMouth2;
+  const vec3 PC = vec3(${PC.map((n) => n.toFixed(3)).join(', ')});
+  const float PR = ${PR.toFixed(3)}, PH = ${PH.toFixed(3)};
+  // the left eye (q mirrored for the right): its displacement in the face plane
+  vec2 eyeWarp(vec2 q, vec4 e) {
+    const float CS = ${Math.cos(EYE.tilt).toFixed(5)}, SN = ${Math.sin(EYE.tilt).toFixed(5)};
+    const float YB = ${((EYE.bot - EYE.top) / 2).toFixed(3)}, YT = ${((EYE.top - EYE.bot) / 2).toFixed(3)}, W = ${EYE.w.toFixed(3)}, M = 0.26;
+    vec2 d = q - vec2(${EYE.cx.toFixed(3)}, ${((EYE.top + EYE.bot) / 2).toFixed(3)});
+    vec2 r = vec2(d.x * CS - d.y * SN, d.x * SN + d.y * CS); // the eye's own frame (tri2's)
+    float inner = clamp(-r.x / W, -1.0, 1.0) * 0.5 + 0.5;
+    float c = min(1.0, e.x + max(e.z, 0.0) * inner + max(-e.z, 0.0) * (1.0 - inner));
+    float ys = mix(YB, YT, e.y), a = 1.0 - c, y = r.y, y2 = y;
+    // squashed (or stretched) toward ys inside the carving, the rind a margin round it taking up the difference
+    if (y >= YB && y <= YT) y2 = ys + (y - ys) * a;
+    else if (y > YT && y < YT + M) y2 = mix(ys + (YT - ys) * a, YT + M, (y - YT) / M);
+    else if (y < YB && y > YB - M) y2 = mix(YB - M, ys + (YB - ys) * a, (y - YB + M) / M);
+    float lift = e.w * (1.0 - smoothstep(YT, YT + M, y)) * smoothstep(YB - M, YB, y);
+    float dy = (y2 - y + lift) * (1.0 - smoothstep(W + 0.04, W + 0.24, abs(r.x)));
+    return vec2(dy * SN, dy * CS);
+  }
+  float lipLo(float u) { float k = u / ${GRIN.lo.rx.toFixed(3)}; return ${GRIN.lo.cy.toFixed(3)} - ${GRIN.lo.ry.toFixed(3)} * sqrt(max(0.0, 1.0 - k * k)); }
+  float lipUp(float u) { float k = u / ${GRIN.up.rx.toFixed(3)}; return ${GRIN.up.cy.toFixed(3)} - ${GRIN.up.ry.toFixed(3)} * sqrt(max(0.0, 1.0 - k * k)); }
+  // where the mouth parts: inside the grin, above the bottom tooth and below the top two
+  float parting(float au) {
+    float c = min(au, ${CORNER.u.toFixed(3)});
+    float teeth = mix(-0.72, -0.885, smoothstep(0.155, 0.185, c));
+    return mix(teeth, 0.5 * (lipLo(c) + lipUp(c)), smoothstep(0.45, 0.62, c));
+  }
+  vec3 faceWarp(vec3 pos) {
+    vec3 p = pos - PC;
+    vec2 q = p.xy;
+    float au = abs(q.x);
+    vec2 wl = eyeWarp(q, uEyeL), wr = eyeWarp(vec2(-q.x, q.y), uEyeR);
+    vec2 s = wl + vec2(-wr.x, wr.y);
+    vec2 cd = vec2((au - ${CORNER.u.toFixed(3)}) / 0.42, (q.y - ${CORNER.v.toFixed(3)}) / 0.36);
+    s.y += 0.16 * (q.x > 0.0 ? uMouth.y : uMouth.z) * exp(-dot(cd, cd));
+    s.x -= uMouth.w * 0.26 * q.x * (1.0 - smoothstep(1.0, 1.75, au)) * (1.0 - smoothstep(0.45, 0.8, abs(q.y + 0.66)));
+    // the face is on the front: the back of the shell, at the same u and v, stays put
+    float front = smoothstep(0.3, 0.9, p.z);
+    s *= front;
+    if (front > 0.0) {
+      // slid in the plane, kept on its own shell (the ellipsoid through it, scaled): no dents
+      float k2 = (p.x * p.x + p.z * p.z) / (PR * PR) + p.y * p.y / (PH * PH);
+      vec2 q2 = q + s;
+      p.z = sqrt(max((k2 - q2.y * q2.y / (PH * PH)) * PR * PR - q2.x * q2.x, 0.0));
+    }
+    float w = mix(0.08, 0.4, smoothstep(1.05, 1.4, au)), cut = parting(au);
+    float jaw = (1.0 - smoothstep(cut - 0.5 * w, cut + 0.5 * w, q.y)) * (1.0 - smoothstep(0.85, 1.75, au)) * smoothstep(-0.2, 0.9, p.z);
+    return PC + vec3(q + s + vec2(0.14 * uMouth2.x, -0.3 * uMouth.x) * jaw, p.z);
+  }`;
+
+/** one wearer's carving: what the shell's shader reads (FACE_GLSL) */
+interface FaceUniforms { uEyeL: { value: THREE.Vector4 }; uEyeR: { value: THREE.Vector4 }; uMouth: { value: THREE.Vector4 }; uMouth2: { value: THREE.Vector4 } }
+const FACE_U = new WeakMap<THREE.Material, FaceUniforms>();
+/** a material's own carving uniforms: the stage copies the shell's material per wearer, and each copy compiles with its
+ *  own (onBeforeCompile runs once per material, with the material as `this`), so each pumpkin pulls its own face */
+function faceUniforms(m: THREE.Material): FaceUniforms {
+  let u = FACE_U.get(m);
+  if (!u) {
+    u = { uEyeL: { value: new THREE.Vector4() }, uEyeR: { value: new THREE.Vector4() }, uMouth: { value: new THREE.Vector4() }, uMouth2: { value: new THREE.Vector4() } };
+    FACE_U.set(m, u);
+  }
+  return u;
+}
+
+/**
  * The shell's material: rind lit by the room, with the emissive switched on per vertex by `aGlow` (0 on the rind, up
  * to 1 down the cut walls and over the inside) in the vertex colour's hue, and the lit part switched off there, so a
- * flicker of emissiveIntensity lights the carving from within.
+ * flicker of emissiveIntensity lights the carving from within. Its vertices move with the wearer's face (FACE_GLSL).
  */
 function shellMaterial(d: Dresser): THREE.MeshStandardMaterial {
   const m = d.std({ color: 0xffffff, vertexColors: true, roughness: 0.5, metalness: 0, emissive: 0xffffff, emissiveIntensity: 1.0 });
-  m.onBeforeCompile = (sh) => {
+  // a function, not an arrow: three calls it as the material's method, and `this` is the wearer's copy
+  m.onBeforeCompile = function (this: THREE.Material, sh) {
+    Object.assign(sh.uniforms, faceUniforms(this));
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\n attribute float aGlow; varying float vGlow;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n vGlow = aGlow;');
+      .replace('#include <common>', '#include <common>\n attribute float aGlow; varying float vGlow;\n' + FACE_GLSL)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n vGlow = aGlow; transformed = faceWarp(transformed);');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n varying float vGlow;')
       .replace('#include <color_fragment>', '#include <color_fragment>\n vec3 glowHue = diffuseColor.rgb; diffuseColor.rgb *= 1.0 - 0.92 * vGlow;')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance *= vGlow * glowHue;');
   };
-  m.customProgramCacheKey = () => 'jack-shell-v2';
+  m.customProgramCacheKey = () => 'jack-shell-v3';
   return m;
 }
 
@@ -362,6 +451,18 @@ function dress(d: Dresser): void {
   flame.add(fl);
   d.at(flame, 'head', 0, floor, PC[2] - 0.15);
 
+  // a hot spot in each eye, where the wearer looks: a soft glow in the hollow just behind the carving, so only the hole
+  // shows it (the shell in front hides the rest) and a blink's rind slides over it. Each its own material, to dim alone.
+  const spotGeo = new THREE.SphereGeometry(0.1, 16, 10);
+  for (const side of ['L', 'R'] as const) {
+    const sp = new THREE.Mesh(spotGeo, glowMaterial(SPOT_HOT, 2.5));
+    sp.name = `jack-spot${side}`;
+    sp.scale.set(2.3, 2.1, 0.8);
+    sp.renderOrder = 2;
+    d.at(sp, 'head', (side === 'L' ? 1 : -1) * SPOT[0], SPOT[1], SPOT[2]);
+    sp.castShadow = false; sp.receiveShadow = false;
+  }
+
   const top = PC[1] + PH - 0.22;
   const stemGeo = new THREE.CylinderGeometry(0.16, 0.26, 1.5, 7, 8).translate(0, 0.75, 0);
   { // bend it over (the way the hat leans, so it leaves through the crown's hole) and flare its foot
@@ -476,7 +577,37 @@ const capture: Capture = (sg, x, y, z) => {
   return true;
 };
 
-const LIT = new WeakMap<THREE.Object3D, { shell: THREE.MeshStandardMaterial[]; core: THREE.MeshStandardMaterial[]; flame: THREE.Object3D | null }>();
+/** an eye's hot spot at rest: inside the hollow behind the left eye's middle, a little low (the candle is below) */
+const SPOT: V3 = [EYE.cx, PC[1] + (EYE.top + EYE.bot) / 2 - 0.04, PC[2] + 1.2];
+const SPOT_HOT = 0xffe7a0;
+/** how far a hot spot wanders at a full look (model units; the carving is ~0.7 wide and 0.6 tall) */
+const SPOT_X = 0.2, SPOT_Y = 0.14;
+const HEAD_A = JACK_SEGMENTS.find((sg) => sg.name === 'head')!.a;
+const HOT_C = new THREE.Color(SPOT_HOT);
+const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+interface Lit {
+  shell: THREE.MeshStandardMaterial[]; carve: FaceUniforms[]; core: THREE.MeshStandardMaterial[]; flame: THREE.Object3D | null;
+  spots: { o: THREE.Object3D; m: THREE.MeshBasicMaterial; sx: number }[];
+}
+const LIT = new WeakMap<THREE.Object3D, Lit>();
+
+/** one eye's carving from the wearer's face (`f` null: an idle blink `idle`), into its uniform (FACE_GLSL's uEyeL/R) */
+function eyeCarve(out: THREE.Vector4, f: FaceState | null, left: boolean, idle: number): number {
+  const blink = clamp01(f ? (left ? f.blinkL : f.blinkR) : idle);
+  if (!f) { out.set(blink, 0.1, 0, 0); return blink; }
+  const outer = left ? f.browOuterL : f.browOuterR;
+  const smile = Math.max(left ? f.smileL : f.smileR, f.smile);
+  // a squint (and a smile's cheeks) lifts the bottom; wide eyes and raised brows open it
+  const lower = clamp01((left ? f.squintL : f.squintR) + 0.4 * smile);
+  const wide = clamp01(Math.max(left ? f.wideL : f.wideR, 0.7 * f.browUp, 0.7 * outer));
+  const down = clamp01(Math.max(left ? f.browDownL : f.browDownR, 0.6 * f.sneer));
+  const close = 1 - (1 - blink) * (1 - 0.55 * lower) * (1 + 0.35 * wide);
+  // where it closes to: a blink brings the top down to the base, a squint meets nearer the top
+  const to = 0.1 + 0.55 * lower * (1 - blink);
+  out.set(close, to, 0.6 * down - 0.4 * clamp01(f.frown), 0.1 * Math.max(f.browUp, outer) - 0.05 * down);
+  return blink;
+}
 
 export const PUMPKIN: CharacterDef = {
   id: 'pumpkin', name: 'Jack', blurb: 'A scarecrow with a candle-lit pumpkin head',
@@ -503,17 +634,48 @@ export const PUMPKIN: CharacterDef = {
         if (o.name === 'jack-pumpkin') shell.push((o as THREE.Mesh).material as THREE.MeshStandardMaterial);
         if (o.name === 'jack-flamecore') core.push((o as THREE.Mesh).material as THREE.MeshStandardMaterial);
       });
-      e = { shell, core, flame: root.getObjectByName('jack-flame') ?? null };
+      const spots: Lit['spots'] = [];
+      for (const side of ['L', 'R'] as const) {
+        const o = root.getObjectByName(`jack-spot${side}`) as THREE.Mesh | undefined;
+        if (o) spots.push({ o, m: o.material as THREE.MeshBasicMaterial, sx: side === 'L' ? 1 : -1 });
+      }
+      e = { shell, carve: shell.map(faceUniforms), core, flame: root.getObjectByName('jack-flame') ?? null, spots };
       LIT.set(root, e);
     }
+    const f = face ?? null;
     // a candle's flicker: a slow breath, a quicker waver and a sharp gutter now and then
-    const f = 0.5 * Math.sin(t * 1.7) + 0.3 * Math.sin(t * 7.9 + 1.3) + 0.22 * Math.sin(t * 13.3 + 0.4) + 0.15 * Math.sin(t * 23.7 + 2.2);
+    const fl = 0.5 * Math.sin(t * 1.7) + 0.3 * Math.sin(t * 7.9 + 1.3) + 0.22 * Math.sin(t * 13.3 + 0.4) + 0.15 * Math.sin(t * 23.7 + 2.2);
     const gutter = Math.max(0, Math.sin(t * 0.83 + 0.5) - 0.92) * 6;
-    // the shell's glow peaks near 1 so the tone mapper's shoulder does not flatten the flicker away
-    // an open mouth fans the flame: the whole lantern flares
-    const k = Math.max(0.35, 1 + 0.36 * f - gutter) * (1 + 1.3 * (face?.jaw ?? 0));
+    // blowing (puffed cheeks, an "oo") stretches the flame and sets it dancing
+    const blow = f ? clamp01(Math.max(f.puff, 0.8 * f.funnel, 0.5 * f.pucker)) : 0;
+    // the shell's glow peaks near 1 so the tone mapper's shoulder does not flatten the flicker away; an open mouth fans
+    // the flame and the whole lantern flares, and blowing on it makes it surge
+    const k = Math.max(0.35, 1 + 0.36 * fl - gutter) * (1 + 1.3 * (f?.jaw ?? 0)) * (1 + 0.35 * blow);
     for (const m of e.shell) m.emissiveIntensity = k;
     for (const m of e.core) m.emissiveIntensity = 2.4 * k;
-    if (e.flame) { e.flame.scale.set(1 - 0.08 * f, k * (1 + 0.12 * Math.sin(t * 17.0)), 1 - 0.08 * f); e.flame.rotation.z = 0.12 * Math.sin(t * 5.3); }
+    if (e.flame) {
+      const dance = Math.sin(t * 19.0) + 0.6 * Math.sin(t * 31.0 + 1.1);
+      e.flame.scale.set(1 - 0.08 * fl - 0.15 * blow, k * (1 + 0.12 * Math.sin(t * 17.0)) * (1 + 0.6 * blow), 1 - 0.08 * fl - 0.15 * blow);
+      e.flame.rotation.set(-0.35 * blow + 0.08 * blow * dance, 0, 0.12 * Math.sin(t * 5.3) + 0.15 * blow * dance);
+    }
+    // the carving: each eye from its own side of the face (with no face read, a blink now and then), the grin's corners
+    // from each side's smile less the frown, a pucker or an "oo" narrowing it, the jaw opening and shifting it
+    const idle = (t + 0.4) % 5.7 < 0.15 ? 1 : 0;
+    let blinkL = 0, blinkR = 0;
+    for (const u of e.carve) {
+      blinkL = eyeCarve(u.uEyeL.value, f, true, idle);
+      blinkR = eyeCarve(u.uEyeR.value, f, false, idle);
+      if (f) {
+        u.uMouth.value.set(clamp01(f.jaw + 0.35 * f.funnel), Math.max(f.smileL, f.smile) - f.frown, Math.max(f.smileR, f.smile) - f.frown, clamp01(Math.max(f.pucker, 0.7 * f.funnel)));
+        u.uMouth2.value.set(f.jawSide, 0, 0, 0);
+      } else { u.uMouth.value.set(0, 0, 0, 0); u.uMouth2.value.set(0, 0, 0, 0); }
+    }
+    // the hot spots: where the wearer looks (with no face read, a slow look round), dimmed by a blink, with the candle
+    const lookX = f ? f.lookX : 0.45 * Math.sin(t * 0.29 + 0.6 * Math.sin(t * 0.11));
+    const lookY = f ? f.lookY : 0.2 * Math.sin(t * 0.21 + 2.0);
+    for (const sp of e.spots) {
+      sp.o.position.set(sp.sx * SPOT[0] - HEAD_A[0] + SPOT_X * lookX, SPOT[1] - HEAD_A[1] + SPOT_Y * lookY, SPOT[2] - HEAD_A[2]);
+      sp.m.color.copy(HOT_C).multiplyScalar(0.55 * Math.min(1.6, k) * (1 - (sp.sx > 0 ? blinkL : blinkR)));
+    }
   },
 };

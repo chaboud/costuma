@@ -20,10 +20,11 @@
 // Frame (build.ts): metres for a ~19-unit figure on y = 0, +z its snout, +x its own left.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { CharacterDef, Capture, Dresser } from './build';
+import { NEUTRAL_FACE, type CharacterDef, type Capture, type Dresser, type FaceState } from './build';
 import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
 import { createKaijuMaterial } from './material';
 import { isoGeometry } from './skeleton';
+import { eyelids, look, setLids } from './faceparts';
 
 type V3 = [number, number, number];
 
@@ -33,6 +34,9 @@ const MOUTH_Y = 15.55;
 const HINGE: V3 = [0, 15.6, 1.2];
 /** an amber eye, the left one (the right is mirrored) */
 const EYE: V3 = [1.26, 16.95, 3.8];
+/** the left brow ridge's axis, temple to snout (the skull's capsule and its bone), and the upper lip's bone */
+const BROW_A: V3 = [1.4, 17.55, 2.0], BROW_B: V3 = [0.95, 17.2, 4.35];
+const LIP_A: V3 = [1.15, 15.85, 2.7], LIP_B: V3 = [0.45, 15.85, 6.3];
 /** the tail's joints, from the rump: down to the ground and out to its left */
 const TAIL: V3[] = [[0, 9.0, -1.8], [0.3, 7.0, -4.6], [1.3, 4.6, -7.2], [3.0, 2.5, -9.4], [5.2, 1.1, -11.2]];
 const TAIL_R = [2.5, 1.95, 1.45, 0.95, 0.3];
@@ -68,7 +72,35 @@ export const KAIJU_SEGMENTS: Seg[] = [
   { name: 'forearmL', a: ELBOW, b: WRIST, parent: 'armL' },
   { name: 'armR', a: mx(SHOULDER), b: mx(ELBOW), parent: 'spine2' },
   { name: 'forearmR', a: mx(ELBOW), b: mx(WRIST), parent: 'armR' },
+  ...FACE_SEGMENTS(),
 ];
+
+/**
+ * The face's own bones, children of the head (the rig never turns them; `tick` does): a brow ridge and an upper lip per
+ * side that move, and still anchors round them that move with the head. The skin's weights are the two nearest bones'
+ * (build.ts, falling off with distance), and the head's own segment runs down the skull's middle, far from the face's
+ * surface: alone against it a brow took the whole side of the skull. The anchors sit just under the surface round each
+ * moving bone, so a brow's or a lip's hold on the skin fades out within a scale or two of it.
+ */
+function FACE_SEGMENTS(): Seg[] {
+  const out: Seg[] = [{ name: 'bridge', a: [0, 17.2, 1.0], b: [0, 16.95, 5.6], parent: 'head', reach: 1.3 }];
+  for (const [S, k] of [['L', 1], ['R', -1]] as const) {
+    const m = (p: V3): V3 => [p[0] * k, p[1], p[2]];
+    out.push(
+      // the brow ridge over the eye, pivoting at its back end (the temple)
+      { name: 'brow' + S, a: m(BROW_A), b: m(BROW_B), parent: 'head', reach: 1.0 },
+      // the upper lip along the mouth line, inside the lip's edge
+      { name: 'lip' + S, a: m(LIP_A), b: m(LIP_B), parent: 'head', reach: 1.0 },
+      { name: 'crown' + S, a: m([0.8, 17.8, 0.6]), b: m([0.45, 17.85, 2.6]), parent: 'head', reach: 1.3 },
+      { name: 'cheek' + S, a: m([1.6, 16.15, 1.2]), b: m([1.3, 16.3, 3.1]), parent: 'head', reach: 1.3 },
+      { name: 'snout' + S, a: m([0.8, 16.45, 3.2]), b: m([0.35, 16.5, 6.0]), parent: 'head', reach: 1.3 },
+    );
+  }
+  return out;
+}
+/** the face bones that move, and the anchors that only hold the skin still round them */
+const FACE_MOVERS = ['browL', 'browR', 'lipL', 'lipR'];
+const FACE_ANCHORS = ['bridge', 'crownL', 'crownR', 'cheekL', 'cheekR', 'snoutL', 'snoutR'];
 
 const smax = (a: number, b: number, k: number) => -smin(-a, -b, k);
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -84,7 +116,7 @@ function skullSDF(x: number, y: number, z: number): number {
   h = smin(h, sdCapsule(x, y, z, 0, 15.8, 1.5, 0, 15.75, 6.0, 1.5, 1.02), 0.5); // the upper jaw, wide at the lip
   h = smin(h, sdCapsule(x, y, z, 0, 16.45, 2.0, 0, 16.4, 5.7, 1.2, 0.9), 0.6); // the snout's bridge
   // the brow: from the back of the skull's side down and in over each eye, a scowl
-  h = smin(h, sdCapsule(ax, y, z, 1.4, 17.55, 2.0, 0.95, 17.2, 4.35, 0.56, 0.42), 0.35);
+  h = smin(h, sdCapsule(ax, y, z, ...BROW_A, ...BROW_B, 0.56, 0.42), 0.35);
   h = smin(h, sdEllipsoid(ax, y, z, 1.55, 16.2, 1.6, 0.82, 0.95, 1.35), 0.4); // the cheeks
   h = smin(h, sdSphere(ax, y, z, 0.5, 16.95, 5.75, 0.28), 0.2); // the nostrils' rims
   h = smax(h, -sdSphere(ax, y, z, EYE[0] + 0.08, EYE[1] - 0.02, EYE[2] + 0.08, 0.38), 0.1); // the eye sockets
@@ -255,16 +287,20 @@ const capture: Capture = (sg, x, y, z) => {
     return capArm;
   }
   // the skull is the head's whole (the jaw's hinge and cheeks sit nearer the neck's axis than the head's), and the
-  // neck never takes it; a thin seam where they meet
-  if (n === 'head' || n === 'neck') {
+  // neck never takes it; a thin seam where they meet. The face's bones take only the skull too, each its own side of
+  // it (and a hair over the middle, so the middle blends the two)
+  const face = FACE_BONE.has(n);
+  if (n === 'head' || n === 'neck' || face) {
+    if (face && sg.a[0]! !== 0 && x * Math.sign(sg.a[0]!) < -0.15) return false;
     if (x !== skAt[0] || y !== skAt[1] || z !== skAt[2]) {
       skAt[0] = x; skAt[1] = y; skAt[2] = z;
       skD = y > 13.4 && z > -1.6 ? skullSDF(x, y, z) - neckSDF(x, y, z) : 9;
     }
-    return n === 'head' ? skD < 0.25 : skD > -0.25;
+    return n === 'neck' ? skD > -0.25 : skD < 0.25;
   }
   return true;
 };
+const FACE_BONE = new Set([...FACE_MOVERS, ...FACE_ANCHORS]);
 
 // ---- the plates ----
 
@@ -461,25 +497,137 @@ function dress(d: Dresser): void {
   coreM.scale.set(0.85, 0.7, 0.6);
   d.at(coreM, 'head', 0, 15.0, 3.2);
 
-  // ---- the eyes: amber, lit from within, a slit of a pupil looking out and forward ----
+  // ---- the eyes: amber, lit from within, a slit of a pupil; each turns in its socket to look, under scaly lids ----
   const eyeMat = d.std({ color: 0xf0a018, emissive: 0xff7a00, emissiveIntensity: 1.0, roughness: 0.18 });
   const pupilMat = d.std({ color: 0x0a0806, roughness: 0.3 });
-  for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), eyeMat);
+  // the lids are the skull's skin: its scales material, painted its colour (a little darker, they sit in the brow's shade)
+  const lidMat = createKaijuMaterial();
+  const lidCol = new THREE.Color(C.skin).multiplyScalar(0.9);
+  for (const sx of [1, -1]) {
+    const S = sx > 0 ? 'L' : 'R';
+    const sock = new THREE.Group();
+    sock.name = 'kaiju-socket' + S;
+    sock.quaternion.copy(socketTurn(sx));
+    // the eyeball, its pupil on its +z (faceparts.look turns it)
+    const ball = new THREE.Group();
+    ball.name = 'kaiju-eye' + S;
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), pupilMat);
-    const look = new THREE.Vector3(sx * 0.6, 0.05, 0.8).normalize();
-    pupil.position.copy(look).multiplyScalar(0.24);
-    pupil.scale.set(0.35, 1.3, 0.4);
-    pupil.lookAt(look.clone().multiplyScalar(2));
-    eye.add(pupil);
-    d.at(eye, 'head', sx * EYE[0], EYE[1], EYE[2]);
+    pupil.name = 'kaiju-pupil' + S;
+    pupil.position.z = 0.24;
+    pupil.scale.set(PUPIL_W, 1.3, 0.4);
+    ball.add(new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), eyeMat), pupil);
+    // the lids, built LID_K times too big and scaled down: the scales material reads its pattern off the geometry's own
+    // coordinates, so a lid made at its real size wore scales twice as big as the face's round it. Slanted down toward
+    // the snout: the scowl the brow gives it
+    const lids = eyelids('kaiju-lids' + S, 0.3 * LID_K, lidMat, { gap: 0.1, tilt: sx * 0.3 });
+    lids.scale.setScalar(1 / LID_K);
+    for (const o of lids.children) {
+      const g = (o as THREE.Mesh).geometry, n = g.getAttribute('position').count, col = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) lidCol.toArray(col, i * 3);
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    }
+    sock.add(ball, lids);
+    d.at(sock, 'head', sx * EYE[0], EYE[1], EYE[2]);
   }
 }
 
-/** per worn root: the plate, halo and core materials (its own copies), found once, and the charge */
-interface Lit { plates: (THREE.MeshStandardMaterial | null)[]; halos: (THREE.SpriteMaterial | null)[]; core: THREE.MeshStandardMaterial | null; charge: number; t: number }
+/** the socket's turn: +z out of the eye where it looks at rest (out to its side and forward), +x across it, level */
+function socketTurn(sx: number): THREE.Quaternion {
+  const z = new THREE.Vector3(sx * 0.6, 0.05, 0.8).normalize();
+  const x = new THREE.Vector3(0, 1, 0).cross(z).normalize();
+  const y = new THREE.Vector3().crossVectors(z, x);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+/** the lids' scale-up (see dress), and the slit's width (× its sphere's radius) at rest */
+const LID_K = 2.3, PUPIL_W = 0.35;
+
+/** per worn root: the plate, halo and core materials (its own copies), the face's parts, found once, and the charge */
+interface Lit {
+  plates: (THREE.MeshStandardMaterial | null)[]; halos: (THREE.SpriteMaterial | null)[]; core: THREE.MeshStandardMaterial | null; charge: number; t: number;
+  face: FaceParts;
+}
 const LIT = new WeakMap<THREE.Object3D, Lit>();
 const HALO = new THREE.Color(GLOW);
+
+/** one side's moving face: the eyeball, its slit, its two lids (and their open and shut turns), the brow's and lip's bones */
+interface FaceSide {
+  ball: THREE.Object3D | null; pupil: THREE.Object3D | null; up: THREE.Object3D | null; lo: THREE.Object3D | null;
+  upOpen: number; upShut: number; loOpen: number; loShut: number;
+  brow: THREE.Object3D | null; lip: THREE.Object3D | null; browRest: THREE.Vector3; lipRest: THREE.Vector3;
+}
+interface FaceParts { side: [FaceSide, FaceSide] }
+function findFace(root: THREE.Object3D): FaceParts {
+  const side = (): FaceSide => ({ ball: null, pupil: null, up: null, lo: null, upOpen: 0, upShut: 0, loOpen: 0, loShut: 0, brow: null, lip: null, browRest: new THREE.Vector3(), lipRest: new THREE.Vector3() });
+  const f: FaceParts = { side: [side(), side()] };
+  root.traverse((o) => {
+    const m = /^(kaiju-eye|kaiju-pupil|kaiju-lids|brow|lip)([LR])$/.exec(o.name);
+    if (!m) return;
+    const sd = f.side[m[2] === 'L' ? 0 : 1];
+    if (m[1] === 'kaiju-eye') sd.ball = o;
+    else if (m[1] === 'kaiju-pupil') sd.pupil = o;
+    else if (m[1] === 'kaiju-lids') {
+      sd.up = o.children[0] ?? null; sd.lo = o.children[1] ?? null;
+      // the lids' own open and shut turns (faceparts), read off them rather than copied: this face sets each lid alone
+      setLids(o, 0, 0, 0); sd.upOpen = sd.up?.rotation.x ?? 0; sd.loOpen = sd.lo?.rotation.x ?? 0;
+      setLids(o, 1, 0, 0); sd.upShut = sd.up?.rotation.x ?? 0; sd.loShut = sd.lo?.rotation.x ?? 0;
+    } else if ((o as THREE.Bone).isBone && m[1] === 'brow') { sd.brow = o; sd.browRest.copy(o.position); }
+    else if ((o as THREE.Bone).isBone && m[1] === 'lip') { sd.lip = o; sd.lipRest.copy(o.position); }
+  });
+  return f;
+}
+
+const clamp01k = (v: number) => Math.max(0, Math.min(1, v));
+const ramp = (v: number, lo: number, hi: number) => clamp01k((v - lo) / (hi - lo));
+/** how far the upper lids hang over the eyes at rest: a heavy, glowering lid */
+const KLID_REST = 0.2;
+/** the gaze a still face is given (only its look is read): a glance aside now and then */
+const IDLE_LOOK: FaceState = { ...NEUTRAL_FACE };
+
+/**
+ * The face from the wearer's (remapped: MediaPipe's scores rarely reach 1 and some rest above 0; the gains assumed, not
+ * measured), or an idle one with no face read: lids blink, wink, squint and widen; the slits look where the wearer looks,
+ * widening when they stare and narrowing as it charges; the brow ridges drop into a scowl or lift; the upper lip curls
+ * off the teeth in a snarl, and a little with every roar.
+ */
+function faceTick(F: FaceParts, t: number, f: FaceState | null | undefined, charge: number): void {
+  let lookF: FaceState;
+  if (!f) {
+    const n = Math.floor(t / 3.4), g = sstep(0, 0.25, t - n * 3.4);
+    const gx = (k: number) => (k % 3 === 0 ? 0 : (Math.abs(Math.sin(k * 91.7)) * 2 - 1) * 0.8);
+    IDLE_LOOK.lookX = gx(n - 1) + (gx(n) - gx(n - 1)) * g;
+    lookF = IDLE_LOOK;
+  } else lookF = f;
+  // no face: a slow blink every 5.2 s
+  const b0 = t % 5.2, idleBlink = b0 < 0.2 ? Math.sin((b0 / 0.2) * Math.PI) : 0;
+  const up = f ? ramp(f.browUp, 0.1, 0.65) : 0, sneer = f ? ramp(f.sneer, 0.06, 0.5) : 0, jaw = f ? clamp01k(f.jaw) : 0;
+  for (let i = 0; i < 2; i++) {
+    const s = F.side[i]!, sx = i === 0 ? 1 : -1, L = i === 0;
+    const bl = f ? ramp(L ? f.blinkL : f.blinkR, 0.15, 0.65) : idleBlink;
+    const sq = f ? ramp(L ? f.squintL : f.squintR, 0.2, 0.7) : 0, wd = f ? ramp(L ? f.wideL : f.wideR, 0.08, 0.5) : 0;
+    const bd = f ? ramp(L ? f.browDownL : f.browDownR, 0.08, 0.55) : 0, bo = f ? ramp(L ? f.browOuterL : f.browOuterR, 0.08, 0.6) : 0;
+    const sm = f ? ramp(L ? f.smileL : f.smileR, 0.06, 0.7) : 0;
+    // the lids: the upper hangs lower in a scowl and a squint, lifts when wide or the brows go up; the lower rises in a
+    // squint or a grin; a blink shuts both
+    const cu = Math.max(bl, clamp01k(KLID_REST + 0.35 * bd + 0.3 * sq + 0.15 * sneer - 0.6 * wd - 0.3 * up - 0.2 * bo - 0.15 * lookF.lookY));
+    const cl = Math.max(bl, clamp01k(0.45 * sq + 0.3 * sm));
+    if (s.up) { const o = s.upOpen - 0.3 * wd; s.up.rotation.x = o + (s.upShut - o) * cu; }
+    if (s.lo) s.lo.rotation.x = s.loOpen + (s.loShut - s.loOpen) * cl;
+    if (s.ball) look(s.ball, lookF, 0.45);
+    // the slit: wider when staring, thin in a squint and as the plates charge
+    if (s.pupil) s.pupil.scale.x = PUPIL_W * (1 + 0.9 * wd - 0.35 * sq) * (1 - 0.3 * charge);
+    // the brow ridge pivots at the temple: a scowl drops it, the snout end most, and slides it out over the eye; the
+    // inner raise lifts the snout end; the outer raise lifts the temple end
+    if (s.brow) {
+      s.brow.position.set(s.browRest.x + sx * 0.06 * bd, s.browRest.y - 0.14 * bd + 0.12 * up + 0.14 * bo - 0.04 * sneer, s.browRest.z + 0.08 * bd);
+      s.brow.rotation.x = 0.09 * bd - 0.07 * up + 0.04 * bo + 0.04 * sneer;
+    }
+    // the upper lip lifts off the teeth, and out a little
+    if (s.lip) {
+      const k = sneer + 0.25 * jaw * jaw;
+      s.lip.position.set(s.lipRest.x + sx * 0.06 * k, s.lipRest.y + 0.3 * k, s.lipRest.z + 0.03 * k);
+    }
+  }
+}
 
 export const KAIJU: CharacterDef = {
   id: 'kaiju', name: 'Kaiju', blurb: 'A city-stomper: open wide for atomic breath',
@@ -516,7 +664,7 @@ export const KAIJU: CharacterDef = {
         if (h) halos[Number(h[1])] = m as THREE.SpriteMaterial;
         if (m.name === 'kaiju-core') core = m as THREE.MeshStandardMaterial;
       });
-      e = { plates, halos, core, charge: sstep(0.15, 0.7, jaw), t };
+      e = { plates, halos, core, charge: sstep(0.15, 0.7, jaw), t, face: findFace(root) };
       LIT.set(root, e);
     }
     // the charge follows the mouth: up in about a third of a second, down a little slower
@@ -537,5 +685,6 @@ export const KAIJU: CharacterDef = {
       if (hm) hm.color.copy(HALO).multiplyScalar(0.75 * k * f);
     }
     if (e.core) e.core.emissiveIntensity = 2.6 * c * (1 + 0.2 * Math.sin(t * 37));
+    faceTick(e.face, t, face, c);
   },
 };

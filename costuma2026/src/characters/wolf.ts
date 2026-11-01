@@ -3,7 +3,133 @@
 // nose, tall pointed ears, long arms ending in claws, a bushy tail; grey with a pale chest and muzzle and a dark saddle,
 // eyes that glow amber. An upright plan on the rig's bone names (hero.ts's frame and capture rules): the tail bones carry
 // its tail. Metres for a 20 m wolf man, the sdf.ts frame (y up, +z forward). Fur as shells (fur.ts).
+//
+// The face moves with the wearer's (FaceState, build.ts; `howlerTick` below): the lower jaw is a mesh of its own, rigid
+// on the `jaw` bone and furred like the body, so an open mouth is a clean gap with a dark palate, a tongue and fangs
+// (kaiju.ts's jaw, with fur); the eyes glow behind lids that blink, squint and widen, their pupils look where the wearer
+// looks; a brow ridge over each eye, the ears and the upper lips ride small bones (`earL`, `browL`, `lipL`, …) that take
+// a smooth share of the head's skin (`faceZones`), so a scowl, ears pinned back and a snarl that bares the fangs bend
+// the furred surface itself instead of moving stuck-on pieces.
+import * as THREE from 'three';
+import type { Dresser, FaceState, Field, Fur } from './build';
+import { addFur } from './fur';
+import { createKaijuMaterial } from './material';
+import { isoGeometry } from './skeleton';
+import { eyelids, faceLids, look, setLids } from './faceparts';
 import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
+
+// ---- shared with jimothy.ts: face bones that bend the skin, and rigid parts that keep the coat ----
+
+export const sstep = (a: number, b: number, v: number): number => { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+export const smax = (a: number, b: number, k: number): number => -smin(-a, -b, k);
+
+/** a face bone and how much of the head's skin it takes at a model point (0..1, smooth) */
+export interface Zone { bone: string; w: (x: number, y: number, z: number) => number }
+
+/**
+ * Blend face bones into a skinned body's head: at each vertex every zone's bone takes its share of what the head bone
+ * held there (never the neck's or the body's), on the body and on its fur's coarser surface alike, so the coat follows.
+ * The bones are segments with `reach: 0` (the build gives them no skin of their own). Run in `dress`, on the template:
+ * every wearer's copy shares the geometry. At most two zones meet at a vertex (the weights' last two slots).
+ */
+export function faceZones(d: Dresser, zones: Zone[]): void {
+  const body = d.bones.get('pelvis')!.parent as THREE.SkinnedMesh | null;
+  if (!body?.isSkinnedMesh) return;
+  const geos = new Set<THREE.BufferGeometry>([body.geometry]);
+  for (const c of body.children) if ((c as THREE.SkinnedMesh).isSkinnedMesh && c.userData.h !== undefined) geos.add((c as THREE.SkinnedMesh).geometry);
+  const head = d.segs.findIndex((s) => s.name === 'head');
+  const bone = zones.map((z) => d.segs.findIndex((s) => s.name === z.bone));
+  const take = [0, 0], who = [0, 0];
+  for (const geo of geos) {
+    const pos = geo.attributes.position!, si = geo.attributes.skinIndex!, sw = geo.attributes.skinWeight!;
+    for (let i = 0; i < pos.count; i++) {
+      // a vertex only one bone may take holds it twice, at half each (build.ts): one slot of it
+      const i0 = si.getX(i), same = si.getY(i) === i0, i1 = same ? 0 : si.getY(i);
+      let w0 = sw.getX(i) + (same ? sw.getY(i) : 0), w1 = same ? 0 : sw.getY(i);
+      const hs = (i0 === head ? w0 : 0) + (i1 === head ? w1 : 0);
+      if (hs < 1e-4) continue;
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      let n = 0, rem = hs;
+      for (let k = 0; k < zones.length && n < 2; k++) {
+        const w = zones[k]!.w(x, y, z);
+        if (w < 2e-3) continue;
+        take[n] = rem * Math.min(1, w); who[n] = bone[k]!; rem -= take[n]!; n++;
+      }
+      if (!n) continue;
+      const keep = rem / hs;
+      if (i0 === head) w0 *= keep;
+      if (i1 === head) w1 *= keep;
+      si.setXYZW(i, i0, i1, who[0]!, n > 1 ? who[1]! : 0);
+      sw.setXYZW(i, w0, w1, take[0]!, n > 1 ? take[1]! : 0);
+    }
+    si.needsUpdate = true; sw.needsUpdate = true;
+  }
+}
+
+/**
+ * A rigid part with the body's coat: `sdf` (model coordinates) polygonised in `box`, coloured by `color`, skinned wholly
+ * to `bone` on the body's own skeleton (as the fur's layers are), with the body's fur grown on it to `furLen` (0 bare).
+ * A plain mesh on the bone would be bald; this one is the same undercoat and strands as the skin beside it.
+ */
+export function furredPart(d: Dresser, name: string, bone: string, sdf: Field, box: { min: readonly [number, number, number]; max: readonly [number, number, number] },
+  res: number, color: (x: number, y: number, z: number, c: THREE.Color) => void, fur: Fur | undefined, shells: number, furLen: Field): THREE.SkinnedMesh | null {
+  const body = d.bones.get('pelvis')!.parent as THREE.SkinnedMesh | null;
+  if (!body?.isSkinnedMesh) return null;
+  const geo = isoGeometry(sdf, box, res, color, 24000);
+  const n = geo.attributes.position!.count, p = geo.attributes.position!;
+  const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), af = new Float32Array(n);
+  const b = d.segs.findIndex((s) => s.name === bone);
+  for (let i = 0; i < n; i++) { si[i * 4] = b; sw[i * 4] = 1; af[i] = furLen(p.getX(i), p.getY(i), p.getZ(i)); }
+  geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
+  geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  geo.setAttribute('aFur', new THREE.BufferAttribute(af, 1));
+  const m = new THREE.SkinnedMesh(geo, createKaijuMaterial(!!fur));
+  m.name = name;
+  m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false;
+  body.add(m);
+  m.bind(body.skeleton, body.bindMatrix);
+  if (fur && shells > 0) addFur(m, geo, fur, shells);
+  return m;
+}
+
+/**
+ * The mouth's sides: a membrane at each corner from the hinge forward along `edge` (the left side's points, back to
+ * front, model coordinates, on the mouth line), its top row on the head and its bottom on the jaw, the rows between
+ * blended. Shut it has no height; open it fills the wedge between palate and jaw, so the mouth is a cavity from the side
+ * instead of a gap you see the room through. Mirrored for the right.
+ */
+export function mouthSides(d: Dresser, name: string, edge: readonly (readonly [number, number, number])[], color: number): THREE.SkinnedMesh | null {
+  const body = d.bones.get('pelvis')!.parent as THREE.SkinnedMesh | null;
+  if (!body?.isSkinnedMesh) return null;
+  const head = d.segs.findIndex((s) => s.name === 'head'), jaw = d.segs.findIndex((s) => s.name === 'jaw');
+  const R = 4, n = edge.length, pos: number[] = [], nor: number[] = [], si: number[] = [], sw: number[] = [], idx: number[] = [];
+  for (const sx of [1, -1]) {
+    const base = pos.length / 3;
+    for (const p of edge) for (let r = 0; r <= R; r++) {
+      pos.push(sx * p[0], p[1], p[2]); nor.push(sx, 0, 0);
+      si.push(head, jaw, 0, 0); sw.push(1 - r / R, r / R, 0, 0);
+    }
+    for (let i = 0; i + 1 < n; i++) for (let r = 0; r < R; r++) {
+      const a = base + i * (R + 1) + r, b = a + R + 1;
+      idx.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+  geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+  geo.setIndex(idx);
+  const m = new THREE.SkinnedMesh(geo, d.std({ color, roughness: 0.8, side: THREE.DoubleSide }));
+  m.name = name;
+  m.frustumCulled = false; m.receiveShadow = true;
+  body.add(m);
+  m.bind(body.skeleton, body.bindMatrix);
+  return m;
+}
+
+/** a blink now and then while no face is read (0 at t = 0.6, the lab's still) */
+export const idleBlink = (t: number): number => { const u = (t + 1.3) % 4.6; return u < 0.16 ? Math.sin((u / 0.16) * Math.PI) : 0; };
 
 export const WOLF_SEGMENTS: Seg[] = [
   { name: 'pelvis', a: [0, 9.4, -0.6], b: [0, 10.4, 0], parent: null },

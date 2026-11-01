@@ -26,8 +26,19 @@
 // when it swings, the seam slides over the pad instead of tearing off it. It still stretches — the arm's side of the
 // seam turns and the body's doesn't, and two-bone blending by distance to the bones' axes cannot grade it, the spine's
 // axis being three metres off — so the arm leaves the shoulder thin, where that stretch is paid by its girth.
+//
+// The face follows the wearer's (FaceState, build.ts; `tick` below). The lower jaw is its own mesh, rigid on the `jaw`
+// bone and furred like the rest (wolf.ts furredPart): the head below the mouth line, ahead of the hinge, is cut away and
+// handed to it, so a closed mouth is the old face with a fine line under the whisker pads, and an open one a clean gap
+// with a dark palate, a pink tongue and small fangs. Black bead eyes with a glint that shifts as the wearer looks, under
+// lids a shade lighter than the mask so a blink reads; the pale brows, the ears and the cheek ruffs ride small bones that
+// take a smooth share of the head's skin (wolf.ts faceZones), so brows lift and knit, ears perk and flatten, cheeks
+// bunch up in a smile and puff, all in the fur itself; whiskers twitch.
 import * as THREE from 'three';
-import type { CharacterDef, Capture } from './build';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import type { CharacterDef, Capture, Dresser, FaceState } from './build';
+import { eyelids, faceLids, look, setLids } from './faceparts';
+import { faceZones, furredPart, idleBlink, mouthSides, smax, sstep, type Zone } from './wolf';
 import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
 
 type V3 = [number, number, number];
@@ -45,6 +56,16 @@ const TAIL: V3[] = [[0, 6.6, -2.6], [0.5, 4.6, -4.4], [1.6, 2.4, -5.3], [3.0, 1.
 const TAIL_R = [1.15, 1.45, 1.4, 1.2, 0.75];
 /** the skull's centre: everything on the head is placed from it */
 const SK: V3 = [0, 14.4, 0.6];
+// The mouth, in head coordinates (from SK): a line through the jaw's hinge, under the cheeks, rising a little to under
+// the nose. Below it, ahead of the hinge and within MOUTH_W of the middle, the head is the lower jaw's.
+const HINGE_Y = -1.25, HINGE_Z = 0.9, MOUTH_SLOPE = 0.08, MOUTH_W = 0.74;
+/** height over the mouth line (head coordinates) */
+const overMouth = (hy: number, hz: number) => hy - HINGE_Y - MOUTH_SLOPE * (hz - HINGE_Z);
+/** the jaw's share of the head, as a distance (negative inside) */
+const jawRegion = (ax: number, hy: number, hz: number) => Math.max(overMouth(hy, hz), HINGE_Z - hz, ax - MOUTH_W);
+// the face's bones, model coordinates (the left; the right mirrored): an ear's pivot at its root, a brow's at the middle
+// of the pale arc over the eye, a cheek's at the middle of its ruff
+const EAR: V3 = [1.44, SK[1] + 1.5, SK[2] - 0.66], BROW: V3 = [1.1, SK[1] + 1.1, SK[2] + 1.5], CHEEK: V3 = [1.8, SK[1] - 0.66, SK[2] + 0.25];
 
 export const JIMOTHY_SEGMENTS: Seg[] = [
   { name: 'pelvis', a: [0, 6.0, 0], b: [0, 7.6, 0], parent: null },
@@ -52,7 +73,8 @@ export const JIMOTHY_SEGMENTS: Seg[] = [
   { name: 'spine2', a: [0, 9.4, 0.1], b: [0, 11.4, 0.1], parent: 'spine1' },
   { name: 'neck', a: [0, 11.4, 0.1], b: [0, SK[1] - 1.6, SK[2] - 0.25], parent: 'spine2' },
   { name: 'head', a: [0, SK[1] - 1.6, SK[2] - 0.25], b: [0, SK[1] + 1.6, SK[2] + 0.1], parent: 'neck' },
-  { name: 'jaw', a: [0, SK[1] - 1.1, SK[2] + 1.1], b: [0, SK[1] - 1.2, SK[2] + 2.9], parent: 'head', reach: 0 },
+  // the jaw's mesh is rigid (no skin): `a` its hinge, `b` the middle of the mouth's opening (where the breath leaves)
+  { name: 'jaw', a: [0, SK[1] + HINGE_Y, SK[2] + HINGE_Z], b: [0, SK[1] + HINGE_Y + MOUTH_SLOPE * 2.1 - 0.15, SK[2] + 3.0], parent: 'head', reach: 0 },
   { name: 'tail1', a: TAIL[0]!, b: TAIL[1]!, parent: 'pelvis' },
   { name: 'tail2', a: TAIL[1]!, b: TAIL[2]!, parent: 'tail1' },
   { name: 'tail3', a: TAIL[2]!, b: TAIL[3]!, parent: 'tail2' },
@@ -67,6 +89,13 @@ export const JIMOTHY_SEGMENTS: Seg[] = [
   { name: 'forearmL', a: ELBOW, b: WRIST, parent: 'armL' },
   { name: 'armR', a: mx(SHOULDER), b: mx(ELBOW), parent: 'spine2' },
   { name: 'forearmR', a: mx(ELBOW), b: mx(WRIST), parent: 'armR' },
+  // the face's bones: no skin from the build (reach 0); `dress` gives each a share of the head's (faceZones)
+  { name: 'earL', a: EAR, b: [EAR[0], EAR[1] + 1.5, EAR[2]], parent: 'head', reach: 0 },
+  { name: 'earR', a: mx(EAR), b: [-EAR[0], EAR[1] + 1.5, EAR[2]], parent: 'head', reach: 0 },
+  { name: 'browL', a: BROW, b: [BROW[0] + 0.8, BROW[1] - 0.15, BROW[2] - 0.4], parent: 'head', reach: 0 },
+  { name: 'browR', a: mx(BROW), b: [-BROW[0] - 0.8, BROW[1] - 0.15, BROW[2] - 0.4], parent: 'head', reach: 0 },
+  { name: 'cheekL', a: CHEEK, b: [CHEEK[0] + 1.0, CHEEK[1], CHEEK[2]], parent: 'head', reach: 0 },
+  { name: 'cheekR', a: mx(CHEEK), b: [-CHEEK[0] - 1.0, CHEEK[1], CHEEK[2]], parent: 'head', reach: 0 },
 ];
 function mx(p: V3): V3 { return [-p[0], p[1], p[2]]; }
 
@@ -94,7 +123,7 @@ const TOES: [V3, V3][] = [-0.5, -0.17, 0.17, 0.5].map((s) => [[LX + s * 1.1, 0.3
 const capV = (x: number, y: number, z: number, a: V3, b: V3, ra: number, rb: number) => sdCapsule(x, y, z, a[0], a[1], a[2], b[0], b[1], b[2], ra, rb);
 
 /** each part's distance, for the surface and for who may skin it */
-interface Parts { body: number; head: number; arm: number; leg: number; tail: number; min: number }
+interface Parts { body: number; head: number; arm: number; leg: number; tail: number; min: number; raw: number; cut: number }
 /**
  * A part further than FAR from a point is given its bound's distance instead of its own: the field clamps past 1.25
  * (build.ts), and nothing reads a part that far for skinning, so only the build time sees the difference (with the
@@ -102,7 +131,33 @@ interface Parts { body: number; head: number; arm: number; leg: number; tail: nu
  */
 const FAR = 2.5;
 let lx = NaN, ly = NaN, lz = NaN;
-const P: Parts = { body: 0, head: 0, arm: 0, leg: 0, tail: 0, min: 0 };
+const P: Parts = { body: 0, head: 0, arm: 0, leg: 0, tail: 0, min: 0, raw: 0, cut: 0 };
+
+/**
+ * The whole head before the mouth is cut (head coordinates hy, hz; model x): broad cheeks, a pointed muzzle with whisker
+ * pads under it, rounded upright ears, sockets for the eyes. The lower jaw is not in it: the jaw's mesh adds its own chin.
+ */
+function headRaw(x: number, ax: number, hy: number, hz: number): number {
+  let h = sdEllipsoid(x, hy, hz, 0, 0, 0, 2.38, 2.05, 2.21);
+  h = smin(h, sdEllipsoid(ax, hy, hz, 1.8, -0.66, 0.25, 1.15, 1.23, 1.31), 0.66); // the cheek ruff
+  h = smin(h, sdCapsule(x, hy, hz, 0, -0.25, 1.48, 0, -0.57, 3.6, 1.11, 0.45), 0.5); // the muzzle
+  // the whisker pads: the muzzle's underside a little fuller, so the upper lip covers the chin's top
+  h = smin(h, sdEllipsoid(ax, hy, hz, 0.3, -0.86, 2.75, 0.4, 0.3, 0.62), 0.3);
+  h = smin(h, sdEllipsoid(ax, hy, hz, 1.44, 2.05, -0.66, 0.78, 1.03, 0.34), 0.29); // the ears
+  return Math.max(h, -sdSphere(ax, hy, hz, JIMOTHY_EYES[0] + 0.05, JIMOTHY_EYES[1] - SK[1], JIMOTHY_EYES[2] - SK[2] + 0.2, 0.34));
+}
+
+/** on the faces the jaw's cut leaves in the head (the palate, the walls): where the cut, not the head, is the surface */
+const inMouth = (p: Parts) => p.cut < 0.08 && -p.cut > p.raw - 0.02;
+
+/** the lower jaw, a mesh rigid on the `jaw` bone (model coordinates): the head's share under the mouth line, a chin */
+function jawSDF(x: number, y: number, z: number): number {
+  const ax = Math.abs(x), hy = y - SK[1], hz = z - SK[2];
+  let j = smax(headRaw(x, ax, hy, hz), jawRegion(ax, hy, hz), 0.06);
+  j = smin(j, sdCapsule(x, hy, hz, 0, -1.07, 1.15, 0, -1.23, 2.95, 0.78, 0.41), 0.2); // the chin
+  return Math.max(j, overMouth(hy, hz), HINGE_Z - 0.3 - hz);
+}
+const JAW_BOX = { min: [-1.0, SK[1] - 2.1, SK[2] + 0.5], max: [1.0, SK[1] - 0.8, SK[2] + 3.6] } as const;
 
 /** the parts at a point; the last point asked is kept (region, tint and capture ask about the same vertex in turn) */
 function parts(x: number, y: number, z: number): Parts {
@@ -120,18 +175,16 @@ function parts(x: number, y: number, z: number): Parts {
     b = smin(b, sdCapsule(x, y, z, 0, 11.0, 0.2, 0, SK[1] - 1.4, SK[2] - 0.15, 2.1, 1.7), 0.8);
   }
   P.body = b;
-  // the head: broad cheeks, a pointed muzzle, a short jaw, rounded upright ears; sockets for the eyes
+  // the head (headRaw), with the jaw's share cut away: a fine fillet at the lip, the line a closed mouth shows
   const hy = y - SK[1], hz = z - SK[2];
-  let h = sdSphere(x, hy, hz, 0, 0.6, 0.5, 4.3);
+  let h = sdSphere(x, hy, hz, 0, 0.6, 0.5, 4.3), cut = 9;
+  P.raw = h;
   if (h < FAR) {
-    h = sdEllipsoid(x, hy, hz, 0, 0, 0, 2.38, 2.05, 2.21);
-    h = smin(h, sdEllipsoid(ax, hy, hz, 1.8, -0.66, 0.25, 1.15, 1.23, 1.31), 0.66); // the cheek ruff
-    h = smin(h, sdCapsule(x, hy, hz, 0, -0.25, 1.48, 0, -0.57, 3.6, 1.11, 0.45), 0.5); // the muzzle
-    h = smin(h, sdCapsule(x, hy, hz, 0, -1.07, 1.15, 0, -1.23, 2.95, 0.78, 0.41), 0.33); // the lower jaw
-    h = smin(h, sdEllipsoid(ax, hy, hz, 1.44, 2.05, -0.66, 0.78, 1.03, 0.34), 0.29); // the ears
-    h = Math.max(h, -sdSphere(ax, y, z, JIMOTHY_EYES[0] + 0.05, JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.2, 0.34));
+    P.raw = h = headRaw(x, ax, hy, hz);
+    cut = jawRegion(ax, hy, hz);
+    h = smax(h, -cut, 0.08);
   }
-  P.head = h;
+  P.head = h; P.cut = cut;
   // the arm on this side: thin where it leaves the shoulder (the skin there is what a swing stretches, by its girth and
   // its distance from the joint) and thick past it, a forearm, a dark hand with a raccoon's long fingers
   let a = capV(ax, y, z, SHOULDER, HAND_TIP, 1.6, 1.6);
@@ -191,12 +244,15 @@ function alongTail(x: number, y: number, z: number): number {
 
 /**
  * Regions: 0 grey-brown fur, 1 pale (brows, muzzle, ear rims), 2 dark (the mask, the stripe, the tail's rings and tip),
- * 3 black (the nose), 4 buff (the belly, the tail's light rings), 5 the paws' dark brown.
+ * 3 black (the nose), 4 buff (the belly, the tail's light rings), 5 the paws' dark brown, 6 the mouth's inside (the
+ * palate and the walls the jaw leaves, seen only when it opens).
  */
 export function jimothyRegion(x: number, y: number, z: number): number {
   const ax = Math.abs(x);
   if (Math.hypot(x, y - JIMOTHY_NOSE[1], z - JIMOTHY_NOSE[2]) < 0.62) return 3;
   const p = parts(x, y, z), m = p.min;
+  // (the lip's own fillet stays pale, so no red shows at the line while the mouth is shut)
+  if (p.head === m && inMouth(p) && p.raw < -0.08) return 6;
   if (p.head === m) {
     // a bandit's mask: a dark oval round each eye drooping back toward the cheek, a dark stripe up the bridge from the
     // nose to the crown, a white arc over each eye, white from the muzzle down. In face coordinates, so it moves with SK
@@ -227,6 +283,7 @@ export function jimothyFurLength(x: number, y: number, z: number): number {
   if (eye < 0.62 || Math.hypot(x, y - JIMOTHY_NOSE[1], z - JIMOTHY_NOSE[2]) < 0.85) return 0;
   const p = parts(x, y, z), m = p.min;
   if (p.head === m) {
+    if (inMouth(p)) return 0;
     const hy = y - SK[1], hz = z - SK[2];
     if (hy > 1.4 && ax > 0.9 && hz < 0.1) return 0.5; // the ears
     if (ax > 1.4 && hy < 0 && hz < 1.5) return 1.35; // the cheek ruff
@@ -282,14 +339,176 @@ const jimothyCapture: Capture = (sg, x, y, z) => {
   }
 };
 
+// ---- the face ----
+
+const JIM_FUR = { length: 1.0, density: 7, tip: 0.18 };
+const PALE = new THREE.Color(0xe6e0d2), MOUTH = new THREE.Color(0x5a262a);
+
+/** the jaw's colours: its top inside the upper lip is the mouth's, the rest the pale chin */
+function jawColour(x: number, y: number, z: number, c: THREE.Color): void {
+  c.copy(overMouth(y - SK[1], z - SK[2]) > -0.06 && Math.abs(x) < 0.3 ? MOUTH : PALE);
+}
+/** the jaw's coat: short and pale on the chin, none on the cut faces a closed mouth hides */
+function jawFur(x: number, y: number, z: number): number {
+  return overMouth(y - SK[1], z - SK[2]) > -0.08 || Math.abs(x) > MOUTH_W - 0.06 ? 0 : 0.42;
+}
+
+/** the left's share at x (the right takes the rest): a face bone's zone fades out across the middle */
+const leftShare = (x: number) => sstep(-0.12, 0.12, x);
+const ZONES: Zone[] = [1, -1].flatMap((sx) => {
+  const s = sx > 0 ? 'L' : 'R', side = (x: number) => (sx > 0 ? leftShare(x) : 1 - leftShare(x));
+  return [
+    // an ear: what stands off the skull near the ear's own shape, so its root bends and the skull stays
+    { bone: 'ear' + s, w: (x: number, y: number, z: number) => {
+      const X = sx * x, hy = y - SK[1], hz = z - SK[2];
+      const skull = Math.hypot(x / 2.38, hy / 2.05, hz / 2.21), e = Math.hypot((X - 1.44) / 0.78, (hy - 2.05) / 1.03, (hz + 0.66) / 0.34);
+      return side(x) * sstep(1.0, 1.14, skull) * sstep(1.75, 1.25, e);
+    } },
+    // a brow: the pale arc over the eye and the fur round it, fading out before the stripe up the bridge
+    { bone: 'brow' + s, w: (x: number, y: number, z: number) => {
+      const r = Math.hypot((sx * x - BROW[0]) / 0.85, (y - BROW[1]) / 0.55, (z - BROW[2]) / 1.0);
+      return side(x) * (1 - sstep(0.45, 1.0, r));
+    } },
+    // a cheek: the ruff, most at its middle
+    { bone: 'cheek' + s, w: (x: number, y: number, z: number) => {
+      const r = Math.hypot((sx * x - CHEEK[0]) / 1.6, (y - CHEEK[1]) / 1.4, (z - CHEEK[2]) / 1.6);
+      return side(x) * (1 - sstep(0.45, 1.05, r));
+    } },
+  ];
+});
+
+function dress(d: Dresser): void {
+  // the face's bones take their shares of the head's skin first (the jaw below joins the body's children after)
+  faceZones(d, ZONES);
+  // black, wet bead eyes in the mask, each with a glint that rides the eye as it turns (the bead itself shows no turn),
+  // under lids of the mask's own dark: a blink is the shine going out of the mask
+  const bead = d.std({ color: 0x050505, roughness: 0.06, metalness: 0.1 });
+  const glint = d.std({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1.1, roughness: 0.3 });
+  const lid = d.std({ color: 0x211c19, roughness: 0.9 });
+  for (const [sx, s] of [[1, 'L'], [-1, 'R']] as const) {
+    const eye = new THREE.Group();
+    eye.name = 'jim-eye' + s;
+    eye.add(new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 10), bead));
+    // a flat fleck on the bead's surface, inside the lids' radius so a shut lid hides it
+    const gl = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), glint);
+    gl.position.set(0.1, 0.15, 0.28);
+    gl.scale.set(1, 1, 0.35);
+    eye.add(gl);
+    d.at(eye, 'head', sx * JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2]);
+    d.at(eyelids('jim-lid' + s, 0.34, lid, { gap: 0.1 }), 'head', sx * JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2]);
+  }
+  // a black nose that shines
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.42, 14, 10), d.std({ color: 0x0a0a0a, roughness: 0.25 }));
+  nose.scale.set(1.15, 0.8, 0.75);
+  d.at(nose, 'head', JIMOTHY_NOSE[0], JIMOTHY_NOSE[1], JIMOTHY_NOSE[2]);
+
+  // the lower jaw, furred; in it a pink tongue and two small fangs, and in the head two more over them, a row of tiny
+  // incisors and a dark throat behind: all hidden while the mouth is shut
+  furredPart(d, 'jim-jaw', 'jaw', jawSDF, JAW_BOX, 26, jawColour, JIM_FUR, 6, jawFur);
+  const line = (hz: number) => SK[1] + HINGE_Y + MOUTH_SLOPE * (hz - HINGE_Z);
+  const tongue = new THREE.SphereGeometry(1, 18, 10).scale(0.34, 0.14, 0.78).translate(0, line(2.05) - 0.12, SK[2] + 2.05);
+  d.at(new THREE.Mesh(tongue, d.std({ color: 0xc8646e, roughness: 0.45 })), 'jaw', 0, 0, 0);
+  const tooth = d.std({ color: 0xf2eee4, roughness: 0.35 });
+  const fang = (x: number, hz: number, len: number, r: number, down: boolean) => {
+    const g = new THREE.ConeGeometry(r, len, 7);
+    if (down) g.rotateX(Math.PI);
+    return g.translate(x, line(hz) + (down ? 0.1 - len / 2 : len / 2 - 0.1), SK[2] + hz);
+  };
+  const upper = [fang(0.3, 2.62, 0.34, 0.065, true), fang(-0.3, 2.62, 0.34, 0.065, true)];
+  for (const x of [-0.19, -0.065, 0.065, 0.19]) upper.push(fang(x, 3.08, 0.2, 0.034, true));
+  const lower = [fang(0.23, 2.45, 0.3, 0.055, false), fang(-0.23, 2.45, 0.3, 0.055, false)];
+  d.at(new THREE.Mesh(mergeGeometries(upper)!, tooth), 'head', 0, 0, 0);
+  d.at(new THREE.Mesh(mergeGeometries(lower)!, tooth), 'jaw', 0, 0, 0);
+  // the mouth's sides, from the hinge to just behind the fangs, inside the jaw's top edge (wolf.ts mouthSides)
+  const edge: V3[] = [];
+  for (let i = 0; i <= 8; i++) { const hz = HINGE_Z + 0.05 + (i / 8) * 1.5; edge.push([0.68 - 0.13 * (hz - 1), line(hz), SK[2] + hz]); }
+  mouthSides(d, 'jim-mouth', edge, 0x2a1214);
+  const throat = new THREE.SphereGeometry(1, 14, 8).scale(0.5, 0.3, 0.45).translate(0, SK[1] - 1.35, SK[2] + 1.35);
+  d.at(new THREE.Mesh(throat, d.std({ color: 0x1a0b0c, roughness: 0.9 })), 'head', 0, 0, 0);
+
+  // whiskers: three dark ones from each whisker pad, fanned out and back (one mesh a side, turned by tick)
+  const whisker = d.std({ color: 0x1b1816, roughness: 0.5 });
+  for (const [sx, s] of [[1, 'L'], [-1, 'R']] as const) {
+    const parts: THREE.BufferGeometry[] = [];
+    for (const [dy, dz, ry, rz, len] of [[0.09, -0.04, 0.12, -0.32, 1.9], [-0.02, 0.06, -0.02, -0.2, 2.1], [-0.12, 0.15, -0.17, -0.1, 1.8]] as const) {
+      const dir = new THREE.Vector3(sx, ry, rz).normalize();
+      parts.push(new THREE.CylinderGeometry(0.01, 0.035, len, 5).translate(0, len / 2, 0)
+        .applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)).translate(0, dy, dz));
+    }
+    const m = new THREE.Mesh(mergeGeometries(parts)!, whisker);
+    m.castShadow = false;
+    const g = new THREE.Group();
+    g.name = 'jim-whisk' + s;
+    g.add(m);
+    d.at(g, 'head', sx * 0.55, SK[1] - 0.82, SK[2] + 2.8);
+  }
+}
+
+/** per worn root: the face's moving parts, found once (a WeakMap: userData is JSON-copied when the stage clones) */
+interface JimFace { eyes: Obj[]; lids: Obj[]; ears: Obj[]; brows: Obj[]; cheeks: Obj[]; whisk: Obj[] }
+type Obj = THREE.Object3D | null;
+const FACES = new WeakMap<THREE.Object3D, JimFace>();
+const HEAD_A = JIMOTHY_SEGMENTS.find((s) => s.name === 'head')!.a;
+/** a face bone's rest place in the head's frame (its segment's `a` from the head's) */
+const BROW_O = [BROW[0] - HEAD_A[0], BROW[1] - HEAD_A[1], BROW[2] - HEAD_A[2]], CHEEK_O = [CHEEK[0] - HEAD_A[0], CHEEK[1] - HEAD_A[1], CHEEK[2] - HEAD_A[2]];
+/** an ear's quick flick now and then (radians, back and forth), each ear on its own clock; 0 at the lab's t = 0.6 */
+const flick = (t: number, ph: number) => { const u = (t + ph) % 6.1; return u < 0.4 ? 0.22 * Math.sin((u / 0.4) * Math.PI * 2) * (1 - u / 0.4) : 0; };
+/** the whiskers' twitch now and then */
+const twitch = (t: number) => { const u = (t + 2.2) % 3.7; return u < 0.45 ? 0.07 * Math.sin(u * 42) * (1 - u / 0.45) : 0; };
+
+/**
+ * The wearer's face on his: lids (blinkL/R, squintL/R, wideL/R; an idle blink with no face), the glints (lookX/Y),
+ * brows (browUp the inner ends, browOuterL/R the outer, browDownL/R knit and low), ears (perk with wide and raised brows,
+ * pinned back with a scowl, drooping with a frown; a flick now and then), cheeks (smileL/R bunch them up, puff swells
+ * them, sneer lifts, frown drops), whiskers (forward with a smile, up with a sneer or a puff). The jaw is the stage's
+ * (face.jaw, jawSide).
+ */
+function tick(root: THREE.Object3D, t: number, face?: FaceState | null): void {
+  let p = FACES.get(root);
+  if (!p) {
+    const by = (n: string): Obj => root.getObjectByName(n) ?? null;
+    const both = (n: string) => [by(n + 'L'), by(n + 'R')];
+    p = { eyes: both('jim-eye'), lids: both('jim-lid'), ears: both('ear'), brows: both('brow'), cheeks: both('cheek'), whisk: both('jim-whisk') };
+    FACES.set(root, p);
+  }
+  const f = face ?? null;
+  if (f) faceLids(p.lids[0]!, p.lids[1]!, f);
+  else { const b = idleBlink(t); for (const l of p.lids) if (l) setLids(l, b, 0, 0); }
+  for (const e of p.eyes) if (e) look(e, f, 0.75);
+  const frown = f?.frown ?? 0, sneer = f?.sneer ?? 0, puff = f?.puff ?? 0, inner = f?.browUp ?? 0;
+  for (let i = 0; i < 2; i++) {
+    const L = i === 0, sx = L ? 1 : -1;
+    const outer = f ? (L ? f.browOuterL : f.browOuterR) : 0, down = f ? (L ? f.browDownL : f.browDownR) : 0;
+    const wide = f ? (L ? f.wideL : f.wideR) : 0, smile = f ? (L ? f.smileL : f.smileR) : 0;
+    const brow = p.brows[i];
+    if (brow) {
+      brow.position.set(sx * BROW_O[0]!, BROW_O[1]! + 0.36 * (0.55 * inner + 0.45 * outer) - 0.26 * down, BROW_O[2]! + 0.06 * down);
+      // + about z lifts the left brow's outer end: the inner ends rise with browUp, knit down in a scowl
+      brow.rotation.z = sx * (0.32 * (outer - inner) + 0.3 * down);
+    }
+    const ear = p.ears[i];
+    if (ear) {
+      const perk = Math.max(wide, 0.8 * inner, outer), flat = Math.max(down, 0.6 * sneer), droop = frown;
+      ear.rotation.set(0.2 * perk - 0.55 * flat - 0.12 * droop + flick(t, L ? 3.1 : 0.4), 0, -sx * (0.45 * flat + 0.4 * droop - 0.15 * perk));
+    }
+    const cheek = p.cheeks[i];
+    if (cheek) {
+      cheek.position.set(sx * (CHEEK_O[0]! + 0.12 * puff + 0.06 * smile), CHEEK_O[1]! + 0.34 * smile + 0.12 * sneer - 0.14 * frown, CHEEK_O[2]! - 0.1 * smile + 0.08 * puff);
+      cheek.scale.setScalar(1 + 0.22 * puff + 0.08 * smile);
+    }
+    const wh = p.whisk[i];
+    if (wh) wh.rotation.set(0, -sx * 0.3 * smile, sx * (0.28 * sneer + 0.2 * puff - 0.12 * frown + twitch(t)));
+  }
+}
+
 export const JIMOTHY: CharacterDef = {
   id: 'jimothy', name: 'Jimothy', blurb: 'The round Seattle raccoon, standing up',
   segs: JIMOTHY_SEGMENTS,
   body: {
     sdf: jimothySDF, region: jimothyRegion, box: JIMOTHY_BOX,
-    palette: [0x6c655d, 0xe6e0d2, 0x1c1917, 0x0a0a0a, 0x8f877c, 0x3a3330],
+    palette: [0x6c655d, 0xe6e0d2, 0x1c1917, 0x0a0a0a, 0x8f877c, 0x3a3330, 0x4a2226],
     weights: 'soft', capture: jimothyCapture,
-    fur: { length: 1.0, density: 7, tip: 0.18 }, furLen: jimothyFurLength,
+    fur: JIM_FUR, furLen: jimothyFurLength,
     tint(r, x, y, z, c) {
       // a raccoon's back is darker and more grizzled than its flanks; his limbs are darker than his body
       if (r !== 0) return;
@@ -298,20 +517,14 @@ export const JIMOTHY: CharacterDef = {
       if (p.arm === p.min || p.leg === p.min) c.multiplyScalar(0.82);
     },
   },
-  dress(d) {
-    // small, black, wet eyes in the mask; a black nose that shines
-    const eye = d.std({ color: 0x050505, roughness: 0.06, metalness: 0.1 });
-    for (const sx of [-1, 1]) d.at(new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 10), eye), 'head', sx * JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2]);
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.42, 14, 10), d.std({ color: 0x0a0a0a, roughness: 0.25 }));
-    nose.scale.set(1.15, 0.8, 0.75);
-    d.at(nose, 'head', JIMOTHY_NOSE[0], JIMOTHY_NOSE[1], JIMOTHY_NOSE[2]);
-  },
+  dress,
+  tick,
   // size: his shoulders land a twentieth above the wearer's and his head over theirs (the numbers at the top); more and
   // the head floats off the face. limb: halfway, so his short arms reach the wearer's forearms and his feet hover a
   // little above theirs, short and thick still
   fit: { size: 1.05, limb: 0.5 },
-  // googly eyes over his own, in the mask
-  face: { eyes: [[JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36], [-JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36]] },
+  // the jaw opens this far (radians) at a wide-open mouth; googly eyes over his own, in the mask
+  face: { jaw: 0.5, eyes: [[JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36], [-JIMOTHY_EYES[0], JIMOTHY_EYES[1], JIMOTHY_EYES[2] + 0.18, 0.36]] },
   idle: { tail: 0.15 },
   // 84 and eight layers keep body and coat under 150k triangles (88 was 156k)
   res: 84,
