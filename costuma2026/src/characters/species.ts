@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import type { CharacterDef, Capture, Dresser } from './build';
 import { HERO_BOX, HERO_SEGMENTS, heroRegion, heroSDF } from './hero';
 import { WOLF_BOX, WOLF_EYES, WOLF_SEGMENTS, wolfFurLength, wolfRegion, wolfSDF } from './wolf';
-import { PLUME_BOX, PLUME_EYES, PLUME_SEGMENTS, plumeFeatherLength, plumeRegion, plumeSDF } from './plume';
+import { PLUME_BOX, PLUME_EYES, PLUME_SEGMENTS, dressPlume, plumeCapture, plumeFeatherLength, plumeRegion, plumeSDF, tickPlume } from './plume';
 import { MECH_BOX, MECH_SEGMENTS, mechRegion, mechSDF } from './mech';
 import { KESTREL_BOX, UNISON_BOX, kestrelRegion, kestrelSDF, unisonRegion, unisonSDF } from './robots';
 
@@ -88,19 +88,13 @@ export const PLUME: CharacterDef = {
   id: 'plume', name: 'Plume', blurb: 'A big, friendly, feathered bird',
   segs: PLUME_SEGMENTS,
   body: { sdf: (x, y, z) => plumeSDF(x, y, z), region: plumeRegion, box: PLUME_BOX, palette: [0xf4b408, 0xffe7a0, 0xe8508c, 0xf08424],
-    surface: 'soft', capture: capture({ tail: -2.4 }), fur: { length: 1.5, density: 1.6, tip: 0.3, feather: true }, furLen: plumeFeatherLength },
-  dress(d) {
-    const white = d.std({ color: 0xf8f8f4, roughness: 0.2 }), dark = d.std({ color: 0x0a0a10, roughness: 0.1 });
-    for (const sx of [-1, 1]) {
-      const e = new THREE.Mesh(new THREE.SphereGeometry(0.52, 18, 12), white);
-      const p = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 8), dark);
-      p.position.set(-sx * 0.1, 0.02, 0.36); p.scale.set(1, 1.2, 0.6); e.add(p);
-      d.at(e, 'head', sx * PLUME_EYES[0], PLUME_EYES[1], PLUME_EYES[2]);
-    }
-  },
+    surface: 'soft', capture: plumeCapture(capture({ tail: -2.4 })), fur: { length: 1.5, density: 1.6, tip: 0.3, feather: true }, furLen: plumeFeatherLength },
+  // eyes, lids, the beak's two halves and the mouth; the face moves in tickPlume (plume.ts)
+  dress: dressPlume,
+  tick: tickPlume,
   fit: { size: 1.12, limb: 0.5 },
   idle: { tail: 0.15 },
-  face: { jaw: 0.4, eyes: [[PLUME_EYES[0], PLUME_EYES[1], PLUME_EYES[2] + 0.45, 0.5], [-PLUME_EYES[0], PLUME_EYES[1], PLUME_EYES[2] + 0.45, 0.5]] },
+  face: { jaw: 0.5, eyes: [[PLUME_EYES[0], PLUME_EYES[1], PLUME_EYES[2] + 0.45, 0.5], [-PLUME_EYES[0], PLUME_EYES[1], PLUME_EYES[2] + 0.45, 0.5]] },
 };
 
 function mechDress(kind: 'bastion' | 'kestrel' | 'unison', glow: number) {

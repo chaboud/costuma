@@ -21,7 +21,8 @@
 // Budget (lab, 2026-10-31): the fur's shells are drawn over the whole surface, dress included, so the skirt is solid
 // (its inside, the hips and the thighs under it are not surface at all) and the grid is 72 for ten long shells.
 import * as THREE from 'three';
-import type { Capture, CharacterDef, Dresser } from './build';
+import type { Capture, CharacterDef, Dresser, FaceState } from './build';
+import { eyelids } from './faceparts';
 import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
 import { isoGeometry } from './skeleton';
 
@@ -53,6 +54,19 @@ const HINGE_D: V3 = [0, 13.2, 1.3];
 const gape = (z: number) => HINGE_D[1] - 0.13 * (z - HINGE_D[2]);
 // the same in model units
 const EYE = hs(EYE_D), EYE_R = EYE_RAD[0] * HS, HINGE = hs(HINGE_D);
+/** the crest's spikes, design units: x and z at the crown, height over it, how far back the tip leans */
+const CREST: [number, number, number, number][] = [[0, 0.25, 2.1, 0.45], [0.42, 0.05, 1.6, 0.55], [-0.42, 0.05, 1.6, 0.55], [0.22, -0.4, 1.75, 0.85], [-0.22, -0.4, 1.75, 0.85]];
+/** how far a design point is from the crest's spikes (their cores, without the head they blend into) */
+function crestD(x: number, y: number, z: number): number {
+  let d = 1e9;
+  for (const [cx, cz, up, lean] of CREST) d = Math.min(d, sdCapsule(x, y, z, cx * 0.5, 15.0, cz, cx * 1.4, 15.2 + up, cz - lean, 0.45, 0.08));
+  return d;
+}
+/** a model point in the head's design units */
+const dyOf = (y: number) => HC[1] + (y - HC[1]) / HS, dzOf = (z: number) => HC[2] + (z - HC[2]) / HS;
+/** the crest's bone pivots under the crown, so its base bends least; the plump cheeks' bones sit inside them */
+const CREST_A = hs([0, 15.1, 0.05]), CREST_B = hs([0, 17.0, -0.55]);
+const CHEEK_A = hs([0.62, 13.0, 0.45]), CHEEK_B = hs([1.2, 12.85, 0.85]);
 
 export const VIOLET_SEGMENTS: Seg[] = [
   { name: 'pelvis', a: [0, 7.9, 0], b: [0, 8.9, 0], parent: null },
@@ -62,6 +76,11 @@ export const VIOLET_SEGMENTS: Seg[] = [
   { name: 'head', a: [0, 11.9, 0.1], b: [0, 15.3, 0.4], parent: 'neck' },
   // the lower mandible is a mesh on this bone; it takes nothing from the body
   { name: 'jaw', a: HINGE, b: hs([0, 12.85, 3.75]), parent: 'head', reach: 0 },
+  // the face's own bones (the rig never turns them; the tick does): the crest, her most readable "brow", and the cheeks
+  // that puff and push up with a smile. They take only their own patches of skin (violetCapture)
+  { name: 'crest', a: CREST_A, b: CREST_B, parent: 'head' },
+  { name: 'cheekL', a: CHEEK_A, b: CHEEK_B, parent: 'head' },
+  { name: 'cheekR', a: [-CHEEK_A[0], CHEEK_A[1], CHEEK_A[2]], b: [-CHEEK_B[0], CHEEK_B[1], CHEEK_B[2]], parent: 'head' },
   // a small tuft behind, from under the back of the skirt
   { name: 'tail1', a: [0, 6.5, -1.2], b: [0, 6.0, -2.0], parent: 'pelvis', reach: 1.3 },
   { name: 'tail2', a: [0, 6.0, -2.0], b: [0, 5.6, -2.6], parent: 'tail1', reach: 1.2 },
@@ -123,8 +142,6 @@ function skirtRing(x: number, y: number, z: number): number {
   return (Math.hypot(x / rx, (z - zc) / rz) - 1) * Math.min(rx, rz);
 }
 
-/** the crest's spikes, design units: x and z at the crown, height over it, how far back the tip leans */
-const CREST: [number, number, number, number][] = [[0, 0.25, 2.1, 0.45], [0.42, 0.05, 1.6, 0.55], [-0.42, 0.05, 1.6, 0.55], [0.22, -0.4, 1.75, 0.85], [-0.22, -0.4, 1.75, 0.85]];
 /** the head, design units: a round head, plump cheeks, the crest, sockets the eyes sit in */
 function headDesign(x: number, y: number, z: number): number {
   const ax = Math.abs(x);
@@ -218,7 +235,11 @@ const violetCapture: Capture = (sg, x, y, z) => {
   if (n === 'spine1') return near(TORSO) || near(SKIRT);
   if (n === 'spine2') return near(TORSO);
   if (n === 'neck') return near(TORSO) || near(HEAD);
-  if (n === 'head') return near(HEAD);
+  // the crest's bone takes the spikes and their roots; the head lets go of their upper parts, so they turn whole
+  if (n === 'crest') return near(HEAD) && dyOf(y) > 15.05 && crestD(x / HS, dyOf(y), dzOf(z)) < 0.32;
+  // a cheek's bone the face below the eye, beside the beak (not the socket, the beak's base or the back of the head)
+  if (n === 'cheekL' || n === 'cheekR') { const dy = dyOf(y); return near(HEAD) && dy < 13.85 && dy > 12.1 && dzOf(z) > -0.2 && Math.abs(x) / HS > 0.5; }
+  if (n === 'head') return near(HEAD) && !(dyOf(y) > 15.95 && crestD(x / HS, dyOf(y), dzOf(z)) < 0.32);
   if (n === 'jaw' || n.startsWith('foot')) return false;
   if (n.startsWith('tail')) return near(TAIL);
   if (n.startsWith('arm') || n.startsWith('forearm')) return near(WING) && (lastPart === WING || y > 11.3);
@@ -388,11 +409,17 @@ function dressViolet(d: Dresser): void {
   const white = d.std({ color: 0xfbfbff, roughness: 0.15 }), iris = d.std({ color: 0x2a2244, roughness: 0.1 });
   const dark = d.std({ color: 0x050408, roughness: 0.06 }), lash = d.std({ color: 0x141018, roughness: 0.5 });
   const glint = d.std({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.8, roughness: 0.2 });
+  // lids the lavender of the feathers round the eyes (bare skin there: the undercoat's shade of the coat)
+  const lidMat = d.std({ color: 0xa892dc, roughness: 0.85 });
   for (const sx of [1, -1]) {
+    const s = sx > 0 ? 'L' : 'R';
     const eye = new THREE.Group();
+    eye.name = 'vi-eye' + s;
     eye.scale.set(1, EYE_RAD[1] / EYE_RAD[0], EYE_RAD[2] / EYE_RAD[0]);
     eye.add(new THREE.Mesh(new THREE.SphereGeometry(EYE_RAD[0], 22, 16), white));
+    // the iris, pupil and glint turn together inside the white, where the wearer looks (tick)
     const look = new THREE.Group();
+    look.name = 'vi-look' + s;
     look.rotation.set(0.12, -sx * 0.14, 0);
     for (const [m, r, a] of [[iris, 0.012, 0.62], [dark, 0.02, 0.3]] as const) {
       const cap = new THREE.Mesh(new THREE.SphereGeometry(EYE_RAD[0] + r, 22, 6, 0, Math.PI * 2, 0, a), m);
@@ -400,19 +427,27 @@ function dressViolet(d: Dresser): void {
       look.add(cap);
     }
     const g = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), glint);
-    g.position.set(sx * 0.1, 0.12, EYE_RAD[0] + 0.02);
+    // all of it inside the lids' shell (0.57), which a glint further out poked through when they shut
+    g.position.set(sx * 0.1, 0.12, 0.45);
     look.add(g);
     eye.add(look);
-    // the lash line: an arc along the top of the eye, tipped onto its front
-    const ln = new THREE.Mesh(new THREE.TorusGeometry(EYE_RAD[0] + 0.01, 0.055, 6, 24, Math.PI * 0.8), lash);
-    ln.rotation.set(0.45, 0, Math.PI * 0.1);
-    eye.add(ln);
+    // lids over the white (inside the eye's oval scale, so they are ovals too), a little proud of the socket; the
+    // lash line rides the upper lid's rim, where it drew before the lids existed (tipped 0.45 forward of upright)
+    const lids = eyelids('vi-lid' + s, EYE_RAD[0], lidMat, { gap: 0.14 });
+    lids.rotation.z = 0;
+    for (const m of lids.children) m.rotation.order = 'ZXY';
+    const ln = new THREE.Mesh(new THREE.TorusGeometry(EYE_RAD[0] * 1.14 + 0.005, 0.055, 6, 24, Math.PI * 0.8), lash);
+    ln.rotation.set(Math.PI / 2, 0, Math.PI * 0.1);
+    lids.children[0]!.add(ln);
+    setLid(lids, 0, 0, 0, 0, 0);
+    eye.add(lids);
     onHead(d, eye, [sx * EYE_D[0], EYE_D[1], EYE_D[2]]);
   }
   // large round gold glasses: thick rims round the eyes, turned to follow the round face, a bridge, temples back
   const gold = d.std({ color: 0xd9a441, roughness: 0.32, metalness: 0.65 });
   const rimR = 0.76, rimZ = EYE_D[2] + EYE_RAD[2] + 0.14, turn = 0.3;
   const glasses = new THREE.Group();
+  glasses.name = 'vi-glasses';
   for (const sx of [1, -1]) {
     const rim = new THREE.Mesh(new THREE.TorusGeometry(rimR, 0.12, 12, 48), gold);
     rim.rotation.y = sx * turn;
@@ -434,10 +469,11 @@ function dressViolet(d: Dresser): void {
   // the beak: matte blue-charcoal, the upper half on the head, the lower on the jaw; the mouth dark behind them
   const beakMat = d.std({ vertexColors: true, roughness: 0.55, metalness: 0.02 });
   const upper = new THREE.Mesh(isoGeometry(upperBeakD, { min: [-1.15, 12.45, 0.9], max: [1.15, 14.35, 4.35] }, 34, beakColour(false), 12000), beakMat);
-  upper.position.set(-HC[0], -HC[1], -HC[2]);
+  upper.position.set(-HINGE_D[0], -HINGE_D[1], -HINGE_D[2]);
   const lower = new THREE.Mesh(isoGeometry(lowerBeakD, { min: [-0.85, 12.45, 0.9], max: [0.85, 13.25, 4.0] }, 30, beakColour(true), 10000), beakMat);
   lower.position.set(-HC[0], -HC[1], -HC[2]);
-  const ug = new THREE.Group(); ug.add(upper); onHead(d, ug, HC);
+  // the upper half hangs from the gape's back corner too: a bird's upper bill lifts a little as it gapes (tick)
+  const ug = new THREE.Group(); ug.name = 'vi-upper'; ug.add(upper); onHead(d, ug, HINGE_D);
   const lg = new THREE.Group(); lg.add(lower); onHead(d, lg, HC, 'jaw');
   const mouth = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), d.std({ color: MOUTH, roughness: 0.6 }));
   mouth.scale.set(0.6, 0.36, 0.55);
@@ -461,6 +497,129 @@ function dressViolet(d: Dresser): void {
   for (const [foot, sx] of [['footL', 1], ['footR', -1]] as const) d.at(new THREE.Mesh(shoe, shoeMat), foot, sx * ANKLE[0], ANKLE[1], ANKLE[2]);
 }
 
+// --- the face, moved by the wearer's (face tracking): lids that blink, wink, squint and widen, eyes that look, the crest
+// as her brow, the glasses riding up and tilting with the brows, cheeks that puff and push up with a smile, the upper
+// bill lifting a little as the beak gapes. With no face read she blinks now and then and her crest sways.
+
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+/** the lids' turns about the eye's axis (faceparts' eyelids, set here): the upper lid's rim at rest where the lash line
+ *  was drawn, the lower low; shut, they meet a little below the middle */
+const UP_OPEN = -1.12, LO_OPEN = 0.95, UP_SHUT = 0.2, LO_SHUT = 0.04;
+/** close 0..1, squint lifts the lower lid (and drops the upper a little), wide pulls both back, scowl drops the upper
+ *  lid over the iris's top; `tilt` slants the upper lid's line about the eye's front (radians, + raises its +x end) */
+function setLid(g: THREE.Object3D, close: number, squint: number, wide: number, scowl: number, tilt: number): void {
+  const up = g.children[0], lo = g.children[1];
+  if (!up || !lo) return;
+  const c = clamp01(close);
+  const u = UP_OPEN - 0.38 * wide + 0.3 * squint + 0.55 * scowl, l = LO_OPEN + 0.2 * wide - 0.62 * squint;
+  up.rotation.x = u + (UP_SHUT - u) * c;
+  lo.rotation.x = l + (LO_SHUT - l) * c;
+  up.rotation.z = tilt * (1 - c);
+}
+
+/** a damped spring (a feather's bounce): stepped in small steps, so a long frame cannot blow it up */
+interface Spring { x: number; v: number }
+function stepSpring(s: Spring, target: number, dt: number, w: number, zeta: number): void {
+  const n = Math.min(12, Math.ceil(dt / 0.008));
+  const h = n > 0 ? dt / n : 0;
+  for (let i = 0; i < n; i++) { s.v += (w * w * (target - s.x) - 2 * zeta * w * s.v) * h; s.x += s.v * h; }
+}
+
+/** per worn copy: its face parts and rest poses, found once (a WeakMap: the stage's clone JSON-copies userData) */
+interface VioletParts {
+  lids: (THREE.Object3D | null)[]; looks: (THREE.Object3D | null)[]; lookRest: number[];
+  glasses: THREE.Object3D | null; glassesY: number; upper: THREE.Object3D | null;
+  crest: THREE.Object3D | null; cheeks: (THREE.Object3D | null)[]; cheekRest: THREE.Vector3[];
+  head: THREE.Object3D | null; prev: THREE.Quaternion; dq: THREE.Quaternion;
+  t: number; cx: Spring; cy: Spring; cz: Spring;
+}
+const VIOLET_PARTS = new WeakMap<THREE.Object3D, VioletParts>();
+
+function violetParts(root: THREE.Object3D): VioletParts {
+  let p = VIOLET_PARTS.get(root);
+  if (p) return p;
+  const by = (n: string) => root.getObjectByName(n) ?? null;
+  const looks = [by('vi-lookL'), by('vi-lookR')], cheeks = [by('cheekL'), by('cheekR')];
+  const glasses = by('vi-glasses'), head = by('head');
+  p = {
+    lids: [by('vi-lidL'), by('vi-lidR')], looks, lookRest: looks.flatMap((o) => [o?.rotation.x ?? 0, o?.rotation.y ?? 0]),
+    glasses, glassesY: glasses?.position.y ?? 0, upper: by('vi-upper'),
+    crest: by('crest'), cheeks, cheekRest: cheeks.map((o) => o?.position.clone() ?? new THREE.Vector3()),
+    head, prev: head?.quaternion.clone() ?? new THREE.Quaternion(), dq: new THREE.Quaternion(),
+    t: NaN, cx: { x: 0, v: 0 }, cy: { x: 0, v: 0 }, cz: { x: 0, v: 0 },
+  };
+  VIOLET_PARTS.set(root, p);
+  return p;
+}
+
+function tickViolet(root: THREE.Object3D, t: number, f?: FaceState | null): void {
+  const p = violetParts(root);
+  const first = Number.isNaN(p.t);
+  const dt = first ? 0 : Math.min(0.1, Math.max(0, t - p.t));
+  p.t = t;
+  // with no face, a blink every few seconds
+  const ph = (t + 1.3) % 4.4, idleBlink = ph < 0.18 ? Math.sin((ph / 0.18) * Math.PI) : 0;
+  const smL = f ? (f.smileL || f.smileR ? f.smileL : f.smile) : 0, smR = f ? (f.smileL || f.smileR ? f.smileR : f.smile) : 0;
+  const downL = f?.browDownL ?? 0, downR = f?.browDownR ?? 0, inner = f?.browUp ?? 0;
+  const outerL = f?.browOuterL ?? 0, outerR = f?.browOuterR ?? 0;
+  const puff = f?.puff ?? 0, jaw = f?.jaw ?? 0;
+
+  // the lids: a blink or a wink per side; a squint (or a smile's cheeks) lifts the lower; wide opens; a scowl slants
+  // the upper lid down toward the beak, a worry (the inner brows up) up toward it
+  for (let i = 0; i < 2; i++) {
+    const g = p.lids[i];
+    if (!g) continue;
+    const sx = i === 0 ? 1 : -1;
+    const close = f ? (i === 0 ? f.blinkL : f.blinkR) : idleBlink;
+    const sq = f ? clamp01(Math.max(i === 0 ? f.squintL : f.squintR, 0.6 * (i === 0 ? smL : smR))) : 0;
+    const wide = f ? (i === 0 ? f.wideL : f.wideR) : 0;
+    const down = i === 0 ? downL : downR;
+    setLid(g, close, sq, wide, down, sx * (0.3 * down - 0.22 * inner));
+  }
+  // the eyes look where the wearer looks (the iris turns inside the oval white)
+  for (let i = 0; i < 2; i++) {
+    const o = p.looks[i];
+    if (o) o.rotation.set(p.lookRest[i * 2]! - (f?.lookY ?? 0) * 0.34, p.lookRest[i * 2 + 1]! + (f?.lookX ?? 0) * 0.5, 0);
+  }
+  // the glasses ride up with raised brows and a smile, and one brow tips them; they never sink (they rest on the beak:
+  // lower, their rims went into it), so a tip raises one side, the other staying where it was
+  if (p.glasses) {
+    const tilt = Math.max(-0.13, Math.min(0.13, 0.1 * (outerL - outerR) + 0.08 * (downR - downL) + 0.04 * (smL - smR)));
+    const lift = 0.16 * inner + 0.08 * (outerL + outerR) + 0.05 * (smL + smR) + EYE_D[0] * Math.abs(Math.sin(tilt));
+    p.glasses.position.y = p.glassesY + lift * HS;
+    p.glasses.rotation.z = tilt;
+  }
+  // the upper bill lifts a little as she gapes, and with a sneer
+  if (p.upper) p.upper.rotation.x = -(0.1 * jaw + 0.08 * (f?.sneer ?? 0));
+  // cheeks: puffed out (and forward), pushed up by a smile on their side
+  for (let i = 0; i < 2; i++) {
+    const c = p.cheeks[i];
+    if (!c) continue;
+    const sx = i === 0 ? 1 : -1, sm = i === 0 ? smL : smR, r = p.cheekRest[i]!;
+    c.position.set(r.x + sx * 0.3 * puff * HS, r.y + (0.16 * sm - 0.05 * puff) * HS, r.z + (0.14 * puff + 0.04 * sm) * HS);
+    c.scale.setScalar(1 + 0.14 * puff + 0.05 * sm);
+  }
+  // the crest is her brow: up with raised brows, wide eyes and surprise (more with the beak open), flat back with a scowl
+  // or a frown, cocked by one brow. A spring with a little bounce, and it lags the head's own turns (feathers have mass)
+  if (p.crest) {
+    const up = f ? clamp01(Math.max(inner, 0.5 * (outerL + outerR)) + 0.25 * (f.wideL + f.wideR) + 0.35 * jaw * inner) : 0;
+    const down = f ? clamp01(Math.max(0.5 * (downL + downR), 0.7 * f.frown)) : 0;
+    const tx = 0.45 * up - 0.6 * down + (f ? 0 : 0.05 * Math.sin(t * 1.1));
+    const tz = f ? 0.3 * (outerL - outerR) + 0.25 * (downR - downL) : 0.03 * Math.sin(t * 0.7);
+    if (first) { p.cx.x = tx; p.cz.x = tz; p.cy.x = 0; }
+    if (p.head && !first) {
+      // the head's turn since the last frame, in its own frame (small: twice the vector part)
+      const q = p.dq.copy(p.prev).invert().multiply(p.head.quaternion), s = q.w < 0 ? -2 : 2;
+      p.cx.x -= 0.9 * q.x * s; p.cy.x -= 0.6 * q.y * s; p.cz.x -= 0.9 * q.z * s;
+    }
+    if (p.head) p.prev.copy(p.head.quaternion);
+    stepSpring(p.cx, tx, dt, 11, 0.3); stepSpring(p.cy, 0, dt, 10, 0.3); stepSpring(p.cz, tz, dt, 11, 0.3);
+    p.cx.x = Math.max(-1, Math.min(0.8, p.cx.x)); p.cy.x = Math.max(-0.5, Math.min(0.5, p.cy.x)); p.cz.x = Math.max(-0.6, Math.min(0.6, p.cz.x));
+    p.crest.rotation.set(p.cx.x, p.cy.x, p.cz.x);
+    p.crest.scale.set(1, 1 + 0.14 * up - 0.08 * down, 1);
+  }
+}
+
 export const VIOLET: CharacterDef = {
   id: 'violet', name: 'Violet', blurb: 'The Valkyries’ lavender raven, in gold glasses',
   segs: VIOLET_SEGMENTS,
@@ -479,6 +638,7 @@ export const VIOLET: CharacterDef = {
     },
   },
   dress: dressViolet,
+  tick: tickViolet,
   fit: { size: 1.1, limb: 0.55 },
   idle: { tail: 0.12 },
   face: { jaw: 0.45, eyes: [[EYE[0], EYE[1], EYE[2], EYE_R], [-EYE[0], EYE[1], EYE[2], EYE_R]] },
