@@ -5,8 +5,11 @@
 // (the hero's chevrons do), and a shader pattern stays crisp at any distance and rides the cloth as it bends. The head
 // is a rigid mesh on the head bone: a ribbed pumpkin shell polygonised from its own field with the face carved right
 // through the front wall, so the cuts have thickness; the inside and the cut walls glow (a per-vertex mask on the
-// emissive) and a candle flame stands at the bottom, both flickering in `tick`. A battered hat sits crooked on top with
-// the stem through its crown, and straw bursts from the collar, the cuffs (the hands are straw) and the trouser legs.
+// emissive) and a candle flame stands at the bottom, both flickering in `tick`. The carving is the face, and it moves with
+// the wearer's (FACE_GLSL: the shell's vertices slide round its holes): the eyes blink, wink, squint, widen and slant
+// into a scowl, a hot spot in each follows their gaze, the grin bends with a smile or a frown, puckers, and drops open
+// with their jaw; blowing makes the candle dance. A battered hat sits crooked on top with the stem through its crown,
+// and straw bursts from the collar, the cuffs (the hands are straw) and the trouser legs.
 //
 // Model frame: the hero's — 20 units tall on y = 0, +y up, +z forward, +x Jack's own left. The pumpkin's centre sits at
 // the head segment's midpoint, which is where the stage's neck fit puts the wearer's head (rig.ts neckFit).
@@ -602,10 +605,11 @@ function eyeCarve(out: THREE.Vector4, f: FaceState | null, left: boolean, idle: 
   const lower = clamp01((left ? f.squintL : f.squintR) + 0.4 * smile);
   const wide = clamp01(Math.max(left ? f.wideL : f.wideR, 0.7 * f.browUp, 0.7 * outer));
   const down = clamp01(Math.max(left ? f.browDownL : f.browDownR, 0.6 * f.sneer));
-  const close = 1 - (1 - blink) * (1 - 0.55 * lower) * (1 + 0.35 * wide);
+  // a scowl narrows it a little and closes its inner corner a lot (the slant down to the nose)
+  const close = 1 - (1 - blink) * (1 - 0.55 * lower) * (1 - 0.15 * down) * (1 + 0.35 * wide);
   // where it closes to: a blink brings the top down to the base, a squint meets nearer the top
   const to = 0.1 + 0.55 * lower * (1 - blink);
-  out.set(close, to, 0.6 * down - 0.4 * clamp01(f.frown), 0.1 * Math.max(f.browUp, outer) - 0.05 * down);
+  out.set(close, to, 0.95 * down - 0.5 * clamp01(f.frown), 0.1 * Math.max(f.browUp, outer) - 0.05 * down);
   return blink;
 }
 
