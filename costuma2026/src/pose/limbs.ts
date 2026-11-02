@@ -30,6 +30,10 @@ export const LIMB_TUNE = {
   hang: 0.6,
   /** the knee bends this far at most (degrees) */
   kneeMax: 150,
+  /** a limb whose two ends are seen (a shoulder and a wrist, a hip and an ankle) has its middle pinned between them:
+   *  the model's 3D for both its bones counts this much, at most, however unseen the elbow or knee is (an elbow below
+   *  the frame's edge with the hand raised in it: a signer's, a selfie's) */
+  chain: 0.85,
 };
 
 type Seg = 'thighL' | 'thighR' | 'shinL' | 'shinR' | 'armL' | 'armR' | 'forearmL' | 'forearmR';
@@ -77,8 +81,14 @@ export function fillLimbs(world: LM[], image: LM[], up: THREE.Vector3, st: LimbS
   const torsoUp = mid(world[L.shL]!, world[L.shR]!).sub(mid(world[L.hipL]!, world[L.hipR]!));
   const pelvis = frame(hipL.clone().sub(hipR), torsoUp), chest = frame(shL.clone().sub(shR), torsoUp);
   const across = hipL.clone().sub(hipR).normalize();
-  // how sure the picture is of each bone this frame (both its ends)
-  const sure = (a: number, b: number) => sstep(T.visFrom, T.visTo, Math.min(image[a]!.v, image[b]!.v));
+  // how sure the picture is of each bone this frame (both its ends), or of its limb's two ends (its middle is pinned
+  // between them)
+  const CHAIN: Partial<Record<Seg, [number, number]>> = {
+    armL: [L.shL, L.wrL], forearmL: [L.shL, L.wrL], armR: [L.shR, L.wrR], forearmR: [L.shR, L.wrR],
+    thighL: [L.hipL, L.anL], shinL: [L.hipL, L.anL], thighR: [L.hipR, L.anR], shinR: [L.hipR, L.anR],
+  };
+  const sureOf = (a: number, b: number) => sstep(T.visFrom, T.visTo, Math.min(image[a]!.v, image[b]!.v));
+  const sure = (seg: Seg, a: number, b: number) => { const c = CHAIN[seg]; return Math.max(sureOf(a, b), c ? T.chain * sureOf(c[0], c[1]) : 0); };
   // first pass: what each bone reads, in its parent's frame as the picture has it (for the mirrors and the memory)
   const frames = new Map<Seg, THREE.Matrix3>();
   const parentFrame = (s: (typeof SEGS)[number], pose: LM[]): THREE.Matrix3 => {
@@ -92,7 +102,7 @@ export function fillLimbs(world: LM[], image: LM[], up: THREE.Vector3, st: LimbS
   for (const s of SEGS) {
     const F = parentFrame(s, world);
     frames.set(s.seg, F);
-    read.set(s.seg, { d: toLocal(F, V(world[s.b]!).sub(V(world[s.a]!)).normalize()), c: sure(s.a, s.b) });
+    read.set(s.seg, { d: toLocal(F, V(world[s.b]!).sub(V(world[s.a]!)).normalize()), c: sure(s.seg, s.a, s.b) });
   }
   // the memory: decays, takes in what is sure
   for (const s of SEGS) {

@@ -16,6 +16,7 @@
 // is authored in model coordinates and hung with `d.at(mesh, bone, 0, 0, 0)`, which puts the mesh's origin at the model
 // origin in the bone's frame; the right side is the left side's geometry under scale.x = -1 (three flips the winding).
 import * as THREE from 'three';
+import { jointedHand, mirrorHand, type HandParts } from './bonehand';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Box, CharacterDef, Dresser, Field } from './build';
@@ -283,27 +284,31 @@ function ribs(sx: number): THREE.BufferGeometry[] {
 
 /**
  * The left hand, hanging from the wrist down the forearm's line, palm in, thumb forward, fingers a little curled toward
- * the palm. Drawn about a third bigger than a hand so it covers the wearer's own (the rig has no hand bone: it rides
- * the forearm, so a wave keeps the fingers straight on with the arm).
+ * the palm. Drawn about a third bigger than a hand so it covers the wearer's own. It hangs on the hand bone, its
+ * fingers jointed (bonehand.ts): hand tracking turns the wrist and curls them.
  */
-function hand(wrist: V3, dir: V3): THREE.BufferGeometry[] {
+function hand(wrist: V3, dir: V3): HandParts {
   const m = frame(wrist, [wrist[0] + dir[0], wrist[1] + dir[1], wrist[2] + dir[2]]);
   const S = 1.35;
-  const P = (x: number, y: number, z: number): V3 => { const v = new THREE.Vector3(x * S, y * S, z * S).applyMatrix4(m); return [v.x, v.y, v.z]; };
-  const g: THREE.BufferGeometry[] = [];
+  // (the frame's z points behind a hanging hand: the fingers' z is taken the other way, so the index and the thumb are in
+  // front — they were behind, a right hand on the left arm, until hand tracking turned the palm to the camera)
+  const P = (x: number, y: number, z: number): V3 => { const v = new THREE.Vector3(x * S, y * S, -z * S).applyMatrix4(m); return [v.x, v.y, v.z]; };
+  const palm: THREE.BufferGeometry[] = [], fingers: HandParts['fingers'] = [];
   // the carpals: a knot of pebbles
-  for (const [x, y, z] of [[0, 0.1, 0.16], [0, 0.1, -0.02], [0, 0.1, -0.2], [0.02, 0.3, 0.2], [0.02, 0.3, 0.0], [0.02, 0.3, -0.18]] as V3[]) g.push(ball(P(x, y, z), 0.14, [1, 1, 1], 8));
-  // the fingers: index forward (by the thumb) to little finger behind; knuckles a little proud
-  const fingers: [number, number][] = [[0.21, 1.0], [0.07, 1.08], [-0.07, 1.0], [-0.2, 0.82]];
-  for (const [fz, L] of fingers) {
-    const k0 = P(0.02, 0.4, fz * 0.85), k1 = P(0.0, 0.4 + 0.55 * L, fz);
-    const k2 = P(-0.07, 0.4 + 0.92 * L, fz * 1.05), k3 = P(-0.17, 0.4 + 1.15 * L, fz * 1.08), k4 = P(-0.28, 0.4 + 1.3 * L, fz * 1.08);
-    g.push(smallBone(k0, k1, 0.1, 0.075, 0.105), smallBone(k1, k2, 0.1, 0.07, 0.095), smallBone(k2, k3, 0.09, 0.065, 0.085), smallBone(k3, k4, 0.08, 0.06, 0.065));
-  }
+  for (const [x, y, z] of [[0, 0.1, 0.16], [0, 0.1, -0.02], [0, 0.1, -0.2], [0.02, 0.3, 0.2], [0.02, 0.3, 0.0], [0.02, 0.3, -0.18]] as V3[]) palm.push(ball(P(x, y, z), 0.14, [1, 1, 1], 8));
   // the thumb, from the wrist's front out and down
   const t0 = P(0.0, 0.25, 0.26), t1 = P(-0.05, 0.6, 0.48), t2 = P(-0.1, 0.88, 0.58), t3 = P(-0.16, 1.08, 0.62);
-  g.push(smallBone(t0, t1, 0.11, 0.085, 0.1), smallBone(t1, t2, 0.1, 0.075, 0.09), smallBone(t2, t3, 0.09, 0.065, 0.065));
-  return g;
+  palm.push(smallBone(t0, t1, 0.11, 0.085, 0.1));
+  fingers.push({ joints: [t1, t2], bones: [smallBone(t1, t2, 0.1, 0.075, 0.09), smallBone(t2, t3, 0.09, 0.065, 0.065)] });
+  // the fingers: index forward (by the thumb) to little finger behind; knuckles a little proud
+  for (const [fz, L] of [[0.21, 1.0], [0.07, 1.08], [-0.07, 1.0], [-0.2, 0.82]] as [number, number][]) {
+    const k0 = P(0.02, 0.4, fz * 0.85), k1 = P(0.0, 0.4 + 0.55 * L, fz);
+    const k2 = P(-0.07, 0.4 + 0.92 * L, fz * 1.05), k3 = P(-0.17, 0.4 + 1.15 * L, fz * 1.08), k4 = P(-0.28, 0.4 + 1.3 * L, fz * 1.08);
+    palm.push(smallBone(k0, k1, 0.1, 0.075, 0.105));
+    fingers.push({ joints: [k1, k2, k3], bones: [smallBone(k1, k2, 0.1, 0.07, 0.095), smallBone(k2, k3, 0.09, 0.065, 0.085), smallBone(k3, k4, 0.08, 0.06, 0.065)] });
+  }
+  const z = new THREE.Vector3().setFromMatrixColumn(m, 2).normalize();
+  return { palm, fingers, hinge: [z.x, z.y, z.z] };
 }
 
 function foot(): THREE.BufferGeometry[] {
@@ -427,7 +432,7 @@ function dress(d: Dresser): void {
   // --- the pelvis
   one(isoGeometry(pelvisSDF, { min: [-1.75, 8.72, -1.05], max: [1.75, 11.2, 1.05] }, 40, undefined, 24000), 'pelvis');
 
-  // --- the arms: humerus; radius and ulna; the hand rides the forearm (the rig has no hand bone)
+  // --- the arms: humerus; radius and ulna; the hand on its own bone, its fingers jointed
   both(merge([
     ball([2.33, 14.56, -0.03], 0.36),
     longBone([2.4, 14.45, 0], [2.71, 12.08, -0.05], 0.3, 0.2, 0.28),
@@ -439,8 +444,13 @@ function dress(d: Dresser): void {
     ball([2.74, 11.98, -0.25], 0.21, [1, 1.1, 1], 10), // the point of the elbow
     longBone([2.76, 11.85, -0.2], [2.86, 9.62, 0.22], 0.19, 0.13, 0.16, 10), // the ulna
     longBone([2.66, 11.72, 0.12], [2.86, 9.62, 0.54], 0.16, 0.13, 0.21, 10), // the radius
-    ...hand([wr[0], wr[1] - 0.05, wr[2]], dir),
   ]), 'forearm');
+  {
+    const hb = d.bones.has('handL') ? 'hand' : 'forearm';
+    const left = jointedHand(hand([wr[0], wr[1] - 0.05, wr[2]], dir), merge, bone, 'skelly-handL');
+    const right = mirrorHand(left);
+    d.at(left, hb + 'L', 0, 0, 0); d.at(right, hb + 'R', 0, 0, 0);
+  }
 
   // --- the legs: femur with its ball in the hip socket; tibia, fibula and kneecap; the foot
   both(merge([

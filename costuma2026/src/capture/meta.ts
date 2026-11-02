@@ -5,12 +5,14 @@
 //  - per camera frame, what the pose model returned, exactly (before any of the app's own handling: the frame's edge,
 //    the upright check, smoothing), in the replay scripts' format (scripts/pose-record.mjs: `{ i, now, w, h, dets }`),
 //    so every offline replay runs on it unchanged; and beside it what the app made of it: each track's place, size,
-//    smoothed picture and 3D pose, verdict and face, each costume's scale and cloth, the lens, gravity and the floor;
+//    smoothed picture and 3D pose, verdict, face and hands, each costume's scale and cloth, the lens, gravity and the
+//    floor; and what the hand model returned for each wrist it read;
 //  - once: the build, the device, the settings, the camera.
 // All three go into one zip (stored, not compressed: the videos are compressed already) that the preview offers as
 // "Save debug data". `scripts/meta-replay.test.ts` replays a recording's raw detections through the tracker as it is now
 // and compares it with what the phone's tracker made at the time.
 import type { Detection, Track } from '../pose/tracker';
+import type { HandDet } from '../pose/hands';
 import type { Intrinsics } from '../pose/solve';
 
 type V3 = { x: number; y: number; z: number };
@@ -32,6 +34,9 @@ export interface MetaFrame {
   tracks: unknown[];
   /** what the stage made: each costume */
   wearers: WearerOut[];
+  /** what the hand model returned this frame (pose/hands.ts: crops round the wrists, mapped back to the frame), by
+   *  person and side: the frame's image points [x, y, z] and the metric points turned to the camera */
+  hands?: { id: number; side: string; score: number; pts: number[][]; world: number[][] }[];
 }
 
 const r5 = (_k: string, v: unknown) => (typeof v === 'number' ? Math.round(v * 1e5) / 1e5 : v);
@@ -67,7 +72,8 @@ export class MetaLog {
   private info: Record<string, unknown> = {};
 
   /** one camera frame: the raw detections, and what the tracker and the stage made of them */
-  frame(now: number, vt: number, dets: Detection[], people: number, tracks: Track[], K: Intrinsics, up: V3, ground: { n: V3; h: number; source: string }, wearers: WearerOut[], castOf: (id: number) => string): void {
+  frame(now: number, vt: number, dets: Detection[], people: number, tracks: Track[], K: Intrinsics, up: V3, ground: { n: V3; h: number; source: string }, wearers: WearerOut[], castOf: (id: number) => string, hands?: Map<number, Partial<Record<'L' | 'R', HandDet>>> | null): void {
+    const xyz = (p: V3) => [p.x, p.y, p.z];
     this.frames.push({
       i: this.i++, now, w: K.w, h: K.h,
       dets: dets.map((d) => ({ image: d.image.map((p) => ({ ...p })), world: d.world.map((p) => ({ ...p })) })),
@@ -80,8 +86,11 @@ export class MetaLog {
         // the smoothed picture and the 3D pose the costume was posed from: [x, y, z, v] each
         image: pts(t.image), world: pts(t.world),
         face: t.face ? faceOut(t.face as unknown as Record<string, unknown>) : null,
+        // each hand: its frame (a quaternion, camera axes), curls, trust in the hand model, how much is shown
+        hands: t.hands ? Object.fromEntries((['L', 'R'] as const).map((s) => { const h = t.hands![s]; return [s, { q: [h.q.x, h.q.y, h.q.z, h.q.w], curl: h.curl, trust: h.trust, w: h.w }]; })) : null,
       })),
       wearers,
+      hands: hands ? [...hands].flatMap(([id, o]) => Object.values(o).map((h) => ({ id, side: h!.side, score: h!.score, pts: h!.pts.map(xyz), world: h!.world.map(xyz) }))) : [],
     });
   }
 

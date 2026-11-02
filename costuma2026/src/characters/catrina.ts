@@ -18,6 +18,7 @@
 // Model frame: the hero's (hero.ts) — 20 units tall on y = 0, +y up, +z forward, +x her own left. The skull's centre is
 // near the head segment's midpoint, which the stage's neck fit puts on the wearer's head (rig.ts neckFit).
 import * as THREE from 'three';
+import { jointedHand, mirrorHand, type HandParts } from './bonehand';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Capture, CharacterDef, Dresser } from './build';
 import { sdCapsule, sdEllipsoid, sdSphere, smin, type Seg } from './sdf';
@@ -519,24 +520,28 @@ function smallBone(a: V3, b: V3, r0: number, rs: number, r1: number): THREE.Buff
 
 /**
  * The left hand, bones only, hanging from the wrist along `dir`: palm in, thumb forward, long fingers curled a little
- * (Skelly's, slimmer). Drawn a little bigger than a hand so it covers the wearer's; it rides the forearm (the rig has no
- * hand bone).
+ * (Skelly's, slimmer). Drawn a little bigger than a hand so it covers the wearer's; it hangs on the hand bone, its fingers
+ * jointed (bonehand.ts).
  */
-function hand(wrist: V3, dir: V3): THREE.BufferGeometry[] {
+function hand(wrist: V3, dir: V3): HandParts {
   const m = frame(wrist, [wrist[0] + dir[0], wrist[1] + dir[1], wrist[2] + dir[2]]);
   const S = 1.42;
-  const P = (x: number, y: number, z: number): V3 => { const v = new THREE.Vector3(x * S, y * S, z * S).applyMatrix4(m); return [v.x, v.y, v.z]; };
-  const g: THREE.BufferGeometry[] = [];
-  for (const [x, y, z] of [[0, 0.1, 0.14], [0, 0.1, -0.02], [0, 0.1, -0.18], [0.02, 0.3, 0.18], [0.02, 0.3, 0.0], [0.02, 0.3, -0.16]] as V3[]) g.push(ball(P(x, y, z), 0.13, [1, 1, 1], 7));
-  const fingers: [number, number][] = [[0.2, 1.05], [0.07, 1.14], [-0.07, 1.06], [-0.19, 0.88]];
-  for (const [fz, L] of fingers) {
+  // (the frame's z points behind a hanging hand: the fingers' z is taken the other way, so the index and the thumb are in
+  // front — they were behind, a right hand on the left arm, until hand tracking turned the palm to the camera)
+  const P = (x: number, y: number, z: number): V3 => { const v = new THREE.Vector3(x * S, y * S, -z * S).applyMatrix4(m); return [v.x, v.y, v.z]; };
+  const palm: THREE.BufferGeometry[] = [], fingers: HandParts['fingers'] = [];
+  for (const [x, y, z] of [[0, 0.1, 0.14], [0, 0.1, -0.02], [0, 0.1, -0.18], [0.02, 0.3, 0.18], [0.02, 0.3, 0.0], [0.02, 0.3, -0.16]] as V3[]) palm.push(ball(P(x, y, z), 0.13, [1, 1, 1], 7));
+  const t0 = P(0.0, 0.25, 0.24), t1 = P(-0.05, 0.6, 0.46), t2 = P(-0.1, 0.88, 0.56), t3 = P(-0.16, 1.08, 0.6);
+  palm.push(smallBone(t0, t1, 0.11, 0.08, 0.1));
+  fingers.push({ joints: [t1, t2], bones: [smallBone(t1, t2, 0.1, 0.072, 0.088), smallBone(t2, t3, 0.088, 0.064, 0.06)] });
+  for (const [fz, L] of [[0.2, 1.05], [0.07, 1.14], [-0.07, 1.06], [-0.19, 0.88]] as [number, number][]) {
     const k0 = P(0.02, 0.4, fz * 0.85), k1 = P(0.0, 0.4 + 0.55 * L, fz);
     const k2 = P(-0.07, 0.4 + 0.93 * L, fz * 1.05), k3 = P(-0.16, 0.4 + 1.17 * L, fz * 1.08), k4 = P(-0.26, 0.4 + 1.33 * L, fz * 1.08);
-    g.push(smallBone(k0, k1, 0.1, 0.07, 0.105), smallBone(k1, k2, 0.1, 0.066, 0.095), smallBone(k2, k3, 0.09, 0.06, 0.082), smallBone(k3, k4, 0.078, 0.055, 0.06));
+    palm.push(smallBone(k0, k1, 0.1, 0.07, 0.105));
+    fingers.push({ joints: [k1, k2, k3], bones: [smallBone(k1, k2, 0.1, 0.066, 0.095), smallBone(k2, k3, 0.09, 0.06, 0.082), smallBone(k3, k4, 0.078, 0.055, 0.06)] });
   }
-  const t0 = P(0.0, 0.25, 0.24), t1 = P(-0.05, 0.6, 0.46), t2 = P(-0.1, 0.88, 0.56), t3 = P(-0.16, 1.08, 0.6);
-  g.push(smallBone(t0, t1, 0.11, 0.08, 0.1), smallBone(t1, t2, 0.1, 0.072, 0.088), smallBone(t2, t3, 0.088, 0.064, 0.06));
-  return g;
+  const z = new THREE.Vector3().setFromMatrixColumn(m, 2).normalize();
+  return { palm, fingers, hinge: [z.x, z.y, z.z] };
 }
 
 // --- flowers, each facing +y about its own origin, coloured per vertex
@@ -805,7 +810,12 @@ function dress(d: Dresser): void {
   // --- the bony hands, out of the cuffs
   const bone = d.std({ color: 0xf2ece0, roughness: 0.45, emissive: 0x2a2620, emissiveIntensity: 1 });
   const dir: V3 = [WR[0] - EL[0], WR[1] - EL[1], WR[2] - EL[2]];
-  both(merge(hand([WR[0] - FA[0] * 0.35, WR[1] - FA[1] * 0.35, WR[2] - FA[2] * 0.35], dir).map((g) => prep(g, 0xffffff))), 'forearm', bone, 'catrina-hand');
+  {
+    const hb = d.bones.has('handL') ? 'hand' : 'forearm';
+    const left = jointedHand(hand([WR[0] - FA[0] * 0.35, WR[1] - FA[1] * 0.35, WR[2] - FA[2] * 0.35], dir), (gs) => merge(gs.map((g) => prep(g, 0xffffff))), bone, 'catrina-handL');
+    const right = mirrorHand(left);
+    d.at(left, hb + 'L', 0, 0, 0); d.at(right, hb + 'R', 0, 0, 0);
+  }
 
   // --- a black velvet choker with a marigold at the throat
   const neckY = 15.35;

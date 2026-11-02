@@ -522,7 +522,7 @@ function dress(d: Dresser): void {
     const o = wr.clone().addScaledVector(along, 0.55).add(side);
     hand.push(straw(o, jitter(along.clone().addScaledVector(side, 1.4), 0.3), 0.8 + rnd() * 0.9, 0.055));
   }
-  both(merge(hand), 'forearm', strawMat, 'hand');
+  both(merge(hand), d.bones.has('handL') ? 'hand' : 'forearm', strawMat, 'hand');
 
   const ankle: THREE.BufferGeometry[] = [];
   for (let i = 0; i < 26; i++) {

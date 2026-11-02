@@ -5,11 +5,13 @@ import * as THREE from 'three';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { buildCharacter, type Built, type CharacterDef, type SurfaceArrays } from '../characters/build';
 import { byId } from '../characters/roster';
-import { Rig, poseFromLandmarks, type BodyPose } from '../pose/rig';
+import { Rig, poseFromLandmarks, type BodyPose, type HandPose } from '../pose/rig';
+import { handWrists, type HandState } from '../pose/hands';
 import { reachLimbs, REACH_TUNE } from '../pose/reach';
 import { driveFaceField, wearFaceField, type FaceField } from './facemap';
 import { SceneDepth, wearOcclusion, type OcclWearer } from './occlusion';
 import { ClothSway } from '../characters/cloth';
+import { FingerCurl } from '../characters/curl';
 import { CostumeCache, type Kept } from '../characters/cache';
 import type { Track } from '../pose/tracker';
 import { project, type Intrinsics } from '../pose/solve';
@@ -56,9 +58,11 @@ const SHADOW_GEO = new THREE.PlaneGeometry(1, 1);
 /** past poses kept per wearer; the back row of the pyramid dances this many frames late at most */
 const POSE_HIST = 12;
 
+const handPose = (h: HandState): HandPose => ({ q: h.q.clone(), w: h.w, curl: [...h.curl] });
 const clonePose = (p: BodyPose): BodyPose => ({
   pelvis: p.pelvis.clone(), chest: p.chest.clone(), head: p.head.clone(), headVis: p.headVis, neck: p.neck.clone(),
   dir: Object.fromEntries(Object.entries(p.dir).map(([k, v]) => [k, v.clone()])) as BodyPose['dir'], vis: { ...p.vis },
+  hands: p.hands ? Object.fromEntries(Object.entries(p.hands).map(([k, h]) => [k, { q: h.q.clone(), w: h.w, curl: [...h.curl] }])) : undefined,
 });
 
 export const BG_VERT = /* glsl */ `
@@ -332,6 +336,8 @@ export class Stage {
   private K: Intrinsics | null = null;
   /** carry the wearers' faces onto the costumes' (render/facemap.ts) */
   faceTransfer = true;
+  /** the hands turn as the hand model reads them (settings: Hands) */
+  handsOn = true;
   /** the picture's depth, for hiding costumes behind what stands in front of them (render/occlusion.ts) */
   readonly depth = new SceneDepth();
   layout(K: Intrinsics, mirror: boolean): void {
@@ -431,7 +437,11 @@ export class Stage {
     const occl = wearOcclusion(root, this.depth.u);
     // and its cloth swings with its own motion (its own particles and uniforms)
     const cloth = tpl.def.cloth ? new ClothSway(root, tpl.def.cloth) : null;
-    return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], field, occl, cloth: cloth?.active ? cloth : null };
+    const rig = new Rig(tpl.def.segs, bones);
+    // and its fingers curl as its wearer's do (characters/curl.ts), where it has hands that do
+    const hs = tpl.def.hands;
+    if (hs !== false && hs?.fist !== 0) { const c = new FingerCurl(root, tpl.def.segs, hs ?? {}); if (c.active) rig.curl = c; }
+    return { def: tpl.def, root, rig, mats: [...copies.values()], field, occl, cloth: cloth?.active ? cloth : null };
   }
 
   private drop(w: Wearer): void {
@@ -446,6 +456,8 @@ export class Stage {
     const p = poseFromLandmarks(tr.world);
     // the head turns as the face mesh says (pose/face.ts), finer than the pose model's ears and nose
     if (tr.face) { p.head.copy(tr.face.head); p.headVis = Math.max(p.headVis, tr.face.headW); }
+    // the hands as the hand model reads them (pose/hands.ts), turned after the reach below
+    if (tr.hands && this.handsOn) p.hands = { L: handPose(tr.hands.L), R: handPose(tr.hands.R) };
     const s = this.fit(rig, def, tr.len);
     rig.apply(p, t, def.idle?.tail ?? 0, this.frameDt);
     // the wearer's mouth opens the costume's (face tracking), and shifts it sideways
@@ -454,7 +466,9 @@ export class Stage {
     w.root.scale.setScalar(s);
     this.depth.place(w.occl, tr.id, tr.T.z, this.frameDt);
     // the limbs aimed at the person's in the picture, at the costume's own bone lengths (pose/reach.ts)
-    if (this.K && REACH_TUNE.strength > 0) reachLimbs(rig, w.root, tr.image, this.K);
+    // (where the hand model has read a hand, its wrist: finer than the pose model's)
+    if (this.K && REACH_TUNE.strength > 0) reachLimbs(rig, w.root, tr.hands && this.handsOn ? handWrists(tr.image, tr.hands) : tr.image, this.K);
+    rig.setHands(p, w.root);
     const f0 = tr.presence * Math.max(0, Math.min(1, w.life));
     const fade = f0 * f0 * (3 - 2 * f0);
     if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade * ((m.userData.baseOpacity as number | undefined) ?? 1); w.fade = fade; }
@@ -527,7 +541,7 @@ export class Stage {
       let p: BodyPose | undefined;
       for (let k = delay; k >= 0 && !p; k--) p = w.poses[(w.head - k + POSE_HIST * 4) % POSE_HIST];
       const cs = w.len ? this.fit(c.rig, c.def, w.len) : s;
-      if (p) c.rig.apply(p, t - delay / 30, c.def.idle?.tail ?? 0);
+      if (p) { c.rig.apply(p, t - delay / 30, c.def.idle?.tail ?? 0); c.rig.setHands(p, c.root); }
       const at = foot.clone().addScaledVector(back, c.row * height * 0.5).addScaledVector(side, fj * height * 0.55);
       c.root.position.copy(at).addScaledVector(g.n, up);
       c.root.scale.setScalar(cs);

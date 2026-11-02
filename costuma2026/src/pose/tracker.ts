@@ -11,6 +11,7 @@ import { inFrame } from './seen';
 import { fillLimbs, type LimbState } from './limbs';
 import { bodyFromFit, fitBody, newBodyFit, type BodyFit } from './body';
 import type { FaceTrack } from './face';
+import type { HandState } from './hands';
 import { CVBank } from './kalman';
 import { anchorTorsoShot, upright, type UprightState, type UprightVerdict } from './upright';
 
@@ -55,6 +56,8 @@ export interface Track {
   det: Detection | null;
   /** the face (pose/face.ts attachFaces): eyes, mouth, expressions */
   face?: FaceTrack;
+  /** the hands (pose/hands.ts attachHands): each one's frame, curls and how sure */
+  hands?: { L: HandState; R: HandState };
   /** the upright check's memory and its last verdict (pose/upright.ts) */
   up: UprightState;
   verdict: UprightVerdict;
@@ -469,7 +472,7 @@ export class Tracker {
   /**
    * The tracker's whole state as plain data (the debug recording keeps it at a clip's start, so a replay continues from
    * exactly where the phone's tracker stood): every track with its smoothing's memory, minus what lives outside the
-   * tracker (the face, read by pose/face.ts; this frame's detection) and the Kalman banks (off; not kept).
+   * tracker (the face and hands, read by pose/face.ts and pose/hands.ts; this frame's detection) and the Kalman banks (off; not kept).
    */
   snapshot(): { all: unknown[]; nextId: number; last: number } {
     const lm = (a: LM[]) => a.map((p) => ({ ...p }));
@@ -482,7 +485,7 @@ export class Tracker {
         body: { logS: t.body.logS, P: t.body.P, A: { ...t.body.A }, B: { ...t.body.B } },
         noise: t.noise ? { core: t.noise.core, limb: t.noise.limb, p1: t.noise.p1 && lm(t.noise.p1), p2: t.noise.p2 && lm(t.noise.p2), p3: t.noise.p3 && lm(t.noise.p3) } : undefined,
         limbs: t.limbs ? Object.fromEntries(Object.entries(t.limbs).map(([k, v]) => [k, { ...v }])) : undefined,
-        det: null, face: undefined, kf: null,
+        det: null, face: undefined, hands: undefined, kf: null,
       })),
     };
   }

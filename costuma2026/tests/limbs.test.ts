@@ -65,6 +65,21 @@ describe('limbs the picture is unsure of', () => {
     expect(l.knee).toBeGreaterThan(65);
   });
 
+  it('a raised hand whose elbow is below the frame lifts the arm (its two ends pin its middle)', () => {
+    const tr = new Tracker();
+    // close, the upper arm down and forward, the forearm up: the wrist in the picture, the elbow under its edge
+    const T = { x: 0.2, y: -0.75, z: -0.75 };
+    let t = 0;
+    const d = synthPerson({ T, dir: { armR: [-0.3, -0.9, 0.35], forearmR: [0.05, 1, 0.3] } }, K);
+    expect(d.image[L.elR]!.y).toBeGreaterThan(1.02);
+    expect(d.image[L.wrR]!.y).toBeLessThan(0.95);
+    for (let i = 0; i < 40; i++) tr.update([d], (t += 33), K);
+    const w = tr.tracks[0]!.world;
+    const fore = V(w[L.wrR]!).sub(V(w[L.elR]!)).normalize();
+    expect(fore.y).toBeGreaterThan(0.8);
+    expect(w[L.elR]!.b ?? 0).toBeGreaterThan(0.6);
+  });
+
   it('a standing person whose legs are hidden keeps standing', () => {
     const tr = new Tracker();
     const T = { x: 0, y: -0.2, z: -3 };

@@ -424,7 +424,8 @@ function addBroom(d: Dresser): void {
     t.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), lean);
     broom.add(t);
   }
-  d.at(broom, 'forearmR', 0, 0, 0);
+  // in her fist: it turns with her wrist
+  d.at(broom, d.bones.has('handR') ? 'handR' : 'forearmR', 0, 0, 0);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

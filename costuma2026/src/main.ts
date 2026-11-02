@@ -14,6 +14,7 @@ import { Beat } from './audio/beat';
 import { MetaLog, zip } from './capture/meta';
 import { Motion } from './platform/motion';
 import { FaceTracker, attachFaces, type FaceDet } from './pose/face';
+import { HandTracker, attachHands, HAND_BONES } from './pose/hands';
 import { LIGHT_TUNE } from './render/envlight';
 import { DEFAULT_CAST, ROSTER, byId } from './characters/roster';
 import { parseFace, type CharacterDef } from './characters/build';
@@ -46,7 +47,8 @@ stage.cloneCast = (wearerId, i) => settings.scene === 'party' && settings.partyC
 const beat = new Beat();
 const motion = new Motion();
 let faceTracker: FaceTracker | null = null;
-let lastFaceNow = -1;
+let handTracker: HandTracker | null = null;
+let lastFaceNow = -1, lastHandNow = -1;
 if (q.get('scene') === 'party' || q.get('scene') === 'costume') settings.scene = q.get('scene') as Settings['scene'];
 if (q.get('fx')) settings.effect = q.get('fx')!;
 if (q.get('googly')) settings.googly = q.get('googly') === '1';
@@ -386,6 +388,7 @@ function buildSettings(): void {
   row('Costumes in party mode', 'Behind you: you stay yourself, a pyramid of your costume dances behind you', seg<Settings['partyCostumes']>([['off', 'Off'], ['behind', 'Behind'], ['on', 'On you']], () => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
   row('Face tracking', 'Mouths open costumes and breathe sparks; googly eyes find your eyes', sw(() => settings.faces, (v) => { settings.faces = v; if (v) void loadFaces(); }));
   row('Mouth magic', 'Open your mouth: sparks', sw(() => settings.breath, (v) => { settings.breath = v; }));
+  row('Hand tracking', 'Costumes turn their wrists and curl their fingers with yours', sw(() => settings.hands, (v) => { settings.hands = v; if (v) void loadHands(); }));
   // Advanced: what tunes the tracking and what shows or records how it works
   const adv = document.createElement('details');
   adv.className = 'advanced';
@@ -423,7 +426,7 @@ function buildSettings(): void {
 
 /** the settings panel's own settings (the costume, the mode, the rotation, the effect and the lens's zoom are chosen
  *  elsewhere and stay) */
-const PANEL = ['people', 'size', 'occlusion', 'smoothing', 'poseConf', 'model', 'envLight', 'shadows', 'lens', 'music', 'partyCast', 'partyCostumes', 'faces', 'breath', 'debug', 'videoMeta', 'showDepth', 'showCutouts'] as const satisfies readonly (keyof Settings)[];
+const PANEL = ['people', 'size', 'occlusion', 'smoothing', 'poseConf', 'model', 'envLight', 'shadows', 'lens', 'music', 'partyCast', 'partyCostumes', 'faces', 'hands', 'breath', 'debug', 'videoMeta', 'showDepth', 'showCutouts'] as const satisfies readonly (keyof Settings)[];
 /** every panel setting back to its default, each applied as its own control would apply it */
 function resetSettings(): void {
   const was = { ...settings };
@@ -436,6 +439,7 @@ function resetSettings(): void {
   if (!settings.music) beat.stop();
   if (settings.partyCast !== was.partyCast) { overrides.clear(); mixed.clear(); if (settings.partyCast !== 'mix') ensureBuilt(settings.partyCast); }
   if (settings.faces) void loadFaces();
+  if (settings.hands) void loadHands();
   persist();
   buildSettings();
   toast('Settings back to their defaults', 1500);
@@ -688,13 +692,13 @@ function renderLens(): void {
   });
 }
 /** this frame's stages (ms of the main thread), for the debug recording: where a slow phone's frame goes */
-const ms = { detect: 0, face: 0, pose: 0, render: 0 };
+const ms = { detect: 0, face: 0, hand: 0, pose: 0, render: 0 };
 function loop(now: number): void {
   requestAnimationFrame(loop);
   if (!started) return;
   frame++;
   const tLoop = performance.now();
-  ms.detect = ms.face = ms.pose = ms.render = 0;
+  ms.detect = ms.face = ms.hand = ms.pose = ms.render = 0;
   const K = intrinsics();
   stage.layout(K, camera.mirrored && !SYNTH);
   let dets: Detection[] | null = null;
@@ -711,6 +715,7 @@ function loop(now: number): void {
   // (what the tracker is handed, as the debug recording keeps it for an exact replay: last frame's up, the People count)
   const upUsed = { x: stage.ground.n.x, y: stage.ground.n.y, z: stage.ground.n.z }, peopleUsed = settings.people;
   if (dets) tracker.update(dets.slice(0, settings.people), now, K, stage.ground.n);
+  let handDets: ReturnType<HandTracker['detect']> | null = null;
   // faces from the full-resolution frame, each read from a crop round a person's head (pose/face.ts)
   if (dets) {
     let faces: Map<number, FaceDet> | null = null;
@@ -719,6 +724,12 @@ function loop(now: number): void {
     ms.face = performance.now() - tF;
     attachFaces(tracker.tracks, faces, K, now, lastFaceNow < 0 ? 1 / 30 : Math.min(0.25, (now - lastFaceNow) / 1000));
     lastFaceNow = now;
+    // hands, each read from a crop round a wrist (pose/hands.ts), for the people whose costumes have hands
+    const tH = performance.now();
+    if (handTracker && settings.hands && !SYNTH) { try { handDets = handTracker.detect(video, tracker.tracks, K, (t) => byId(castOf(t.id)).hands !== false); } catch (e) { console.error(e); } }
+    ms.hand = performance.now() - tH;
+    attachHands(tracker.tracks, handDets, now, lastHandNow < 0 ? 1 / 30 : Math.min(0.25, (now - lastHandNow) / 1000));
+    lastHandNow = now;
     // headless runs set the faces by hand (?jaw=0..1, ?face=blinkL:1,smile:1,lookX:-0.5)
     if (SYNTH && (q.get('jaw') || q.get('face'))) for (const t of tracker.tracks) if (t.face) Object.assign(t.face, parseFace(q.get('face'), { jaw: Number(q.get('jaw') ?? 0) }));
   }
@@ -754,8 +765,9 @@ function loop(now: number): void {
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
   ms.pose = performance.now() - tP;
   // the debug recording: this camera frame's raw detections and what the tracker and the stage made of them
-  if (meta && dets) meta.frame(now, video.currentTime, dets, peopleUsed, tracker.tracks, K, upUsed, stage.ground, stage.wearersOut(), castOf);
+  if (meta && dets) meta.frame(now, video.currentTime, dets, peopleUsed, tracker.tracks, K, upUsed, stage.ground, stage.wearersOut(), castOf, handDets);
   stage.googlyOn = settings.googly && settings.faces;
+  stage.handsOn = settings.hands;
   stage.breathOn = settings.breath && settings.faces;
   stage.faces(tracker.tracks, K, dt);
   beat.update(dt, now);
@@ -894,6 +906,15 @@ function drawOverlay(): void {
     }
     octx.fillStyle = '#ff8a1f';
     for (const p of t.image) { if (p.v < 0.4) continue; const [x, y] = P(p); octx.beginPath(); octx.arc(x, y, 4, 0, Math.PI * 2); octx.fill(); }
+    // the hands as the hand model reads them (smoothed), as strong as it is trusted
+    for (const side of ['L', 'R'] as const) {
+      const hs = t.hands?.[side];
+      if (!hs?.pts || hs.trust < 0.05) continue;
+      octx.globalAlpha = t.presence * hs.trust;
+      octx.strokeStyle = '#ffd84a'; octx.lineWidth = 2;
+      for (const [a, b] of HAND_BONES) { const [ax, ay] = P(hs.pts[a]!), [bx, by] = P(hs.pts[b]!); octx.beginPath(); octx.moveTo(ax, ay); octx.lineTo(bx, by); octx.stroke(); }
+      octx.globalAlpha = t.presence;
+    }
     const s = screenOf(t);
     octx.fillStyle = '#fff'; octx.font = '600 14px system-ui';
     octx.fillText(`#${t.id} ${byId(castOf(t.id)).name} · ${(-t.T.z).toFixed(1)} m`, s.x - 40, s.y);
@@ -908,7 +929,7 @@ function readout(): void {
   el.textContent = [
     `build ${__BUILD__}`,
     `costumes ${stage.made} made (${stage.fromCache.size} from the phone's copy) · ${stage.building} to make · shaders ${stage.parallel ? 'compile in the background' : 'compile when first worn'}`,
-    `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'}`,
+    `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'} · hands ${handTracker ? handTracker.inferMs.toFixed(1) + ' ms' : settings.hands ? 'loading' : 'off'}`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `camera ${camera.describe()}`,
     `occlusion ${settings.occlusion} · cut-outs ${stage.depth.people} (on ${stage.depth.u.uOcclMasksOn.value.toFixed(2)}) · depth ${stage.depth.ready ? `${stage.depth.engine} · ${stage.depth.ms.toFixed(0)} ms${stage.depth.cal ? ` · 1/z = ${stage.depth.cal.a.toFixed(3)}·d + ${stage.depth.cal.b.toFixed(3)} (${stage.depth.cal.n} points)` : ' · not yet calibrated'} · on ${stage.depth.u.uOcclDepthOn.value.toFixed(2)}` : settings.occlusion === 'all' ? 'loading' : 'off'}`,
@@ -916,6 +937,10 @@ function readout(): void {
     ...tracker.tracks.filter((t) => !t.lost && t.face).map((t) => {
       const f = t.face!, e = new THREE.Euler().setFromQuaternion(f.head, 'YXZ'), d = (r: number) => Math.round(THREE.MathUtils.radToDeg(r));
       return `face ${t.id}: ${f.read ? 'read' : 'pose only'} · trust ${f.trust.toFixed(2)} · head yaw ${d(e.y)} nod ${d(e.x)} tilt ${d(e.z)} · jaw ${f.jaw.toFixed(2)} blink ${f.blinkL.toFixed(2)}/${f.blinkR.toFixed(2)} look ${f.lookX.toFixed(2)},${f.lookY.toFixed(2)}`;
+    }),
+    ...tracker.tracks.filter((t) => !t.lost && t.hands).map((t) => {
+      const h = (s: 'L' | 'R') => { const x = t.hands![s]; return `${s} ${x.trust > 0.5 ? 'read' : x.w > 0.05 ? 'pose' : '—'} ${x.w.toFixed(2)} curl ${x.curl.map((c) => c.toFixed(1)).join('/')}`; };
+      return `hands ${t.id}: ${h('L')} · ${h('R')}`;
     }),
     `pixels ×${stage.opts.pixelRatio.toFixed(2)} · shadows ${stage.opts.shadows ? 'on' : 'off'}`,
     `face light ${stage.light.faceConf > 0.05 ? `${stage.light.faceLum.toFixed(3)} from (${stage.light.faceDir.x.toFixed(2)}, ${stage.light.faceDir.y.toFixed(2)}) ×${stage.light.faceConf.toFixed(2)}` : '—'}`,
@@ -950,6 +975,13 @@ async function loadFaces(): Promise<void> {
   if (faceTracker || SYNTH || !settings.faces) return;
   const f = new FaceTracker();
   try { await f.load(); faceTracker = f; } catch (e) { console.warn('face model failed', e); }
+}
+
+/** the hand model, in the background after Start, as the face model is */
+async function loadHands(): Promise<void> {
+  if (handTracker || SYNTH || !settings.hands) return;
+  const h = new HandTracker();
+  try { await h.load(); handTracker = h; } catch (e) { console.warn('hand model failed', e); }
 }
 
 /** a stand-in room for camera-free test runs: a dim wall, a bright window to the left, a floor */
@@ -1005,6 +1037,7 @@ async function start(): Promise<void> {
     for (const d of rotation()) void stage.prepare(d.id);
     if (!TEST) for (const d of ROSTER) void stage.prepare(d.id);
     void loadFaces();
+    void loadHands();
     if (settings.occlusion === 'all' || settings.showDepth) void loadDepth();
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
@@ -1073,7 +1106,7 @@ function boot(): void {
   scrollablePicker($('picker'));
   requestAnimationFrame(loop);
   const w = window as unknown as { __costuma: unknown };
-  w.__costuma = { stage, tracker, settings, start, choose, party, beat, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, get mic() { return mic; }, LIGHT_TUNE, camera, intrinsics };
+  w.__costuma = { stage, tracker, settings, start, choose, party, beat, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, get mic() { return mic; }, get hands() { return handTracker; }, LIGHT_TUNE, camera, intrinsics };
   if (TEST && SYNTH) void start();
 }
 boot();

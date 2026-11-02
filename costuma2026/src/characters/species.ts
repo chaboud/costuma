@@ -54,7 +54,7 @@ export const VALKYRIE: CharacterDef = {
     const spear = new THREE.Group();
     spear.add(new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 17, 10), shaft));
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.42, 2.4, 10), steel); tip.position.y = 9.6; spear.add(tip);
-    d.at(spear, 'forearmR', -2.9, 11.0, 0.85);
+    d.at(spear, d.bones.has('handR') ? 'handR' : 'forearmR', -2.9, 11.0, 0.85);
     const shield = new THREE.Group();
     const disc = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.1, 0.3, 28), d.std({ color: 0x6b3fa0, roughness: 0.4, metalness: 0.3 }));
     disc.rotation.z = Math.PI / 2; shield.add(disc);
@@ -120,7 +120,7 @@ function mechDress(kind: 'bastion' | 'kestrel' | 'unison', glow: number) {
       sword.rotation.x = -0.95;
       const guard = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 3.0), gold); guard.position.y = -0.3; sword.add(guard);
       const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.6, 8), gold); grip.position.y = 0.6; sword.add(grip);
-      d.at(sword, 'forearmR', -4.75, 8.0, 2.1);
+      d.at(sword, d.bones.has('handR') ? 'handR' : 'forearmR', -4.75, 8.0, 2.1);
     }
   };
 }

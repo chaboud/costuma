@@ -4,8 +4,29 @@
 // +z forward (nose). No model file: the surface is ours, and it is measured
 // against nothing but the lab turntable (laser-kitty's cat-gen loop).
 
-/** `reach`: past this distance from its axis a segment weighs nothing (a leg must not take the belly with it) */
-export interface Seg { name: string; a: [number, number, number]; b: [number, number, number]; parent: string | null; reach?: number }
+/** `reach`: past this distance from its axis a segment weighs nothing (a leg must not take the belly with it); `as`: the
+ *  bone whose capture rule this one's skin is asked of (a hand takes only skin its forearm may: build.ts) */
+export interface Seg { name: string; a: [number, number, number]; b: [number, number, number]; parent: string | null; reach?: number; as?: string }
+
+/** how long a hand is against its forearm, by default (Crimson's palm and fingers run ~0.4 of his forearm past the wrist) */
+export const HAND_OF_FOREARM = 0.4;
+
+/**
+ * The segments with a hand on each forearm (handL, handR; founder, 2026-11-02: hand tracking): from the wrist (the
+ * forearm's far end) on along the forearm, `k` of its length — a straight wrist at rest — taking only skin its forearm
+ * may (`as`). Appended, so every other bone keeps its index; a set that has hands already is returned as it is.
+ */
+export function withHands(segs: Seg[], k = HAND_OF_FOREARM): Seg[] {
+  if (segs.some((s) => s.name.startsWith('hand'))) return segs;
+  const out = [...segs];
+  for (const side of ['L', 'R']) {
+    const f = segs.find((s) => s.name === 'forearm' + side);
+    if (!f) continue;
+    const d = [f.b[0] - f.a[0], f.b[1] - f.a[1], f.b[2] - f.a[2]];
+    out.push({ name: 'hand' + side, a: [...f.b], b: [f.b[0] + d[0]! * k, f.b[1] + d[1]! * k, f.b[2] + d[2]! * k], parent: f.name, as: f.name });
+  }
+  return out;
+}
 
 /**
  * A species' look (ADR-0016; the sim's half is sim/species.ts, by the same id), on the one skeleton: so every species

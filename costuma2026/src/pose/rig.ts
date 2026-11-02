@@ -10,9 +10,14 @@ import * as THREE from 'three';
 import type { LM } from './landmarks';
 import { L } from './landmarks';
 import type { Seg } from '../characters/sdf';
+import type { FingerCurl } from '../characters/curl';
 
 export type Limb = 'armL' | 'forearmL' | 'armR' | 'forearmR' | 'thighL' | 'shinL' | 'footL' | 'thighR' | 'shinR' | 'footR';
 export const LIMBS: Limb[] = ['armL', 'forearmL', 'armR', 'forearmR', 'thighL', 'shinL', 'footL', 'thighR', 'shinR', 'footR'];
+
+/** a hand (pose/hands.ts): its frame in camera axes (x across the knuckles, little finger → index; y wrist → middle
+ *  knuckle), how much to show it (0: a straight wrist), and its fingers' curls (thumb … little, 0 straight, 1 a fist) */
+export interface HandPose { q: THREE.Quaternion; w: number; curl: number[] }
 
 /** A pose in the character root's frame (camera axes: x right, y up, z toward the camera). */
 export interface BodyPose {
@@ -23,7 +28,16 @@ export interface BodyPose {
   neck: THREE.Vector3;
   dir: Record<Limb, THREE.Vector3>;
   vis: Record<Limb, number>;
+  hands?: Partial<Record<'L' | 'R', HandPose>>;
 }
+
+export const HAND_RIG = {
+  /** the wrist bends this far at most (degrees), eased toward it rather than stopped */
+  bendMax: 85,
+  /** the forearm takes this share of the hand's twist about it (a wrist turned by the forearm, as a person's is: all of
+   *  it at the wrist wrings the skin there) */
+  foreTwist: 0.5,
+};
 
 /** where a person's nose points relative to their ear line when looking level (radians, nose below the ears) */
 export const HEAD_PITCH = 0.32;
@@ -94,6 +108,13 @@ export class Rig {
   readonly len = new Map<string, number>();
   private readonly segs: Seg[];
 
+  /** each hand's rest frame in the model (x across the knuckles toward the index, y along the hand); null: no hand */
+  private readonly handRest: Record<'L' | 'R', THREE.Quaternion | null> = { L: null, R: null };
+  /** the twist given to each forearm for its hand last frame (taken off before the next apply) */
+  private readonly foreTwist = { L: 0, R: 0 };
+  /** the costume's fingers, where its hands curl (characters/curl.ts; the stage makes it per worn copy) */
+  curl: FingerCurl | null = null;
+
   constructor(segs: Seg[], bones: Map<string, THREE.Bone>) {
     this.segs = segs;
     this.bones = bones;
@@ -114,6 +135,15 @@ export class Rig {
       }
       canon ??= d.clone();
       this.rest.set(s.name, { dir: d, offset, pre: new THREE.Quaternion().setFromUnitVectors(d, canon), canon });
+    }
+    // a hand at rest hangs palm in, index forward (+z): across the knuckles is forward, square to the hand
+    for (const side of ['L', 'R'] as const) {
+      const r = this.rest.get('hand' + side);
+      if (!r || !bones.has('hand' + side)) continue;
+      const y = r.dir.clone(), x = new THREE.Vector3(0, 0, 1).addScaledVector(y, -y.z);
+      if (x.lengthSq() < 1e-6) x.set(1, 0, 0).addScaledVector(y, -y.x);
+      x.normalize();
+      this.handRest[side] = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, new THREE.Vector3().crossVectors(x, y)));
     }
     this.pelvisA = new THREE.Vector3(...get('pelvis').a);
     const tl = get('thighL').a, tr = get('thighR').a, al = get('armL').a, ar = get('armR').a;
@@ -192,6 +222,10 @@ export class Rig {
     if (hv < 1) headLocal.slerp(new THREE.Quaternion(), 1 - hv);
     this.set('head', headLocal, nk);
     for (const side of ['L', 'R'] as const) {
+      // last frame's twist for the hand off the forearm first (its glide starts from the forearm as the arm had it)
+      const fb = this.bones.get('forearm' + side);
+      if (fb && this.foreTwist[side]) fb.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(this.rest.get('forearm' + side)!.dir, -this.foreTwist[side]));
+      this.foreTwist[side] = 0;
       const arm = this.set('arm' + side, this.swing('arm' + side, s2, p.dir[`arm${side}`], smooth(0.35, 0.7, p.vis[`arm${side}`])), s2);
       this.set('forearm' + side, this.swing('forearm' + side, arm, p.dir[`forearm${side}`], smooth(0.35, 0.7, p.vis[`forearm${side}`])), arm);
       const th = this.set('thigh' + side, this.swing('thigh' + side, pel, p.dir[`thigh${side}`], smooth(0.4, 0.75, p.vis[`thigh${side}`])), pel);
@@ -205,6 +239,53 @@ export class Rig {
       const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.sin(t * 2.1 - i * 0.7) * tailAmp, Math.sin(t * 1.3 - i * 0.5) * tailAmp * 0.3));
       prev = this.set(name, q, i === 1 ? this.qm.get(this.segs.find((s) => s.name === 'tail1')?.parent ?? 'pelvis') ?? pel : prev);
     }
+  }
+
+  /**
+   * Turn the hands to `p.hands` (camera axes, as the root's frame), from wherever the forearms stand now: call after
+   * apply() and the reach (pose/reach.ts moves the forearms). The wrist's bend is eased toward HAND_RIG.bendMax; its
+   * twist about the forearm is shared with the forearm. A hand not given, or at w 0, hangs straight from its wrist.
+   */
+  setHands(p: BodyPose, root: THREE.Object3D): void {
+    const any = this.handRest.L || this.handRest.R;
+    if (!any) return;
+    root.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(root.matrixWorld).invert(), m = new THREE.Matrix4();
+    const pos = new THREE.Vector3(), scl = new THREE.Vector3(), F = new THREE.Quaternion();
+    const I = new THREE.Quaternion(), cap = THREE.MathUtils.degToRad(HAND_RIG.bendMax);
+    for (const side of ['L', 'R'] as const) {
+      const rest = this.handRest[side], hb = this.bones.get('hand' + side), fb = this.bones.get('forearm' + side);
+      if (!rest || !hb || !fb) continue;
+      const hp = p.hands?.[side], w = Math.max(0, Math.min(1, hp?.w ?? 0));
+      // the fingers as far as the hand is shown (unshown: as the costume was made)
+      this.curl?.set(side, (hp?.curl ?? [0, 0, 0, 0, 0]).map((c) => c * w));
+      if (!hp || w < 1e-3) { hb.quaternion.identity(); continue; }
+      // the forearm's turn in the root's frame, now
+      m.multiplyMatrices(inv, fb.matrixWorld).decompose(pos, F, scl);
+      // the hand's wanted turn in the root's frame, in the forearm's
+      const local = F.clone().invert().multiply(hp.q).multiply(rest.clone().invert());
+      // its twist about the hand's own rest direction, and the swing (the wrist's bend) that is left
+      const d = this.rest.get('hand' + side)!.dir;
+      const proj = d.x * local.x + d.y * local.y + d.z * local.z;
+      const twist = new THREE.Quaternion(d.x * proj, d.y * proj, d.z * proj, local.w);
+      if (twist.lengthSq() < 1e-12) twist.identity(); else twist.normalize();
+      const swing = local.clone().multiply(twist.clone().invert());
+      // the bend eased toward its limit: all of a bend well under it, bending smoothly toward it near
+      const ang = 2 * Math.acos(Math.min(1, Math.abs(swing.w)));
+      const take = 1 / Math.pow(1 + (ang / cap) ** 4, 0.25);
+      const bent = new THREE.Quaternion().slerpQuaternions(I, swing, take);
+      // the twist's angle about d (signed), a share of it to the forearm
+      let tw = 2 * Math.atan2(d.x * twist.x + d.y * twist.y + d.z * twist.z, twist.w);
+      if (tw > Math.PI) tw -= 2 * Math.PI; else if (tw < -Math.PI) tw += 2 * Math.PI;
+      const ft = tw * HAND_RIG.foreTwist * w;
+      const fq = new THREE.Quaternion().setFromAxisAngle(this.rest.get('forearm' + side)!.dir, ft);
+      fb.quaternion.multiply(fq);
+      this.foreTwist[side] = ft;
+      // what is left for the wrist: the bend, and the twist less the forearm's share
+      const want = fq.clone().invert().multiply(bent).multiply(twist);
+      hb.quaternion.slerpQuaternions(I, want, w);
+    }
+    root.updateMatrixWorld(true);
   }
 
   /** open the jaw by `angle` radians about its own x (positive: its tip goes down), and swing it sideways by `side`
@@ -243,6 +324,15 @@ export function demoPose(kind: string): BodyPose {
   if (kind === 'squat') {
     base.dir.thighL = v(0.35, -0.5, 1); base.dir.shinL = v(0.1, -1, -0.15); base.dir.thighR = v(-0.35, -0.5, 1); base.dir.shinR = v(-0.1, -1, -0.15);
     base.dir.armL = v(0.2, -0.2, 1); base.dir.forearmL = v(0.1, 0, 1); base.dir.armR = v(-0.2, -0.2, 1); base.dir.forearmR = v(-0.1, 0, 1);
+  }
+  // hands up: the right open, palm to the camera, fingers up; the left a fist, its wrist bent toward the camera
+  if (kind === 'hands' || kind === 'wrists') {
+    base.dir.armL = v(1, -0.25, 0.25); base.dir.forearmL = v(0.1, 1, 0.15); base.dir.armR = v(-1, -0.25, 0.25); base.dir.forearmR = v(-0.1, 1, 0.15);
+    const frame = (x: THREE.Vector3, y: THREE.Vector3) => { const yy = y.clone().normalize(), xx = x.clone().addScaledVector(yy, -x.dot(yy)).normalize(); return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xx, yy, new THREE.Vector3().crossVectors(xx, yy))); };
+    base.hands = kind === 'hands'
+      ? { R: { q: frame(v(1, 0, 0), v(-0.05, 1, 0)), w: 1, curl: [0, 0, 0, 0, 0] }, L: { q: frame(v(-1, 0, 0), v(0, 0.55, 0.85)), w: 1, curl: [1, 1, 1, 1, 1] } }
+      // the wrists bent and turned: the right hand's palm down, fingers forward; the left's back to the camera, bent out
+      : { R: { q: frame(v(1, 0, 0), v(0, 0.2, 1)), w: 1, curl: [0.2, 0.2, 0.2, 0.2, 0.2] }, L: { q: frame(v(1, 0, 0), v(0.7, 0.7, 0)), w: 1, curl: [0, 0.5, 0.5, 0.5, 0.5] } };
   }
   if (kind === 'turn') { base.pelvis = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.6, 0)); base.chest = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.9, 0)); base.head = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 1.1, 0)); }
   return base;

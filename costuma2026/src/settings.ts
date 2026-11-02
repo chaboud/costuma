@@ -36,6 +36,8 @@ export interface Settings {
   music: boolean;
   /** face tracking (mouths, eyes): a second model, ~4 MB, a few ms a frame */
   faces: boolean;
+  /** hand tracking (the costumes' wrists and fingers): a third model, ~8 MB, read from crops round the wrists */
+  hands: boolean;
   /** googly eyes on everyone (or their costumes) */
   googly: boolean;
   /** open mouths breathe sparks */
@@ -49,7 +51,7 @@ export interface Settings {
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, smoothing: 0.5, occlusion: 'off', videoMeta: false, showDepth: false, showCutouts: false, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, smoothing: 0.5, occlusion: 'off', videoMeta: false, showDepth: false, showCutouts: false, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, hands: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {

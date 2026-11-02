@@ -2,6 +2,7 @@
 // to show our support); species.ts keeps the Valkyrie's definition for Strollzilla's sake, unlisted. A character is data (build.ts CharacterDef): add one by writing its file and listing
 // it here and in ids.ts (a test holds the two equal).
 import type { CharacterDef } from './build';
+import { HAND_OF_FOREARM, withHands } from './sdf';
 import { JIMOTHY } from './jimothy';
 import { BUILDER } from './builder';
 import { SKELETON } from './skeleton';
@@ -15,11 +16,14 @@ import { MUMMY } from './mummy';
 import { VAMPIRE } from './vampire';
 import { WITCH } from './witch';
 
+/** a character with a hand bone on each forearm (sdf.ts withHands), unless it says it has none */
+const handed = (d: CharacterDef): CharacterDef => (d.hands === false ? d : { ...d, segs: withHands(d.segs, d.hands?.len ?? HAND_OF_FOREARM) });
+
 export const ROSTER: CharacterDef[] = [
   JIMOTHY, BUILDER, SKELETON, PUMPKIN, HOWLER, VIOLET, PLUME,
   // the rest: off by default, put into the rotation from "More characters"
   KAIJU, CATRINA, GHOST, MUMMY, VAMPIRE, WITCH, CRIMSON, BASTION, KESTREL, UNISON,
-];
+].map(handed);
 /** in the rotation (picker, mix, party dancers) unless the player says otherwise (founder, 2026-10-31) */
 export const DEFAULT_CAST = ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'];
 export const byId = (id: string): CharacterDef => ROSTER.find((d) => d.id === id) ?? ROSTER[0]!;

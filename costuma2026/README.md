@@ -337,6 +337,50 @@ in `src/main.ts`.
   eye-radius units — gravity from the floor's up, the eye's own acceleration
   (smoothed, with a dead zone so a still head does not buzz), rim bounces. The
   lab shows any face: `lab.html?c=<id>&focus=head&face=blinkL:1,lookX:0.8&jaw=0.6&head=20,0,10`.
+- **Hands** (`src/pose/hands.ts`, settings → Hand tracking, on by default;
+  founder, 2026-11-02: "Some of our characters have hands.. we should be doing
+  hand tracking", sign-language clips as the test material). MediaPipe
+  HandLandmarker (21 points a hand; `public/models/hand_landmarker.task`,
+  7.8 MB, loaded in the background after Start), read from a crop round each
+  wrist the pose model points at, as faces are — up to two crops a frame, the
+  longest-waiting first, 10 ms budget, only for costumes with hands. Measured
+  headless on two WLASL sign clips, one NSL clip and a yoga still
+  (`scripts/hand-probe.mjs`): the crop found the hand on every frame whose
+  wrist the pose model read as visible on the near clips (52/63, 40/40), its
+  wrist within 0.05 of the crop's side of the pose model's at the median; with
+  the clip shrunk to 0.4× (a far signer) 42 of 42 against 30 on the whole
+  frame; on the still, arms out and the hands small, the crops found both and
+  the whole frame neither. A hand is a frame (across the knuckles, along the
+  hand) and five curls (each finger's bends square to the knuckles' line, over
+  a fist's). Smoothed (slerp, EMA); between readings it rides the forearm;
+  unread for half a second it eases onto the pose model's own hand points for
+  which way it points (its twist kept: their twist was 90° off the hand
+  model's on a sign clip), and with none of those the wrist goes straight.
+  Every character has a hand bone on each forearm (`sdf.ts withHands`,
+  appended; `CharacterDef.hands`), which takes only skin its forearm may (the
+  capture rule asked as the forearm: no thigh by a hanging hand, a test). The
+  rig turns it after the reach (`rig.setHands`): exact within the wrist's
+  bend, eased toward 85°, its twist half taken by the forearm so the wrist
+  does not wring. Fingers: SDF hands (gloves, mittens, claws, the mechs'
+  blocks) bend past their knuckle line toward the palm in the vertex shader
+  before skinning (`characters/curl.ts`: each finger's curl by where a point
+  lies across the hand, never tighter than the hand is thick); Skelly's and
+  Catrina's bone hands are jointed (`characters/bonehand.ts`: each phalanx on
+  its own pivot, knuckle 80°, middle 100°, last 65° at a fist). The witch's
+  broom, Unison's sword and the scarecrow's straw ride the hand. The reach aims
+  a forearm at the hand model's wrist where it has one. The lab poses hands:
+  `lab.html?c=skeleton&pose=hands|wrists&focus=handL&curl=1`.
+  `scripts/hands-e2e.mjs <clip.y4m>` runs a clip through the app headless and
+  says how far each costume hand points from its reading (3–11° on the NSL
+  clip). Found on the way: Skelly's and Catrina's modelled hands had their
+  thumbs behind (a right hand on the left arm), unseen until a palm turned to
+  the camera; and a raised hand whose elbow lay under the frame's edge left
+  the costume's arm hanging, since the frame's edge zeroes the elbow — now a
+  limb whose two ends are seen trusts the model's 3D for its middle
+  (`limbs.ts LIMB_TUNE.chain`), and the reach aims a forearm at a seen wrist
+  whatever its elbow (`REACH_TUNE.chain`). Not measured: the hand model's ms on
+  a phone (headless CPU: ~80 ms a crop; the readout and the debug recording's
+  `hand` ms will say).
 - **Floor** (`src/pose/ground.ts`): the pyramids stand on a ground plane
   estimated the way phone AR does without depth hardware. Up is the phone's
   gravity (`platform/motion.ts`, iOS asks at Start) when it agrees with the
@@ -507,6 +551,8 @@ that means here, and where each lives:
 | Faces from a crop round each head | the face model on the whole frame | the whole frame lost faces past ~1 m (its detector sees 128 px); crops read them to ~3 m and name whose face it is; costs one face read per person (two a frame, 12 ms budget) |
 | EMA ×1.5, an upright prior, the costume pinned to the picture | a Kalman filter (founder's suggestion) | replayed over five recorded clips the Kalman filter lost to the slower EMA on error and jerk, and doubled the size's jumps on depth; pinning and the prior did the most (torso-shot shoulders 20–27 px off → 3–5) |
 | The head's turn from the face mesh | the pose model's ears and nose | measured: rolls within 1–2° against 7–13° off; profiles still fall back to the pose model |
+| Hands from a crop round each wrist, IMAGE mode | HandLandmarker on the whole frame (VIDEO mode, its own tracking) | the crop says whose hand and which; it found a far signer's hand on 42/42 frames against 30, and a yoga still's small hands where the whole frame found none; costs a palm detection each crop (two a frame, 10 ms budget) |
+| A finger curl bent in the vertex shader | finger bones in every character | one bend serves gloves, mittens, claws and blocks without re-rigging twelve characters; the two bone hands are jointed exactly |
 
 ## Things that bit already
 
@@ -572,6 +618,12 @@ phone" as this app means it.
 - **Does the focal guess (0.85 × long side) suit front and rear cameras?**
   Settle by: a costume that looks too flat/deep on a phone; adjust Lens, note
   the value per camera.
+
+- **What do the hands cost on a phone, and do they hold?** Settle by: a debug
+  recording (Video metadata on) waving and signing at arm's length: the
+  ticks' `hand` ms (if a frame's hand reading passes ~10 ms at the median,
+  read one crop a frame), and in the log each hand's `trust` (how often the
+  hand model reads it) against the frames where the wrist is in sight.
 
 Not verified yet: anything on a real phone (frame rate, GPU delegate on iOS
 Safari, recording mime on iOS, share sheet).

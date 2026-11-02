@@ -23,6 +23,8 @@ export const REACH_TUNE = {
   visFrom: 0.5, visTo: 0.8,
   /** at most this turn (radians) away from the retarget in a frame: a garbage landmark cannot fling a limb */
   maxTurn: THREE.MathUtils.degToRad(120),
+  /** a forearm's (or shin's) reach where its elbow (knee) is not seen, at most: as far as the shoulder (hip) is */
+  chain: 0.85,
 };
 
 /** each limb: its bones from the body outward, the landmark each bone's far end should land on, and where it starts */
@@ -71,7 +73,10 @@ export function reachLimbs(rig: Rig, root: THREE.Object3D, image: LM[], K: Intri
       const name = ch.bones[k]!, b = rig.bones.get(name);
       if (!b || !b.parent) continue;
       const end = image[ch.ends[k]!]!, from = image[k === 0 ? ch.start : ch.ends[0]!]!;
-      const w = T.strength * smooth(T.visFrom, T.visTo, end.v) * smooth(T.visFrom, T.visTo, from.v);
+      // a forearm or shin aims from the costume's own elbow or knee: a seen wrist or ankle is reached for even where its
+      // elbow or knee is not seen (below the frame's edge), as far as the limb's root is seen
+      const fromW = Math.max(smooth(T.visFrom, T.visTo, from.v), k === 1 ? T.chain * smooth(T.visFrom, T.visTo, image[ch.start]!.v) : 0);
+      const w = T.strength * smooth(T.visFrom, T.visTo, end.v) * fromW;
       const { o, parent } = frame(b);
       const tip = tipOf(name, k === 0 ? ch.bones[1]! : null);
       const len = tip.distanceTo(o);

@@ -1,11 +1,12 @@
 // The turntable: one character, one demo pose, one view, under a neutral studio light. The modelling loop's eye
-// (scripts/lab-shots.mjs shoots it). ?c=<id> ?pose=rest|tpose|wave|cheer|squat|turn ?yaw=<deg> ?pitch=<deg> ?res=<n>
-// ?w= ?h= ?zoom=<k> ?focus=head|body ?bg=<hex> ?thumb=1 (transparent, framed for the picker)
+// (scripts/lab-shots.mjs shoots it). ?c=<id> ?pose=rest|tpose|wave|cheer|squat|turn|hands|wrists ?yaw=<deg> ?pitch=<deg> ?res=<n>
+// ?w= ?h= ?zoom=<k> ?focus=head|body|handL|handR ?bg=<hex> ?thumb=1 (transparent, framed for the picker)
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { ROSTER } from './characters/roster';
 import { buildCharacter, parseFace } from './characters/build';
 import { Rig, demoPose } from './pose/rig';
+import { FingerCurl } from './characters/curl';
 import { driveFaceField, wearFaceField } from './render/facemap';
 import { CONTROLS } from './pose/facegeo';
 
@@ -56,6 +57,11 @@ const s = 0.1;
 built.root.scale.setScalar(s);
 built.root.position.set(0, rig.hipRest.y * s, 0);
 scene.add(built.root);
+// the hands turned as the pose says (?pose=hands|wrists), from the forearms as they stand, the fingers curled
+// (?curl=0..1 every finger, over the pose's)
+if (def.hands !== false && def.hands?.fist !== 0) { const c = new FingerCurl(built.root, def.segs, def.hands ?? {}); if (c.active) rig.curl = c; }
+if (q.get('curl') && pose.hands) for (const h of Object.values(pose.hands)) h.curl = h.curl.map(() => Number(q.get('curl')));
+rig.setHands(pose, built.root);
 // ?ctl=mouthL:0,0.08,0;browInR:0,0.06,0 — the wearer's face movement (outer-eye-corner spans) carried onto the costume's
 // face (render/facemap.ts); ?ctl=smile|scowl|o|raise for a few made ones
 {
@@ -83,10 +89,18 @@ scene.add(built.root);
 const yaw = THREE.MathUtils.degToRad(Number(q.get('yaw') ?? 0)), pitch = THREE.MathUtils.degToRad(Number(q.get('pitch') ?? 6));
 const zoom = Number(q.get('zoom') ?? 1);
 const focusHead = q.get('focus') === 'head' || thumb;
-const target = new THREE.Vector3(0, thumb ? 1.5 : focusHead ? 1.45 : 1.0, 0);
-const dist = (thumb ? 1.75 : focusHead ? 2.0 : 4.6) / zoom;
+// ?focus=handL|handR: one hand framed close (its wrist, a little on toward the fingers)
+const focusHand = /^hand[LR]$/.test(q.get('focus') ?? '') ? q.get('focus')! : null;
+built.root.updateMatrixWorld(true);
+const handAt = (n: string) => {
+  const b = built.bones.get(n) ?? built.bones.get(n.replace('hand', 'forearm'))!;
+  const r = rig.rest.get(b.name)!, l = rig.len.get(b.name) ?? 0;
+  return r.dir.clone().multiplyScalar(b.name.startsWith('hand') ? l * 0.6 : l).applyMatrix4(b.matrixWorld);
+};
+const target = focusHand ? handAt(focusHand) : new THREE.Vector3(0, thumb ? 1.5 : focusHead ? 1.45 : 1.0, 0);
+const dist = (thumb ? 1.75 : focusHead ? 2.0 : focusHand ? 1.1 : 4.6) / zoom;
 const camera = new THREE.PerspectiveCamera(32, W / H, 0.05, 50);
-camera.position.set(Math.sin(yaw) * Math.cos(pitch) * dist, target.y + Math.sin(pitch) * dist, Math.cos(yaw) * Math.cos(pitch) * dist);
+camera.position.set(target.x + Math.sin(yaw) * Math.cos(pitch) * dist, target.y + Math.sin(pitch) * dist, target.z + Math.cos(yaw) * Math.cos(pitch) * dist);
 camera.lookAt(target);
 renderer.render(scene, camera);
 let tris = 0;

@@ -6,6 +6,7 @@
 // Frame: metres for a 20-unit-tall figure standing on y = 0, x to its left, y up, +z forward (its nose) — the
 // Strollzilla frame. The stage scales the whole thing down to the wearer.
 import type { ClothPart } from './cloth';
+import type { HandShape } from './curl';
 import * as THREE from 'three';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import type { Seg } from './sdf';
@@ -61,6 +62,10 @@ export interface CharacterDef {
   idle?: { tail?: number };
   /** cloth that swings with the body's motion: hems, shawls, hair (cloth.ts) */
   cloth?: ClothPart[];
+  /** its hands (rig hand bones, turned by hand tracking: pose/hands.ts): false for none (wings, sleeves with nothing in
+   *  them); `len` how long a hand is against its forearm (sdf.ts HAND_OF_FOREARM by default); the rest, its shape for
+   *  the fingers' curl (curl.ts HandShape; `fist: 0` for hands that do not curl) */
+  hands?: false | (Partial<HandShape> & { len?: number });
   /** marching-cubes grid; more is finer and slower to build */
   res?: number;
   /** strands of fur layers (when body.fur) */
@@ -197,14 +202,15 @@ export function surfaceArrays(body: Body, segs: Seg[], res: number): SurfaceArra
     for (let v = 0; v < count; v++) aFur[v] = body.furLen ? body.furLen(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!) : 1;
   }
   const idx = new Uint16Array(count * 4), wts = new Float32Array(count * 4);
-  const segList = segs.map((sg, i) => ({ i, a: sg.a, b: sg.b, reach: sg.reach ?? Infinity, name: sg.name }));
+  // a bone with `as` (a hand) is asked the capture rule as that bone (its forearm): it takes only skin its forearm may
+  const segList = segs.map((sg, i) => ({ i, a: sg.a, b: sg.b, reach: sg.reach ?? Infinity, name: sg.name, ask: sg.as ? segs.find((q) => q.name === sg.as) ?? sg : sg }));
   const takes = body.capture;
   const mode = body.weights ?? 'sharp';
   for (let v = 0; v < count; v++) {
     const x = pos[v * 3]!, y = pos[v * 3 + 1]!, z = pos[v * 3 + 2]!;
     let d0 = Infinity, d1 = Infinity, i0 = 0, i1 = 0;
     for (const sg of segList) {
-      if (takes && !takes(sg, x, y, z)) continue;
+      if (takes && !takes(sg.ask, x, y, z)) continue;
       const bax = sg.b[0] - sg.a[0], bay = sg.b[1] - sg.a[1], baz = sg.b[2] - sg.a[2];
       const pax = x - sg.a[0], pay = y - sg.a[1], paz = z - sg.a[2];
       const t = Math.max(0, Math.min(1, (pax * bax + pay * bay + paz * baz) / (bax * bax + bay * bay + baz * baz || 1)));
