@@ -16,7 +16,7 @@ import { FaceTracker, attachFaces, type FaceDet } from './pose/face';
 import { LIGHT_TUNE } from './render/envlight';
 import { DEFAULT_CAST, ROSTER, byId } from './characters/roster';
 import { parseFace, type CharacterDef } from './characters/build';
-import { loadSettings, saveSettings, type Settings } from './settings';
+import { DEFAULTS, loadSettings, saveSettings, type Settings } from './settings';
 import { ICONS } from './ui/icons';
 import { pageUrl, qrSvg } from './ui/qr';
 import { canShareFile, recorderMime, saveFile, shareFile } from './ui/share';
@@ -366,7 +366,7 @@ function buildSettings(): void {
   row('Light from the camera', 'The costume is lit by the room it stands in', sw(() => settings.envLight, (v) => { settings.envLight = v; stage.opts.envLight = v; }));
   row('Shadows', 'Off is faster on older phones', sw(() => settings.shadows, (v) => { settings.shadows = v; stage.opts.shadows = v; }));
   row('Lens', 'If costumes look too flat or too deep', range(0.55, 1.3, 0.01, () => settings.lens, (v) => { settings.lens = v; }));
-  row('React to the music', 'Listens through the microphone for the beat; clips record the sound', sw(() => settings.music, (v) => {
+  row('React to the music', 'Listens through the microphone for the beat', sw(() => settings.music, (v) => {
     settings.music = v;
     if (v) beat.start().then(() => toast('Listening for the beat', 1200)).catch(() => { settings.music = false; persist(); toast('No microphone'); });
     else beat.stop();
@@ -384,6 +384,42 @@ function buildSettings(): void {
   row('Face tracking', 'Mouths open costumes and breathe sparks; googly eyes find your eyes', sw(() => settings.faces, (v) => { settings.faces = v; if (v) void loadFaces(); }));
   row('Mouth magic', 'Open your mouth: sparks', sw(() => settings.breath, (v) => { settings.breath = v; }));
   row('Show the skeleton', 'What the pose tracker sees', sw(() => settings.debug, (v) => { settings.debug = v; }));
+  // everything above back to its default; a second tap within three seconds does it (one stray tap must not)
+  const reset = document.createElement('button');
+  reset.id = 'btn-reset';
+  reset.className = 'secondary reset';
+  reset.textContent = 'Reset to defaults';
+  let armed = -1e9;
+  reset.onclick = () => {
+    if (performance.now() - armed > 3000) {
+      armed = performance.now();
+      reset.textContent = 'Tap again to reset';
+      setTimeout(() => { if (performance.now() - armed >= 2900) reset.textContent = 'Reset to defaults'; }, 3000);
+      return;
+    }
+    resetSettings();
+  };
+  body.appendChild(reset);
+}
+
+/** the settings panel's own settings (the costume, the mode, the rotation, the effect and the lens's zoom are chosen
+ *  elsewhere and stay) */
+const PANEL = ['people', 'size', 'occlusion', 'smoothing', 'poseConf', 'model', 'envLight', 'shadows', 'lens', 'music', 'partyCast', 'partyCostumes', 'faces', 'breath', 'debug'] as const satisfies readonly (keyof Settings)[];
+/** every panel setting back to its default, each applied as its own control would apply it */
+function resetSettings(): void {
+  const was = { ...settings };
+  for (const k of PANEL) (settings as unknown as Record<string, unknown>)[k] = DEFAULTS[k];
+  stage.opts.size = settings.size; stage.opts.shadows = settings.shadows; stage.opts.envLight = settings.envLight;
+  setSmoothing(settings.smoothing);
+  void detector?.setOptions({ numPoses: settings.people, conf: settings.poseConf, masks: masksWanted() });
+  if (settings.model !== was.model) void reloadDetector();
+  if (settings.occlusion === 'all') void loadDepth();
+  if (!settings.music) beat.stop();
+  if (settings.partyCast !== was.partyCast) { overrides.clear(); mixed.clear(); if (settings.partyCast !== 'mix') ensureBuilt(settings.partyCast); }
+  if (settings.faces) void loadFaces();
+  persist();
+  buildSettings();
+  toast('Settings back to their defaults', 1500);
 }
 
 // ── capture ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -429,31 +465,69 @@ let shareHinted = false;
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 
 let recorder: MediaRecorder | null = null;
+let recStarting = false;
 let recTimer = 0;
-function toggleRecording(): void {
+/** a microphone opened for one clip (the music's, when it listens, is shared instead), closed when the clip ends */
+let clipMic: MediaStream | null = null;
+let micRefusedSaid = false; // the first silent clip of a session says why; the rest just record
+/** the sound for a clip: the music listener's microphone if it is open, else one opened now (processing off, as the
+ *  beat's: echo cancellation and noise suppression flatten music); none if the player refuses it */
+async function clipSound(): Promise<MediaStreamTrack[]> {
+  const live = beat.stream?.getAudioTracks().filter((t) => t.readyState === 'live') ?? [];
+  if (live.length) return live;
+  if (!navigator.mediaDevices?.getUserMedia) return [];
+  try {
+    clipMic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    return clipMic.getAudioTracks();
+  } catch (e) {
+    console.warn('no microphone for the clip', e);
+    return [];
+  }
+}
+function closeClipMic(): void {
+  for (const t of clipMic?.getTracks() ?? []) t.stop();
+  clipMic = null;
+}
+async function toggleRecording(): Promise<void> {
   const btn = $('btn-rec');
   if (recorder) { recorder.stop(); return; }
-  const mime = recorderMime();
+  if (recStarting) return;
   const cs = (canvas as HTMLCanvasElement & { captureStream?: (fps: number) => MediaStream }).captureStream;
-  if (!mime || !cs) { toast('Recording is not supported in this browser'); return; }
-  const chunks: Blob[] = [];
+  if (!recorderMime() || !cs) { toast('Recording is not supported in this browser'); return; }
+  recStarting = true;
+  btn.classList.add('on'); btn.innerHTML = ICONS.stop;
+  // the clip carries the sound: the microphone (asked for the first time here; the shutter's tap is the gesture)
+  const sound = SYNTH && !q.get('mic') ? [] : await clipSound();
+  // said in the recording's own toast (a toast of its own was covered by it at once)
+  let note = 'Recording — tap to stop';
+  if (!sound.length && (!SYNTH || q.get('mic')) && !micRefusedSaid) { micRefusedSaid = true; note = 'Recording without sound (no microphone) — tap to stop'; }
   const stream = cs.call(canvas, 30);
-  // with the music on, the clip carries the sound the beat was taken from
-  for (const t of beat.stream?.getAudioTracks() ?? []) stream.addTrack(t);
-  const r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  for (const t of sound) stream.addTrack(t);
+  let mime = recorderMime(sound.length > 0)!, r: MediaRecorder;
+  try { r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 }); } catch (e) {
+    // a browser that will not record this sound: the picture alone, said so
+    console.warn('recording with sound refused', e);
+    for (const t of stream.getAudioTracks()) stream.removeTrack(t);
+    closeClipMic();
+    mime = recorderMime(false)!;
+    r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    note = 'Recording without sound (this browser) — tap to stop';
+  }
+  const chunks: Blob[] = [];
   r.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   r.onstop = () => {
     clearTimeout(recTimer);
     recorder = null;
+    closeClipMic();
     btn.classList.remove('on'); btn.innerHTML = ICONS.rec;
     const type = mime.split(';')[0]!;
     void captured(new Blob(chunks, { type }), `costuma-${stamp()}.${type.includes('mp4') ? 'mp4' : 'webm'}`);
   };
   r.start(250);
   recorder = r;
-  btn.classList.add('on'); btn.innerHTML = ICONS.stop;
+  recStarting = false;
   recTimer = window.setTimeout(() => r.state === 'recording' && r.stop(), 20000);
-  toast('Recording — tap to stop', 1200);
+  toast(note, note.includes('without') ? 2600 : 1200);
 }
 
 // ── the controls fade when left alone ──────────────────────────────────────────────────────────────────────────────

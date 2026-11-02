@@ -36,7 +36,7 @@ LEGS=a.json npx vitest run scripts/legs-sim.test.ts   # legs the frame cuts off:
 BODY=a.json,b.json npx vitest run scripts/body-sim.test.ts   # sizing by shot: the fitted torso, how much it moves, the costume's shoulders against the person's, hips seen vs out (DRIFT=)
 STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
 OCCL=people|all node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion on a frozen frame: on, off, people alone (all), the cut-outs, the depth map (MIN= people in view first)
-node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill
+node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill; a clip's sound (ffprobe), refused; reset to defaults
 ```
 
 Make a test clip from any photo: `ffmpeg -loop 1 -i photo.jpg -t 3 -r 15 -pix_fmt yuv420p clip.y4m`.
@@ -327,6 +327,21 @@ in `src/main.ts`.
   to Photos". Elsewhere the preview: Save downloads, Share is the sheet.
   `scripts/capture-check.mjs` checks both paths with the sheet stubbed; whether
   Safari honours the shutter's tap after the photo is encoded is not known.
+  A clip carries the microphone's sound (founder, 2026-11-02): the music
+  listener's microphone when it is open, else one opened for the clip (asked the
+  first time, on the shutter's tap; processing off, as the beat's, so music
+  survives) and closed when it ends. Recorded as H.264 with AAC where the
+  browser has it (iOS Safari), else H.264 with Opus, else the browser's own
+  types. A refused microphone, or a browser that will not record sound with the
+  picture, still makes the clip, silent, and the recording's toast says why.
+  Checked headless: an H.264 + Opus mp4 read back by ffprobe with both streams;
+  refused, H.264 alone. Not checked on a phone.
+- **Reset to defaults** (settings, at the bottom): a first tap arms it ("Tap
+  again to reset", three seconds), the second puts every setting on the panel
+  back and applies each as its own control would (the detector's options, the
+  pose model, smoothing, the microphone, the dancers); the costume, the mode,
+  the rotation, the effect and the lens's zoom are chosen elsewhere and stay.
+  Checked headless (`scripts/capture-check.mjs`).
 - **Stage** (`src/render/stage.ts`): the video is a full-screen background,
   cover-fitted; a selfie mirrors the whole world group (`scale.x = −1`), not
   the data — mirrored landmarks would describe a different-handed person.

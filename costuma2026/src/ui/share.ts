@@ -37,9 +37,14 @@ export function saveFile(blob: Blob, name: string): void {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 }
-/** mp4 first: iOS Safari cannot record webm */
-export function recorderMime(): string | undefined {
+/** mp4 first: iOS Safari cannot record webm. With sound, a type that names a sound codec too (one naming the picture's
+ *  alone may drop the sound, or refuse a stream that has it) */
+export function recorderMime(audio = false): string | undefined {
   const MR = (window as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder;
   if (!MR) return undefined;
-  return ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((m) => MR.isTypeSupported(m));
+  // H.264 with AAC (iOS Safari; Chrome where it has an AAC encoder), else H.264 with Opus (Playwright's Chromium has no AAC:
+  // the plain type gave VP9 and Opus in an mp4, which some galleries will not play)
+  const withSound = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4;codecs=avc1,opus', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+  const silent = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  return (audio ? withSound : silent).find((m) => MR.isTypeSupported(m));
 }

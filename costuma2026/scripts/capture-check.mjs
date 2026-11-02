@@ -2,11 +2,17 @@
 //  - as an iPhone (its user agent; a share sheet that records what it was handed): a photo goes straight to the sheet
 //    with the file alone; when the sheet refuses (no recent tap), the preview opens with "Save to Photos";
 //  - a camera that says it zooms 0.5–10× (Chrome's fake camera, its track's capabilities patched): the pill shows
-//    .5 1× 2 3 5, a tap zooms the track and the focal length follows.
+//    .5 1× 2 3 5, a tap zooms the track and the focal length follows;
+//  - a clip carries the microphone's sound (Chromium's fake microphone: a beep), read back with ffprobe; with the
+//    microphone refused, the clip is still made, silent, and the player is told;
+//  - settings → Reset to defaults: one tap only arms it, the second puts every panel setting back and applies it.
 // Prints what it saw; exit 1 on a failure.   node scripts/capture-check.mjs <any.y4m>     (npm run build first)
 import { createRequire } from 'node:module';
 import { serveBuild } from './serve.mjs';
 import path from 'node:path';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 const { chromium } = createRequire(import.meta.url)('playwright');
 
 const clip = path.resolve(process.argv[2] ?? '');
@@ -84,6 +90,73 @@ const wake = (page) => page.evaluate(() => document.body.dispatchEvent(new Point
   check(after.pill === '.5× 1 2 3 5' && after.saved.environment === 0.5, 'the pill marks .5× and the setting keeps it');
   await browser.close();
 }
+// ── clips carry sound ──
+/** record a clip of about `secs` seconds with the shutter (desktop: it opens in the preview); its streams by ffprobe */
+async function recordClip(page, secs) {
+  await wake(page); await page.waitForTimeout(200);
+  await page.evaluate(() => document.getElementById('btn-rec').click());
+  await page.waitForTimeout(secs * 1000);
+  await wake(page); await page.waitForTimeout(200);
+  await page.evaluate(() => document.getElementById('btn-rec').click());
+  await page.waitForFunction(() => !document.getElementById('preview').classList.contains('hidden'), null, { timeout: 120000, polling: 250 });
+  const got = await page.evaluate(async () => {
+    const v = document.querySelector('#preview-media video'), b = await (await fetch(v.src)).blob();
+    const bytes = new Uint8Array(await b.arrayBuffer());
+    let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return { type: b.type, b64: btoa(s), toast: document.getElementById('toast').textContent };
+  });
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'clip-')), `clip.${got.type.includes('mp4') ? 'mp4' : 'webm'}`);
+  writeFileSync(file, Buffer.from(got.b64, 'base64'));
+  const streams = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name', '-of', 'csv=p=0', file]).toString().trim().split('\n');
+  return { type: got.type, streams, toast: got.toast };
+}
+for (const refuse of [false, true]) {
+  const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['camera', 'microphone'] });
+  if (refuse) await ctx.addInitScript(() => {
+    const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = (c) => (c?.audio ? Promise.reject(new DOMException('denied', 'NotAllowedError')) : gum(c));
+  });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.log('pageerror', e.message));
+  await page.goto(`${server.url}index.html?test=1&synth=1&mic=1&c=skeleton`);
+  await page.waitForFunction(() => window.__costuma?.started && window.__costuma.frame > 3, null, { timeout: 300000, polling: 500 });
+  const clip = await recordClip(page, 3);
+  console.log(JSON.stringify({ refuse, type: clip.type, streams: clip.streams, toast: clip.toast }));
+  if (!refuse) check(clip.streams.some((x) => x.endsWith('video')) && clip.streams.some((x) => x.endsWith('audio')), `a clip carries the picture and the sound (${clip.streams.join(' + ')})`);
+  else check(clip.streams.some((x) => x.endsWith('video')) && !clip.streams.some((x) => x.endsWith('audio')) && /without sound/.test(clip.toast), 'the microphone refused: the clip is made, silent, and the player is told');
+  await browser.close();
+}
+
+// ── reset to defaults ──
+{
+  const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  // a player who changed things: three people, steady, no shadows, a smaller costume, the lite model, the skeleton shown
+  await ctx.addInitScript(() => { if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); localStorage.setItem('costuma26.settings', JSON.stringify({ people: 3, smoothing: 0.9, shadows: false, size: 0.9, model: 'lite', debug: true, costume: 'pumpkin', v: 7 })); } });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.log('pageerror', e.message));
+  await page.goto(`${server.url}index.html?test=1&synth=1`);
+  await page.waitForFunction(() => window.__costuma?.started && window.__costuma.frame > 3, null, { timeout: 300000, polling: 500 });
+  await wake(page); await page.waitForTimeout(200);
+  await page.evaluate(() => document.getElementById('btn-gear').click());
+  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('costuma26.settings')));
+  await page.evaluate(() => document.getElementById('btn-reset').click());
+  const once = { s: await stored(), label: await page.evaluate(() => document.getElementById('btn-reset').textContent) };
+  check(once.s.people === 3 && once.s.smoothing === 0.9 && once.label === 'Tap again to reset', 'one tap only arms the reset');
+  await page.evaluate(() => document.getElementById('btn-reset').click());
+  const after = await stored(), ui = await page.evaluate(() => ({
+    people: document.querySelector('#settings-body .seg button.on')?.textContent,
+    debug: [...document.querySelectorAll('#settings-body .set')].find((d) => /skeleton/.test(d.textContent))?.querySelector('input').checked,
+    shadows: window.__costuma.stage.opts.shadows, size: window.__costuma.stage.opts.size, toast: document.getElementById('toast').textContent,
+  }));
+  console.log(JSON.stringify({ after: { people: after.people, smoothing: after.smoothing, shadows: after.shadows, size: after.size, model: after.model, debug: after.debug, costume: after.costume }, ui }));
+  check(after.people === 2 && after.smoothing === 0.5 && after.shadows === true && after.size === 1 && after.model === 'full' && after.debug === false, 'the second tap puts the panel\'s settings back');
+  check(ui.people === '2' && ui.debug === false && ui.shadows === true && ui.size === 1 && /defaults/.test(ui.toast), 'the panel shows them, the stage takes them, the player is told');
+  check(after.costume === 'pumpkin', 'what is chosen outside the panel (the costume) stays');
+  await browser.close();
+}
+
 await server.close();
 console.log(fails.length ? `${fails.length} failed` : 'all ok');
 process.exit(fails.length ? 1 : 0);
