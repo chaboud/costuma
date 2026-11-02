@@ -409,4 +409,34 @@ export class Tracker {
   }
 
   clear(): void { this.tracks = []; this.all = []; this.last = -1; }
+
+  /**
+   * The tracker's whole state as plain data (the debug recording keeps it at a clip's start, so a replay continues from
+   * exactly where the phone's tracker stood): every track with its smoothing's memory, minus what lives outside the
+   * tracker (the face, read by pose/face.ts; this frame's detection) and the Kalman banks (off; not kept).
+   */
+  snapshot(): { all: unknown[]; nextId: number; last: number } {
+    const lm = (a: LM[]) => a.map((p) => ({ ...p }));
+    return {
+      nextId: this.nextId, last: this.last,
+      all: this.all.map((t) => ({
+        ...t, image: lm(t.image), world: lm(t.world), wsm: lm(t.wsm), wh: lm(t.wh), ism: lm(t.ism), T: { ...t.T }, len: { ...t.len },
+        vel: t.vel ? { world: Array.from(t.vel.world), image: Array.from(t.vel.image), z: t.vel.z } : undefined,
+        cm: t.cm ? { ...t.cm } : undefined, up: { ...t.up },
+        body: { logS: t.body.logS, P: t.body.P, A: { ...t.body.A }, B: { ...t.body.B } },
+        det: null, face: undefined, kf: null,
+      })),
+    };
+  }
+
+  /** back to a snapshot's state (a replay's start) */
+  restore(s: { all: unknown[]; nextId: number; last: number }): void {
+    this.nextId = s.nextId; this.last = s.last;
+    this.all = (s.all as (Track & { vel?: { world: number[]; image: number[]; z: number } })[]).map((t) => ({
+      ...t,
+      vel: t.vel ? { world: Float64Array.from(t.vel.world), image: Float64Array.from(t.vel.image), z: t.vel.z } : undefined,
+      det: null, kf: null,
+    }) as Track);
+    this.tracks = this.all.filter((t) => t.hits >= TUNE.confirm);
+  }
 }

@@ -11,6 +11,7 @@ import { BONES, L } from './pose/landmarks';
 import { BG_VERT, Stage } from './render/stage';
 import { PRESETS, Party } from './render/party';
 import { Beat } from './audio/beat';
+import { MetaLog, zip } from './capture/meta';
 import { Motion } from './platform/motion';
 import { FaceTracker, attachFaces, type FaceDet } from './pose/face';
 import { LIGHT_TUNE } from './render/envlight';
@@ -315,9 +316,13 @@ $('btn-share-link').onclick = async () => {
   else { try { await navigator.clipboard.writeText(pageUrl()); toast('Link copied'); } catch { toast(pageUrl()); } }
 };
 
+/** whether the Advanced section was left open (the panel is rebuilt each time it opens) */
+let advancedOpen = false;
 function buildSettings(): void {
   const body = $('settings-body');
   body.innerHTML = '';
+  // rows go into the panel, or into the Advanced section once it is open for them
+  let into: HTMLElement = body;
   const row = (label: string, note: string, control: HTMLElement) => {
     const d = document.createElement('div');
     d.className = 'set';
@@ -327,7 +332,7 @@ function buildSettings(): void {
     if (note) { const s = document.createElement('small'); s.textContent = note; span.appendChild(s); }
     l.append(span, control);
     d.appendChild(l);
-    body.appendChild(d);
+    into.appendChild(d);
   };
   const seg = <T extends string | number>(opts: [T, string][], get: () => T, set: (v: T) => void) => {
     const s = document.createElement('div');
@@ -361,11 +366,9 @@ function buildSettings(): void {
     if (v === 'all') void loadDepth();
   }));
   row('Smoothing', 'Steady holds a still pose rock-solid; snappy follows fast moves sooner', range(0, 1, 0.05, () => settings.smoothing, (v) => { settings.smoothing = v; setSmoothing(v); }));
-  row('Detection threshold', 'Higher ignores what only looks like a person (coats, posters, shadows); lower finds people further off or half hidden', range(0.4, 0.9, 0.05, () => settings.poseConf, (v) => { settings.poseConf = v; void detector?.setOptions({ conf: v }); }));
   row('Pose model', 'Accurate is steadier, slower to load and run', seg<'lite' | 'full'>([['lite', 'Fast'], ['full', 'Accurate']], () => settings.model, (v) => { settings.model = v; void reloadDetector(); }));
   row('Light from the camera', 'The costume is lit by the room it stands in', sw(() => settings.envLight, (v) => { settings.envLight = v; stage.opts.envLight = v; }));
   row('Shadows', 'Off is faster on older phones', sw(() => settings.shadows, (v) => { settings.shadows = v; stage.opts.shadows = v; }));
-  row('Lens', 'If costumes look too flat or too deep', range(0.55, 1.3, 0.01, () => settings.lens, (v) => { settings.lens = v; }));
   row('React to the music', 'Listens through the microphone for the beat', sw(() => settings.music, (v) => {
     settings.music = v;
     if (v) void listen(true);
@@ -383,7 +386,21 @@ function buildSettings(): void {
   row('Costumes in party mode', 'Behind you: you stay yourself, a pyramid of your costume dances behind you', seg<Settings['partyCostumes']>([['off', 'Off'], ['behind', 'Behind'], ['on', 'On you']], () => settings.partyCostumes, (v) => { settings.partyCostumes = v; }));
   row('Face tracking', 'Mouths open costumes and breathe sparks; googly eyes find your eyes', sw(() => settings.faces, (v) => { settings.faces = v; if (v) void loadFaces(); }));
   row('Mouth magic', 'Open your mouth: sparks', sw(() => settings.breath, (v) => { settings.breath = v; }));
+  // Advanced: what tunes the tracking and what shows or records how it works
+  const adv = document.createElement('details');
+  adv.className = 'advanced';
+  adv.open = advancedOpen;
+  adv.ontoggle = () => { advancedOpen = adv.open; };
+  const sum = document.createElement('summary');
+  sum.textContent = 'Advanced';
+  adv.appendChild(sum);
+  body.appendChild(adv);
+  into = adv;
+  row('Detection threshold', 'Higher ignores what only looks like a person (coats, posters, shadows); lower finds people further off or half hidden', range(0.4, 0.9, 0.05, () => settings.poseConf, (v) => { settings.poseConf = v; void detector?.setOptions({ conf: v }); }));
+  row('Lens', 'If costumes look too flat or too deep', range(0.55, 1.3, 0.01, () => settings.lens, (v) => { settings.lens = v; }));
   row('Show the skeleton', 'What the pose tracker sees', sw(() => settings.debug, (v) => { settings.debug = v; }));
+  row('Video metadata', 'A clip also records the camera’s own picture and a log of what was detected and tracked, every frame — for debugging. The preview then offers “Save debug data” (one zip)', sw(() => settings.videoMeta, (v) => { settings.videoMeta = v; }));
+  into = body;
   // everything above back to its default; a second tap within three seconds does it (one stray tap must not)
   const reset = document.createElement('button');
   reset.id = 'btn-reset';
@@ -404,7 +421,7 @@ function buildSettings(): void {
 
 /** the settings panel's own settings (the costume, the mode, the rotation, the effect and the lens's zoom are chosen
  *  elsewhere and stay) */
-const PANEL = ['people', 'size', 'occlusion', 'smoothing', 'poseConf', 'model', 'envLight', 'shadows', 'lens', 'music', 'partyCast', 'partyCostumes', 'faces', 'breath', 'debug'] as const satisfies readonly (keyof Settings)[];
+const PANEL = ['people', 'size', 'occlusion', 'smoothing', 'poseConf', 'model', 'envLight', 'shadows', 'lens', 'music', 'partyCast', 'partyCostumes', 'faces', 'breath', 'debug', 'videoMeta'] as const satisfies readonly (keyof Settings)[];
 /** every panel setting back to its default, each applied as its own control would apply it */
 function resetSettings(): void {
   const was = { ...settings };
@@ -438,6 +455,8 @@ function preview(blob: Blob, name: string): void {
     const i = new Image(); i.src = url; box.appendChild(i);
   }
   // on an iPhone the sheet is how a file gets into Photos; a download would land in Files
+  // a clip recorded with its metadata offers the debug data too (only right after that clip)
+  $('btn-debug').classList.toggle('hidden', !debugBundle || !name.startsWith(debugBundle.name.replace('-debug.zip', '')));
   const ios = isIOS() && canShareFile(blob, name);
   $('btn-share').textContent = ios ? 'Save to Photos' : 'Share';
   $('btn-save').textContent = ios ? 'Download' : 'Save';
@@ -446,6 +465,11 @@ function preview(blob: Blob, name: string): void {
 }
 $('btn-share').onclick = async () => { if (lastCapture) { const r = await shareFile(lastCapture.blob, lastCapture.name); if (r === 'saved') toast('Saved'); } };
 $('btn-save').onclick = () => { if (lastCapture) { saveFile(lastCapture.blob, lastCapture.name); toast('Saved'); } };
+$('btn-debug').onclick = async () => {
+  if (!debugBundle) return;
+  const r = await shareFile(debugBundle.blob, debugBundle.name);
+  if (r === 'saved') toast(isIOS() ? 'Saved to Files (Downloads)' : 'Saved', 1800);
+};
 /**
  * A photo or a clip just taken. On an iPhone, straight to the share sheet ("Save Image" / "Save Video": into Photos),
  * the shutter's tap still counting as the gesture the sheet needs; if Safari will not open it from there, or it is
@@ -465,6 +489,18 @@ let shareHinted = false;
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 
 let recorder: MediaRecorder | null = null;
+/** the debug recording under way (capture/meta.ts), and the last one's zip */
+let meta: MetaLog | null = null;
+let debugBundle: { blob: Blob; name: string } | null = null;
+/** what a debug recording says once: the build, the device, the camera, the settings */
+function metaInfo(): Record<string, unknown> {
+  const tr = (video.srcObject as MediaStream | null)?.getVideoTracks()[0];
+  return {
+    build: __BUILD__, ua: navigator.userAgent, dpr: devicePixelRatio, screen: { w: innerWidth, h: innerHeight },
+    video: { w: video.videoWidth, h: video.videoHeight }, facing: camera.facing, mirrored: camera.mirrored, zoom: camera.zoom,
+    track: tr?.getSettings?.() ?? null, settings: { ...settings }, synth: SYNTH, people: settings.people,
+  };
+}
 let recStarting = false;
 let recTimer = 0;
 let micRefusedSaid = false; // the first silent clip of a session says why; the rest just record
@@ -517,13 +553,28 @@ async function toggleRecording(): Promise<void> {
     note = 'Recording without sound (this browser) — tap to stop';
   }
   const chunks: Blob[] = [];
+  // Video metadata (settings → Advanced): the camera's own frames and a log of every frame beside the clip
+  const log = settings.videoMeta ? new MetaLog() : null;
+  if (log) {
+    const cam = (video.srcObject as MediaStream | null)?.getVideoTracks()[0] ?? null;
+    log.start(metaInfo(), performance.now(), tracker.snapshot(), cam, recorderMime(false));
+    meta = log;
+  }
   r.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-  r.onstop = () => {
+  r.onstop = async () => {
     clearTimeout(recTimer);
     recorder = null;
     btn.classList.remove('on'); btn.innerHTML = ICONS.rec;
-    const type = mime.split(';')[0]!;
-    void captured(new Blob(chunks, { type }), `costuma-${stamp()}.${type.includes('mp4') ? 'mp4' : 'webm'}`);
+    const type = mime.split(';')[0]!, ext = type.includes('mp4') ? 'mp4' : 'webm', name = `costuma-${stamp()}`;
+    const clip = new Blob(chunks, { type });
+    if (!log) { void captured(clip, `${name}.${ext}`); return; }
+    meta = null;
+    const { json, raw } = await log.stop();
+    const files: { name: string; data: Blob | string }[] = [{ name: `${name}.${ext}`, data: clip }, { name: `${name}-meta.json`, data: json }];
+    if (raw) files.push({ name: `${name}-camera.${log.rawMime.includes('mp4') ? 'mp4' : 'webm'}`, data: raw });
+    debugBundle = { blob: await zip(files), name: `${name}-debug.zip` };
+    // the preview, not the sheet straight away: it offers the clip and the debug data
+    preview(clip, `${name}.${ext}`);
   };
   r.start(250);
   recorder = r;
@@ -645,6 +696,8 @@ function loop(now: number): void {
     try { dets = detector.detect(detectionInput(), now); } catch (e) { console.error(e); }
   }
   // up for the upright check (pose/upright.ts): the floor's, from the phone's gravity or the people (last frame's)
+  // (what the tracker is handed, as the debug recording keeps it for an exact replay: last frame's up, the People count)
+  const upUsed = { x: stage.ground.n.x, y: stage.ground.n.y, z: stage.ground.n.z }, peopleUsed = settings.people;
   if (dets) tracker.update(dets.slice(0, settings.people), now, K, stage.ground.n);
   // faces from the full-resolution frame, each read from a crop round a person's head (pose/face.ts)
   if (dets) {
@@ -684,6 +737,8 @@ function loop(now: number): void {
   if (settings.occlusion === 'all' && !SYNTH && stage.depth.due(now) && video.readyState >= 2) void stage.depth.read(video, tracker.tracks, K, now, { n: stage.ground.n, h: stage.ground.h });
   stage.depth.frame(settings.occlusion, tracker.tracks, stage.bgUniforms.uCrop.value, stage.bgUniforms.uMirror.value, stage.renderer.getDrawingBufferSize(new THREE.Vector2()), dt);
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
+  // the debug recording: this camera frame's raw detections and what the tracker and the stage made of them
+  if (meta && dets) meta.frame(now, video.currentTime, dets, peopleUsed, tracker.tracks, K, upUsed, stage.ground, stage.wearersOut(), castOf);
   stage.googlyOn = settings.googly && settings.faces;
   stage.breathOn = settings.breath && settings.faces;
   stage.faces(tracker.tracks, K, dt);

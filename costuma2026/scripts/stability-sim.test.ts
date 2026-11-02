@@ -11,7 +11,7 @@
 // INJECT=1 tips the raw 3D pose 80° toward the camera about the hips for frames 40–45 and 80–82 (the picture left as
 // it was): what a depth flip looks like. The truth stays the uninjected raw.
 import { describe, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { loadRecs } from './recs';
 import * as THREE from 'three';
 import { Tracker, TUNE, type Detection } from '../src/pose/tracker';
 import { guessIntrinsics, solveTranslation, type Intrinsics } from '../src/pose/solve';
@@ -80,7 +80,7 @@ const CONFIGS = process.env.CONF ? ALL.filter(([n]) => process.env.CONF!.split('
 
 describe.skipIf(!files.length)('stability (replay)', () => {
   for (const file of files) it(file, () => {
-    const recs = JSON.parse(readFileSync(file, 'utf8')) as Rec[];
+    const recs = loadRecs(file);
     const K = guessIntrinsics(recs[0]!.w, recs[0]!.h, 0.85);
     const inject = !!process.env.INJECT;
     console.log(`\n${file.split('/').pop()}: ${recs.length} frames, ${recs[0]!.w}×${recs[0]!.h}${inject ? ' · flips injected' : ''}`);

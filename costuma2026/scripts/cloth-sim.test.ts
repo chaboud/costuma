@@ -6,7 +6,7 @@
 // percentile, and how much it changes frame to frame. Still clips say how much the tracker's tremble shakes the cloth;
 // a walk, how much it swings. (The swing a person sees is this share of their costume's height on screen.)
 import { describe, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { loadRecs } from './recs';
 import * as THREE from 'three';
 import { Tracker, type Detection } from '../src/pose/tracker';
 import { guessIntrinsics } from '../src/pose/solve';
@@ -27,7 +27,7 @@ describe.skipIf(!files.length)('cloth on recorded people (replay)', () => {
     for (const def of [GHOST, WITCH]) {
       const built = buildCharacter(def, 48);
       for (const file of files) {
-        const recs = JSON.parse(readFileSync(file, 'utf8')) as Rec[];
+        const recs = loadRecs(file);
         const K = guessIntrinsics(recs[0]!.w, recs[0]!.h, 0.85);
         const root = built.root.clone(true);
         const bones = new Map<string, THREE.Bone>();

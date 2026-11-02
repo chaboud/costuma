@@ -2,7 +2,7 @@
 // retargeter at 30 fps, reporting how much the costume would shake. Skipped unless JITTER=<file.json>.
 //   JITTER=jitter.json npx vitest run scripts/jitter-sim.test.ts
 import { describe, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { loadRecs } from './recs';
 import * as THREE from 'three';
 import { Tracker, TUNE } from '../src/pose/tracker';
 import { solveTranslation } from '../src/pose/solve';
@@ -29,7 +29,7 @@ function measure(frames: { K: never; det: Detection }[], label: string, run: (d:
 
 describe.skipIf(!file)('jitter (replay)', () => {
   it('reports', () => {
-    const raw = JSON.parse(readFileSync(file!, 'utf8')) as { K: never; dets: Detection[] }[];
+    const raw = loadRecs(file!) as { K: never; dets: Detection[] }[];
     const frames = raw.filter((r) => r.dets.length).map((r) => ({ K: r.K, det: r.dets[0]! }));
     console.log(`${frames.length} frames of a still`);
     measure(frames, 'raw', (d, i) => { const T = solveTranslation(d.world, d.image, frames[i]!.K); return T ? { T, world: d.world } : null; });

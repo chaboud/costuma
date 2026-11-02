@@ -3,7 +3,7 @@
 // did (a centred smoothing of the raw), the jerk (RMS second difference), the biggest frame-to-frame jump. Prints the
 // best settings. Skipped unless STAB=<a.json,b.json>.    STAB=... npx vitest run scripts/kalman-tune.test.ts
 import { describe, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { loadRecs } from './recs';
 import * as THREE from 'three';
 import { Tracker, TUNE, type Detection } from '../src/pose/tracker';
 import { guessIntrinsics, solveTranslation, type Intrinsics } from '../src/pose/solve';
@@ -71,7 +71,7 @@ function run(recs: Rec[], tune: Partial<typeof TUNE>): Map<string, number[][]> {
 
 describe.skipIf(!files.length)('kalman tuning (replay)', () => {
   it('sweeps', () => {
-    const clips = files.map((f) => ({ name: f.split('/').pop()!, recs: JSON.parse(readFileSync(f, 'utf8')) as Rec[] }));
+    const clips = files.map((f) => ({ name: f.split('/').pop()!, recs: loadRecs(f) }));
     const base = clips.map((c) => run(c.recs, { filter: 'ema', upright: false, hold: false }));
     const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]!; };
     const results: { tune: Partial<typeof TUNE>; err: number; jerk: number; step: number; label: string }[] = [];

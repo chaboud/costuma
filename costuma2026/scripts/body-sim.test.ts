@@ -6,7 +6,7 @@
 // shoulders on screen against the person's (the shoulder joints projected, against the picture's shoulders): the same
 // share in every kind of shot means a costume fits a selfie as it fits a full body.
 import { describe, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { loadRecs } from './recs';
 import * as THREE from 'three';
 import { Tracker, type Detection } from '../src/pose/tracker';
 import { guessIntrinsics } from '../src/pose/solve';
@@ -27,7 +27,7 @@ describe.skipIf(!files.length)('sizing by shot (replay)', () => {
     const def = ROSTER.find((d) => d.id === (process.env.C ?? 'skeleton'))!;
     const rows: string[] = [];
     for (const file of files) {
-      const recs = JSON.parse(readFileSync(file, 'utf8')) as Rec[];
+      const recs = loadRecs(file);
       const K = guessIntrinsics(recs[0]!.w, recs[0]!.h, 0.85);
       const { bones, root: rootBone } = skeleton(def.segs);
       const rig = new Rig(def.segs, bones), root = new THREE.Group();

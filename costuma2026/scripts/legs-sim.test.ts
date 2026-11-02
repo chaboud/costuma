@@ -7,7 +7,7 @@
 // left leg three ways — the model's raw 3D, the tracker's output, the costume's bones after the reach: the thigh's angle
 // from the torso's down (0 a straight hip; 90 a knee raised level) and the knee's bend (0 straight).
 import { describe, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { loadRecs } from './recs';
 import * as THREE from 'three';
 import { Tracker, type Detection } from '../src/pose/tracker';
 import { guessIntrinsics } from '../src/pose/solve';
@@ -35,7 +35,7 @@ function legW(w: LM[]) {
 
 describe.skipIf(!file)('legs off the frame (replay)', () => {
   it(file, () => {
-    const recs = JSON.parse(readFileSync(file, 'utf8')) as Rec[];
+    const recs = loadRecs(file);
     const K = guessIntrinsics(recs[0]!.w, recs[0]!.h, 0.85);
     const def = ROSTER.find((d) => d.id === (process.env.C ?? 'skeleton'))!;
     const { bones, root: rootBone } = skeleton(def.segs);

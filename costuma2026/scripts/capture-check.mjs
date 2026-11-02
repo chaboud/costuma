@@ -5,7 +5,9 @@
 //    .5 1× 2 3 5, a tap zooms the track and the focal length follows;
 //  - the microphone opens at Start and stays; a clip carries its sound (Chromium's fake microphone: a beep), read back with ffprobe; with the
 //    microphone refused, the clip is still made, silent, and the player is told;
-//  - settings → Reset to defaults: one tap only arms it, the second puts every panel setting back and applies it.
+//  - settings → Reset to defaults: one tap only arms it, the second puts every panel setting back and applies it;
+//  - Video metadata (the real camera path, the real pose model): a clip's preview offers the debug zip, which holds the
+//    clip, the camera's own recording and the log; the log replayed through today's tracker gives what the page's gave.
 // Prints what it saw; exit 1 on a failure.   node scripts/capture-check.mjs <any.y4m>     (npm run build first)
 import { createRequire } from 'node:module';
 import { serveBuild } from './serve.mjs';
@@ -158,6 +160,39 @@ for (const refuse of [false, true]) {
   check(after.people === 2 && after.smoothing === 0.5 && after.shadows === true && after.size === 1 && after.model === 'full' && after.debug === false, 'the second tap puts the panel\'s settings back');
   check(ui.people === '2' && ui.debug === false && ui.shadows === true && ui.size === 1 && /defaults/.test(ui.toast), 'the panel shows them, the stage takes them, the player is told');
   check(after.costume === 'pumpkin', 'what is chosen outside the panel (the costume) stays');
+  await browser.close();
+}
+
+// ── a debug recording (Video metadata) ──
+{
+  const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-video-capture=${clip}`] });
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['camera', 'microphone'], acceptDownloads: true });
+  await ctx.addInitScript(() => localStorage.setItem('costuma26.settings', JSON.stringify({ model: 'lite', videoMeta: true, v: 7 })));
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.log('pageerror', e.message));
+  await page.goto(`${server.url}index.html?c=skeleton&facing=environment`);
+  await page.click('#btn-start');
+  await page.waitForFunction(() => window.__costuma?.started && window.__costuma.tracker.tracks.some((t) => !t.lost), null, { timeout: 300000, polling: 500 });
+  const rec = await recordClip(page, 6);
+  const shown = await page.evaluate(() => !document.getElementById('btn-debug').classList.contains('hidden'));
+  check(shown, 'the preview offers the debug data');
+  const dl = page.waitForEvent('download', { timeout: 60000 });
+  await page.evaluate(() => document.getElementById('btn-debug').click());
+  const d = await dl;
+  const zipPath = path.join(mkdtempSync(path.join(tmpdir(), 'debug-')), d.suggestedFilename());
+  await d.saveAs(zipPath);
+  const list = execFileSync('unzip', ['-Z1', zipPath]).toString().trim().split('\n');
+  console.log(JSON.stringify({ zip: path.basename(zipPath), files: list, clip: rec.streams }));
+  check(list.length === 3 && list.some((f) => f.endsWith('-meta.json')) && list.some((f) => /-camera\.(mp4|webm)$/.test(f)) && list.some((f) => /^costuma-[^/]*\d\.(mp4|webm)$/.test(f)), 'the zip holds the clip, the camera\'s own recording and the log');
+  const dir = path.dirname(zipPath);
+  execFileSync('unzip', ['-o', '-q', zipPath, '-d', dir]);
+  const cam = list.find((f) => /-camera\./.test(f));
+  const camStreams = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,width,height', '-of', 'csv=p=0', path.join(dir, cam)]).toString().trim();
+  check(/video/.test(camStreams), `the camera's own recording is video (${camStreams})`);
+  const replay = execFileSync('npx', ['vitest', 'run', 'scripts/meta-replay.test.ts'], { cwd: path.resolve(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, META: zipPath } }).toString();
+  const lines = replay.split('\n').filter((l) => /build |camera |track |detections|replayed/.test(l));
+  console.log(lines.join('\n'));
+  check(/· the same/.test(replay) && /tracks only the phone had 0, only the replay 0/.test(replay), 'the log replayed through today\'s tracker gives what the page\'s tracker gave');
   await browser.close();
 }
 

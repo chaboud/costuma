@@ -281,6 +281,11 @@ export class Stage {
   }
 
   /** dress the tracked people: `cast(trackId)` says which character each wears */
+  /** what each costume is this frame, for the debug recording (capture/meta.ts) */
+  wearersOut(): { trackId: number; costume: string; scale: number; fade: number; swing: number[] }[] {
+    return [...this.wearers.values()].map((w) => ({ trackId: w.trackId, costume: w.def.id, scale: w.root.scale.x, fade: w.fade, swing: w.cloth?.swing() ?? [] }));
+  }
+
   sync(tracks: Track[], cast: (trackId: number) => string, t: number): void {
     // the costumes' matrices are read while posing (reach, the face field): the world group's (its mirror) first
     this.world.updateWorldMatrix(true, false);

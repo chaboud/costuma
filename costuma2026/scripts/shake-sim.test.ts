@@ -4,7 +4,7 @@
 // a 720-wide frame, RMS) and how much the limbs still jitter. Skipped unless JITTER=<file.json>.
 //   JITTER=jitter-noisy.json npx vitest run scripts/shake-sim.test.ts
 import { describe, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { loadRecs } from './recs';
 import * as THREE from 'three';
 import { Tracker, TUNE } from '../src/pose/tracker';
 import { project, type Intrinsics } from '../src/pose/solve';
@@ -18,7 +18,7 @@ const rms = (xs: number[]) => Math.sqrt(xs.reduce((a, b) => a + b * b, 0) / xs.l
 
 describe.skipIf(!file)('hand shake (replay)', () => {
   it('reports', () => {
-    const raw = JSON.parse(readFileSync(file!, 'utf8')) as { K: Intrinsics; dets: Detection[] }[];
+    const raw = loadRecs(file!) as { K: Intrinsics; dets: Detection[] }[];
     const frames = raw.filter((r) => r.dets.length).map((r) => ({ K: r.K, det: r.dets[0]! }));
     const K = frames[0]!.K;
     // the still's own landmarks: their mean is the truth before the shake moves it

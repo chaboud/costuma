@@ -93,6 +93,10 @@ h1 { font-size: 46px; margin: 0 0 8px; letter-spacing: -0.01em; }
 .seg button { flex: 1; padding: 8px 10px; border-radius: 9px; background: transparent; font-weight: 600; min-width: 40px; }
 .seg button.on { background: var(--pumpkin); color: #1b0d02; }
 .set input[type=range] { width: 52%; accent-color: var(--pumpkin); }
+#settings-body .advanced { border-top: 1px solid var(--line); padding-top: 4px; }
+#settings-body .advanced summary { padding: 12px 0; font-weight: 700; cursor: pointer; color: var(--dim); }
+#settings-body .advanced[open] summary { color: inherit; }
+#settings-body .advanced .set:first-of-type { border-top: 0; }
 #settings-body .reset { margin-top: 18px; font-size: 15px; padding: 12px 16px; }
 .switch { appearance: none; -webkit-appearance: none; width: 50px; height: 30px; border-radius: 999px; background: rgba(255,255,255,0.18); position: relative; flex: 0 0 auto; transition: background 0.2s; }
 .switch::after { content: ''; position: absolute; left: 3px; top: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform 0.2s; }

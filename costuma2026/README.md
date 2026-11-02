@@ -38,7 +38,8 @@ node scripts/cloth-shots.mjs <dir>   # the cloth held at rest, swung and twisted
 BODY=a.json,b.json npx vitest run scripts/body-sim.test.ts   # sizing by shot: the fitted torso, how much it moves, the costume's shoulders against the person's, hips seen vs out (DRIFT=)
 STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
 OCCL=people|all node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion on a frozen frame: on, off, people alone (all), the cut-outs, the depth map (MIN= people in view first)
-node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill; a clip's sound (ffprobe), refused; reset to defaults
+node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill; a clip's sound (ffprobe), refused; reset to defaults; a debug recording, unzipped and replayed
+META=<…-debug.zip> npx vitest run scripts/meta-replay.test.ts   # a phone's debug recording: what it holds, and its raw detections replayed through today's tracker against the phone's
 ```
 
 Make a test clip from any photo: `ffmpeg -loop 1 -i photo.jpg -t 3 -r 15 -pix_fmt yuv420p clip.y4m`.
@@ -358,6 +359,26 @@ in `src/main.ts`.
   Checked headless: the microphone open from Start and after a clip; an H.264 +
   Opus mp4 read back by ffprobe with both streams; refused, H.264 alone. Not
   checked on a phone.
+- **Video metadata** (settings → Advanced; `src/capture/meta.ts`; founder:
+  "a way to record a video with the right metadata to reconstruct what was raw
+  and what was tracked/generated. It's the only way you're going to be able to
+  debug stuff"). A clip then also records the camera's own picture (a second
+  recorder on the camera's track, 4 Mbit/s) and a log, every camera frame, of
+  what the pose model returned exactly (before the app's own handling) in the
+  replay scripts' format, with what the tracker was handed besides (the floor's
+  up, the People count, the lens) and what it and the stage made: each track's
+  place, size, smoothed picture and 3D pose, verdict and face, each costume's
+  scale and cloth; once, the build, the device, the camera, the settings and the
+  tracker's whole state at the start (`Tracker.snapshot`). The preview offers
+  "Save debug data": one zip (stored) with the clip, the camera's recording and
+  the log. `META=<zip> npx vitest run scripts/meta-replay.test.ts` replays the
+  log through today's tracker from that state and compares it with the phone's:
+  the same code gives the same tracks (headless, real camera path: 0.001 cm, the
+  log's rounding); every replay script (`stability-sim`, `legs-sim`, `body-sim`,
+  `cloth-sim`…) takes the zip or its log too (`scripts/recs.ts`). Not in it: the
+  cut-out masks and the face model's raw points (too big; their effects are in
+  the tracks and faces logged). A 20 s clip's zip is ~30 MB; the log alone (a few
+  MB) is what replays.
 - **Reset to defaults** (settings, at the bottom): a first tap arms it ("Tap
   again to reset", three seconds), the second puts every setting on the panel
   back and applies each as its own control would (the detector's options, the
