@@ -33,7 +33,7 @@ node scripts/face-probe.mjs <portrait.jpg> [profiles.jpg]   # what the face mode
 node scripts/pose-record.mjs <clip|photo> <out.json>   # every frame through the real pose model, in order (FPS= SECS= VF='ffmpeg filter' N=)
 STAB=a.json,b.json npx vitest run scripts/stability-sim.test.ts   # replay through the tracker: lean, error, jerk, jumps; INJECT=1 adds depth flips
 STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
-node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion: the depth model loads, calibrates, hides; the same frozen frame on and off, and the depth map
+OCCL=people|all node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion on a frozen frame: on, off, people alone (all), the cut-outs, the depth map (MIN= people in view first)
 node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill
 ```
 

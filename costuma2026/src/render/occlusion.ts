@@ -76,9 +76,13 @@ export class SceneDepth {
   readonly texture = new THREE.DataTexture(new Uint16Array(4), 2, 2, THREE.RedFormat, THREE.HalfFloatType);
   /** the people's cut-outs, a channel each, at the pose model's mask size; and their maximum over blocks */
   private peopleTex = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat);
-  private wideTex = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat);
+  private wideTex = new THREE.DataTexture(new Uint8Array(1), 1, 1, THREE.RedFormat);
   private slots: (number | null)[] = [null, null, null, null];
   private slotMask: (Float32Array | null)[] = [null, null, null, null];
+  /** what was packed last: each slot's detection and weight; seconds since */
+  private packedDet: unknown[] = [null, null, null, null];
+  private packedW = [0, 0, 0, 0];
+  private since = 0;
   private mw = 0;
   private mh = 0;
   private ww = 0;
@@ -92,7 +96,7 @@ export class SceneDepth {
   };
 
   constructor() {
-    for (const t of [this.texture, this.peopleTex, this.wideTex]) { t.magFilter = t.minFilter = THREE.LinearFilter; t.flipY = false; t.needsUpdate = true; }
+    for (const t of [this.texture, this.peopleTex, this.wideTex]) { t.magFilter = t.minFilter = THREE.LinearFilter; t.flipY = false; t.unpackAlignment = 1; t.needsUpdate = true; }
   }
 
   /** how many people have a cut-out this frame */
@@ -246,22 +250,31 @@ export class SceneDepth {
     o.self.value = -hipsZ - OCCLUSION_TUNE.self;
   }
 
-  /** the nearest four people's cut-outs into the texture's channels (each keeps its channel while it stays), weighted
-   *  by their presence, and their fronts; false when nobody has one */
+  /**
+   * The nearest four people's cut-outs into the texture's channels (each keeps its channel while it stays), weighted by
+   * their presence, and their fronts; false when nobody has one. Repacked only when a cut-out is new (the pose model
+   * runs at about half the display's rate) or a weight has moved: the packing is the main thread's (measured in Node on
+   * this sandbox at 270×480: 1.7–3.2 ms a pack for one to four people, against 4.0–7.6 for the first, per-byte version;
+   * not measured on a phone).
+   */
   private cutOuts(tracks: Track[], dt: number): boolean {
+    this.since += dt;
     const live = tracks.filter((k) => k.presence > 0).sort((a, b) => b.T.z - a.T.z).slice(0, 4);
     const ids = new Set(live.map((k) => k.id));
     for (let c = 0; c < 4; c++) if (this.slots[c] !== null && !ids.has(this.slots[c]!)) { this.slots[c] = null; this.slotMask[c] = null; }
-    const zs = [1e3, 1e3, 1e3, 1e3], weight = [0, 0, 0, 0], ease = 1 - Math.exp(-dt / OCCLUSION_TUNE.maskTau);
+    const zs = [1e3, 1e3, 1e3, 1e3], weight = [0, 0, 0, 0], ease = 1 - Math.exp(-this.since / OCCLUSION_TUNE.maskTau);
+    let fresh = false;
     for (const k of live) {
       let c = this.slots.indexOf(k.id);
       if (c < 0) { c = this.slots.indexOf(null); if (c < 0) continue; this.slots[c] = k.id; }
       const m = k.det?.mask;
-      if (m) {
+      if (m && k.det !== this.packedDet[c]) {
         if (m.w !== this.mw || m.h !== this.mh) this.resizeMasks(m.w, m.h);
         const buf = this.slotMask[c], d = m.data;
         if (!buf) this.slotMask[c] = Float32Array.from(d);
         else for (let i = 0; i < buf.length; i++) buf[i] = buf[i]! + (d[i]! - buf[i]!) * ease;
+        this.packedDet[c] = k.det;
+        fresh = true;
       }
       if (!this.slotMask[c]) continue;
       zs[c] = front(k);
@@ -269,18 +282,25 @@ export class SceneDepth {
     }
     this.u.uOcclPeopleZ.value.set(zs[0]!, zs[1]!, zs[2]!, zs[3]!);
     if (!this.mw || !weight.some((w) => w > 0)) return false;
-    const B = OCCLUSION_TUNE.wideBlock, ww = this.ww, src = this.slotMask, w255 = weight.map((w) => w * 255);
-    const md = this.peopleTex.image.data as Uint8Array, wd = this.wideTex.image.data as Uint8Array;
+    if (!fresh && weight.every((w, c) => Math.abs(w - this.packedW[c]!) < 0.02)) return true;
+    this.since = 0;
+    this.packedW = weight;
+    // a texel's four channels as one little-endian word; "someone is near" the blocks' maximum over everyone
+    const B = OCCLUSION_TUNE.wideBlock, ww = this.ww, mw = this.mw, mh = this.mh;
+    const [s0, s1, s2, s3] = this.slotMask, [k0, k1, k2, k3] = weight.map((w) => w * 255) as [number, number, number, number];
+    const m32 = new Uint32Array((this.peopleTex.image.data as Uint8Array).buffer), wd = this.wideTex.image.data as Uint8Array;
     wd.fill(0);
-    for (let y = 0, i = 0; y < this.mh; y++) {
+    for (let y = 0, i = 0; y < mh; y++) {
       const row = Math.floor(y / B) * ww;
-      for (let x = 0; x < this.mw; x++, i++) {
-        const j = (row + Math.floor(x / B)) * 4;
-        for (let c = 0; c < 4; c++) {
-          const sc = src[c], v = sc ? sc[i]! * w255[c]! : 0;
-          md[i * 4 + c] = v;
-          if (v > wd[j + c]!) wd[j + c] = v;
-        }
+      for (let x = 0; x < mw; x++, i++) {
+        const a = s0 ? (s0[i]! * k0) | 0 : 0, b = s1 ? (s1[i]! * k1) | 0 : 0, c = s2 ? (s2[i]! * k2) | 0 : 0, d = s3 ? (s3[i]! * k3) | 0 : 0;
+        m32[i] = (a | (b << 8) | (c << 16) | (d << 24)) >>> 0;
+        // by hand: Math.max of four ran 4.7 ms a pack for four people against 3.2
+        let mx = a > b ? a : b;
+        if (c > mx) mx = c;
+        if (d > mx) mx = d;
+        const j = row + Math.floor(x / B);
+        if (mx > wd[j]!) wd[j] = mx;
       }
     }
     this.peopleTex.needsUpdate = this.wideTex.needsUpdate = true;
@@ -291,9 +311,10 @@ export class SceneDepth {
     const B = OCCLUSION_TUNE.wideBlock;
     this.mw = w; this.mh = h; this.ww = Math.ceil(w / B);
     this.slotMask = [null, null, null, null];
-    const set = (t: THREE.DataTexture, tw: number, th: number) => { t.dispose(); t.image = { data: new Uint8Array(tw * th * 4), width: tw, height: th }; t.needsUpdate = true; };
-    set(this.peopleTex, w, h);
-    set(this.wideTex, this.ww, Math.ceil(h / B));
+    this.packedDet = [null, null, null, null];
+    const set = (t: THREE.DataTexture, tw: number, th: number, ch: number) => { t.dispose(); t.image = { data: new Uint8Array(tw * th * ch), width: tw, height: th }; t.needsUpdate = true; };
+    set(this.peopleTex, w, h, 4);
+    set(this.wideTex, this.ww, Math.ceil(h / B), 1);
   }
 }
 
@@ -320,8 +341,7 @@ float occlVisible() {
   if (uOcclDepthOn > 0.0) {
     // things: only where no one is (the cut-outs widened: the model's edges bleed past a body); a wearer with no
     // cut-out of its own measures from the nearer of the pixel and its front
-    vec4 w = texture2D(uOcclWide, iv);
-    float someone = min(1.0, w.x + w.y + w.z + w.w) * uOcclMasksOn;
+    float someone = texture2D(uOcclWide, iv).r * uOcclMasksOn;
     float scene = texture2D(uOccl, iv).r;
     float zRef = mix(min(z, uOcclSelf), z, uOcclMasked);
     hidden = max(hidden, uOcclDepthOn * (1.0 - someone) * smoothstep(uOcclNear, uOcclNear + uOcclSoft, zRef - scene));

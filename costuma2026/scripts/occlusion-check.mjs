@@ -21,7 +21,8 @@ await page.goto(`${server.url}index.html?c=${process.env.C ?? 'skeleton'}&facing
 await page.click('#btn-start');
 await page.waitForFunction(() => window.__costuma?.started, null, { timeout: 300000 });
 const t0 = Date.now();
-await page.waitForFunction((m) => { const d = window.__costuma.stage.depth; return m === 'all' ? d.cal && d.u.uOcclDepthOn.value > 0.9 : d.u.uOcclMasksOn.value > 0.9; }, mode, { timeout: 900000, polling: 2000 }).catch(() => console.log('not on after', (Date.now() - t0) / 1000, 's'));
+// MIN=n: and at least that many people in view before the frame is frozen (a clip where people come and go)
+await page.waitForFunction(([m, min]) => { const d = window.__costuma.stage.depth, n = window.__costuma.tracker.tracks.filter((t) => !t.lost).length; return n >= min && (m === 'all' ? d.cal && d.u.uOcclDepthOn.value > 0.9 : d.u.uOcclMasksOn.value > 0.9); }, [mode, Number(process.env.MIN ?? 1)], { timeout: 900000, polling: 2000 }).catch(() => console.log('not on after', (Date.now() - t0) / 1000, 's'));
 const state = () => page.evaluate(() => { const d = window.__costuma.stage.depth; return { engine: d.engine, ms: Math.round(d.ms), cal: d.cal, masks: +d.u.uOcclMasksOn.value.toFixed(2), depth: +d.u.uOcclDepthOn.value.toFixed(2), cutOuts: d.people, fronts: d.u.uOcclPeopleZ.value.toArray().map((z) => +z.toFixed(2)), people: window.__costuma.tracker.tracks.filter((t) => !t.lost).map((t) => +(-t.T.z).toFixed(2)) }; });
 const info = await state();
 console.log(JSON.stringify(info));
