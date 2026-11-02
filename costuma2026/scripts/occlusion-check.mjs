@@ -35,6 +35,12 @@ if (mode === 'all') { await read(); await read(); }
 await frames(6);
 console.log('frozen:', JSON.stringify(await state()));
 await page.screenshot({ path: path.join(out, 'on.png'), timeout: 300000 });
+// the same frame with the people alone (the depth model's part is on.png against this)
+if (mode === 'all') {
+  const people = () => page.evaluate(() => { const c = window.__costuma; c.settings.occlusion = 'people'; c.stage.depth.u.uOcclDepthOn.value = 0; });
+  await people(); await frames(2); await people();
+  await page.screenshot({ path: path.join(out, 'people.png'), timeout: 300000 });
+}
 const off = () => page.evaluate(() => { const c = window.__costuma; c.settings.occlusion = 'off'; for (const k of ['uOcclOn', 'uOcclMasksOn', 'uOcclDepthOn']) c.stage.depth.u[k].value = 0; });
 await off(); await frames(2); await off();
 await page.screenshot({ path: path.join(out, 'off.png'), timeout: 300000 });
