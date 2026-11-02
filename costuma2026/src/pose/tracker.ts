@@ -7,6 +7,7 @@ import type { LM } from './landmarks';
 import { L, N_LANDMARKS } from './landmarks';
 import * as THREE from 'three';
 import { bodyLengths, solveTranslation, type Intrinsics } from './solve';
+import { inFrame, limbShares, LIMB_KEYS, SEEN_TUNE, type LimbKey } from './seen';
 import type { FaceTrack } from './face';
 import { CVBank } from './kalman';
 import { anchorTorsoShot, upright, type UprightState, type UprightVerdict } from './upright';
@@ -35,6 +36,8 @@ export interface Track {
   /** hip centre in camera space, metres (three's axes) */
   T: { x: number; y: number; z: number };
   len: ReturnType<typeof bodyLengths>;
+  /** each limb's length as a share of the torso, learned only as fast as the picture shows both its ends (seen.ts) */
+  share: Record<LimbKey, number>;
   /** 0..1, fades in when found (once confirmed) and out when lost */
   presence: number;
   /** frames this track has been found in: under TUNE.confirm it is not shown, and lost it is dropped at once */
@@ -279,6 +282,8 @@ export class Tracker {
   update(dets: Detection[], now: number, K: Intrinsics, up: THREE.Vector3 = UP): Track[] {
     const dt = this.last < 0 ? 1 / 30 : Math.min(0.25, Math.max(0.001, (now - this.last) / 1000));
     this.last = now;
+    // a joint the frame does not hold is not seen, whatever the model says (seen.ts)
+    dets = dets.map(inFrame);
     // a detection we cannot place is no detection
     const placed = dets.map((d) => ({ d, T: solveTranslation(d.world, d.image, K), c: center(d.image) })).filter((p) => p.T);
     const live = this.all.filter((t) => !t.lost || t.presence > 0);
@@ -366,7 +371,14 @@ export class Tracker {
       if (TUNE.pin) pinToPicture(t, K);
       // the person's lengths from the model's own pose (the anchored torso is the measured one, by construction)
       const nl = bodyLengths(t.wsm), kl = kOf(dt, TUNE.tauLen);
-      for (const key of Object.keys(nl) as (keyof typeof nl)[]) t.len[key] = ema(t.len[key], nl[key], kl);
+      t.len.torso = ema(t.len.torso, nl.torso, kl);
+      t.len.neck = ema(t.len.neck, nl.neck, kl);
+      // the limbs only as fast as they are seen: a guessed leg below the frame measured half a leg (seen.ts)
+      const sh = limbShares(t.wsm, p.d.image, nl.torso);
+      for (const key of LIMB_KEYS) {
+        t.share[key] += (sh[key].share - t.share[key]) * kl * sh[key].w;
+        t.len[key] = t.share[key] * t.len.torso;
+      }
       t.seen = now;
       t.lost = false;
       t.det = p.d;
@@ -377,6 +389,9 @@ export class Tracker {
       const state: UprightState = { belief: 0, at: -1 };
       const chk = this.check({ up: state }, p.d, p.T!, K, up, now);
       const wsm = copyLM(chk.world), image = copyLM(p.d.image), len = bodyLengths(wsm), wh = copyLM(wsm), ism = copyLM(image);
+      // the limbs start as people's usual shares of the torso, moved toward this person's as far as they are seen
+      const sh = limbShares(wsm, image, len.torso), share = {} as Record<LimbKey, number>;
+      for (const key of LIMB_KEYS) { share[key] = SEEN_TUNE.ratio[key] + (sh[key].share - SEEN_TUNE.ratio[key]) * sh[key].w; len[key] = share[key] * len.torso; }
       const world = this.shaped(wsm, image, len.torso, up);
       const T0 = solveTranslation(world, image, K) ?? p.T!;
       let kf: Track['kf'] = null;
@@ -384,7 +399,7 @@ export class Tracker {
         kf = { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) };
         resetBank(kf.world, wsm, 3); resetBank(kf.image, image, 2); kf.z.reset(0, T0.z, TUNE.rDepth ** 2);
       }
-      this.all.push({ id: this.nextId++, born: now, seen: now, image, world, wsm, wh, ism, T: { ...T0 }, len, presence: 0, hits: 1, lost: false, det: p.d, up: state, verdict: chk.verdict, kf });
+      this.all.push({ id: this.nextId++, born: now, seen: now, image, world, wsm, wh, ism, T: { ...T0 }, len, share, presence: 0, hits: 1, lost: false, det: p.d, up: state, verdict: chk.verdict, kf });
     });
     for (const t of this.all) {
       if (t.seen !== now) { t.lost = true; t.det = null; }

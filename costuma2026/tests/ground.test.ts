@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Ground } from '../src/pose/ground';
 import { Tracker } from '../src/pose/tracker';
-import { guessIntrinsics, project } from '../src/pose/solve';
+import { bodyLengths, guessIntrinsics, project } from '../src/pose/solve';
+import { SEEN_TUNE } from '../src/pose/seen';
 import { synthPerson } from '../src/pose/synth';
 import type { Detection } from '../src/pose/tracker';
 
@@ -42,10 +43,13 @@ describe('ground', () => {
   });
   it('feet out of frame: the hips less the legs', () => {
     const g = new Ground(), T = new THREE.Vector3(0, 0, -2.5);
-    settle(g, () => [synthPerson({ T, legsVis: 0 }, K)]);
+    const d = synthPerson({ T, legsVis: 0 }, K);
+    settle(g, () => [d]);
     expect(g.fromFeet).toBe(false);
-    // the hips stand their legs' length (thigh + shin + ankle, 0.93 m here) above the floor, wherever up leans
-    expect(Math.abs(g.height(T) - 0.93)).toBeLessThan(0.03);
+    // the hips stand their legs' length above the floor, wherever up leans: legs never seen are people's usual shares
+    // of the torso (pose/seen.ts), plus the ankle
+    const torso = bodyLengths(d.world).torso, legs = (SEEN_TUNE.ratio.thigh + SEEN_TUNE.ratio.shin) * torso + 0.08;
+    expect(Math.abs(g.height(T) - legs)).toBeLessThan(0.03);
   });
   it('takes the phone\'s gravity when it agrees with the people, not when it does not', () => {
     const T = new THREE.Vector3(0, -0.2, -3);

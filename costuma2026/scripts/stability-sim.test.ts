@@ -95,7 +95,8 @@ describe.skipIf(!files.length)('stability (replay)', () => {
         tr.update(dets, r.now, K, UP);
         for (const t of tr.tracks) {
           if (t.lost || !t.det) continue;
-          const di = dets.indexOf(t.det), orig = r.dets[di];
+          // the tracker hands on its own copy (seen.ts inFrame): the detection is the one at the same place
+          const di = dets.findIndex((d) => d.image[0]!.x === t.det!.image[0]!.x && d.image[0]!.y === t.det!.image[0]!.y), orig = r.dets[di];
           if (!orig) continue;
           const Tr = solveTranslation(orig.world, orig.image, K);
           if (!Tr) continue;
