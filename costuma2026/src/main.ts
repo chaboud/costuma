@@ -368,7 +368,7 @@ function buildSettings(): void {
   row('Lens', 'If costumes look too flat or too deep', range(0.55, 1.3, 0.01, () => settings.lens, (v) => { settings.lens = v; }));
   row('React to the music', 'Listens through the microphone for the beat', sw(() => settings.music, (v) => {
     settings.music = v;
-    if (v) beat.start().then(() => toast('Listening for the beat', 1200)).catch(() => { settings.music = false; persist(); toast('No microphone'); });
+    if (v) void listen(true);
     else beat.stop();
   }));
   {
@@ -467,26 +467,30 @@ const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 let recorder: MediaRecorder | null = null;
 let recStarting = false;
 let recTimer = 0;
-/** a microphone opened for one clip (the music's, when it listens, is shared instead), closed when the clip ends */
-let clipMic: MediaStream | null = null;
 let micRefusedSaid = false; // the first silent clip of a session says why; the rest just record
-/** the sound for a clip: the music listener's microphone if it is open, else one opened now (processing off, as the
- *  beat's: echo cancellation and noise suppression flatten music); none if the player refuses it */
-async function clipSound(): Promise<MediaStreamTrack[]> {
-  const live = beat.stream?.getAudioTracks().filter((t) => t.readyState === 'live') ?? [];
-  if (live.length) return live;
-  if (!navigator.mediaDevices?.getUserMedia) return [];
-  try {
-    clipMic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-    return clipMic.getAudioTracks();
-  } catch (e) {
-    console.warn('no microphone for the clip', e);
-    return [];
-  }
+/** the microphone, opened at Start for the whole session (founder: "We should always open the mic"): every clip
+ *  records it, the music listener reads it. Processing off, so music survives (echo cancellation and noise suppression
+ *  flatten it). Asked again only if it was refused or has ended. */
+let mic: MediaStream | null = null;
+let micAsking: Promise<void> | null = null;
+function openMic(): Promise<void> {
+  if (mic?.getAudioTracks().some((t) => t.readyState === 'live')) return Promise.resolve();
+  if (!navigator.mediaDevices?.getUserMedia || (SYNTH && !q.get('mic'))) return Promise.resolve();
+  return micAsking ??= navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+    .then((s) => { mic = s; }, (e) => { console.warn('no microphone', e); mic = null; })
+    .finally(() => { micAsking = null; });
 }
-function closeClipMic(): void {
-  for (const t of clipMic?.getTracks() ?? []) t.stop();
-  clipMic = null;
+/** the music listener on the session's microphone (`said`: the player just switched it on) */
+async function listen(said: boolean): Promise<void> {
+  await openMic();
+  if (!mic) { if (said) { settings.music = false; persist(); toast('No microphone'); } return; }
+  await beat.start(mic);
+  if (said) toast('Listening for the beat', 1200);
+}
+/** the sound for a clip: the session's microphone (asked for now if it is not open); none if the player refuses it */
+async function clipSound(): Promise<MediaStreamTrack[]> {
+  await openMic();
+  return mic?.getAudioTracks().filter((t) => t.readyState === 'live') ?? [];
 }
 async function toggleRecording(): Promise<void> {
   const btn = $('btn-rec');
@@ -496,7 +500,7 @@ async function toggleRecording(): Promise<void> {
   if (!recorderMime() || !cs) { toast('Recording is not supported in this browser'); return; }
   recStarting = true;
   btn.classList.add('on'); btn.innerHTML = ICONS.stop;
-  // the clip carries the sound: the microphone (asked for the first time here; the shutter's tap is the gesture)
+  // the clip carries the sound: the session's microphone (asked again here if it was refused at Start)
   const sound = SYNTH && !q.get('mic') ? [] : await clipSound();
   // said in the recording's own toast (a toast of its own was covered by it at once)
   let note = 'Recording — tap to stop';
@@ -508,7 +512,6 @@ async function toggleRecording(): Promise<void> {
     // a browser that will not record this sound: the picture alone, said so
     console.warn('recording with sound refused', e);
     for (const t of stream.getAudioTracks()) stream.removeTrack(t);
-    closeClipMic();
     mime = recorderMime(false)!;
     r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
     note = 'Recording without sound (this browser) — tap to stop';
@@ -518,7 +521,6 @@ async function toggleRecording(): Promise<void> {
   r.onstop = () => {
     clearTimeout(recTimer);
     recorder = null;
-    closeClipMic();
     btn.classList.remove('on'); btn.innerHTML = ICONS.rec;
     const type = mime.split(';')[0]!;
     void captured(new Blob(chunks, { type }), `costuma-${stamp()}.${type.includes('mp4') ? 'mp4' : 'webm'}`);
@@ -838,12 +840,17 @@ async function start(): Promise<void> {
     if (SYNTH) {
       video.srcObject = fakeRoom();
       await video.play().catch(() => undefined);
+      if (q.get('mic')) await openMic();
       if (video.readyState < 2) await new Promise((r) => video.addEventListener('loadeddata', r, { once: true }));
     } else {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error(location.protocol !== 'https:' ? 'The camera needs an https:// page.' : 'This browser has no camera access.');
       status.textContent = 'Asking for the camera…';
       await camera.open(camera.facing, settings.zoom[camera.facing] ?? 1);
       renderLens();
+      // the microphone for the session: clips record it, the music listener reads it (refused, clips are silent)
+      status.textContent = 'Asking for the microphone…';
+      await openMic();
+      if (settings.music) void listen(false);
       status.textContent = 'Loading the pose model…';
       detector = new Detector(settings.model, settings.people, settings.poseConf);
       detector.masks = masksWanted();
@@ -911,7 +918,7 @@ function boot(): void {
   scrollablePicker($('picker'));
   requestAnimationFrame(loop);
   const w = window as unknown as { __costuma: unknown };
-  w.__costuma = { stage, tracker, settings, start, choose, party, beat, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, LIGHT_TUNE, camera, intrinsics };
+  w.__costuma = { stage, tracker, settings, start, choose, party, beat, setScene, chooseEffect, get started() { return started; }, get frame() { return frame; }, get mic() { return mic; }, LIGHT_TUNE, camera, intrinsics };
   if (TEST && SYNTH) void start();
 }
 boot();

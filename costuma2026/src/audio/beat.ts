@@ -1,6 +1,7 @@
 // The music, if the player lets the page listen: the bass's energy against its own running average, an onset when it
-// jumps (a kick drum), an envelope that falls off fast. The party's visuals kick on it. The microphone opens with echo
-// cancellation, noise suppression and gain control off (PewPew: they flatten exactly the transients we want).
+// jumps (a kick drum), an envelope that falls off fast. The party's visuals kick on it. It reads the app's microphone
+// (main.ts openMic: echo cancellation, noise suppression and gain control off — PewPew: they flatten exactly the
+// transients we want), which stays open while it is off.
 export class Beat {
   /** 0..1, 1 on a kick, falling off over ~0.2 s */
   env = 0;
@@ -15,9 +16,10 @@ export class Beat {
 
   get on(): boolean { return !!this.an; }
 
-  async start(): Promise<void> {
+  /** listen to `stream` (the app's microphone, shared: stop() leaves it open) */
+  async start(stream: MediaStream): Promise<void> {
     if (this.an) return;
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    this.stream = stream;
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     this.ctx = new AC();
     await this.ctx.resume();
@@ -30,7 +32,6 @@ export class Beat {
   }
 
   stop(): void {
-    for (const t of this.stream?.getTracks() ?? []) t.stop();
     void this.ctx?.close();
     this.stream = null; this.ctx = null; this.an = null;
     this.env = 0; this.level = 0;

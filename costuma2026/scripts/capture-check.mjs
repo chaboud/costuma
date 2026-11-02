@@ -3,7 +3,7 @@
 //    with the file alone; when the sheet refuses (no recent tap), the preview opens with "Save to Photos";
 //  - a camera that says it zooms 0.5–10× (Chrome's fake camera, its track's capabilities patched): the pill shows
 //    .5 1× 2 3 5, a tap zooms the track and the focal length follows;
-//  - a clip carries the microphone's sound (Chromium's fake microphone: a beep), read back with ffprobe; with the
+//  - the microphone opens at Start and stays; a clip carries its sound (Chromium's fake microphone: a beep), read back with ffprobe; with the
 //    microphone refused, the clip is still made, silent, and the player is told;
 //  - settings → Reset to defaults: one tap only arms it, the second puts every panel setting back and applies it.
 // Prints what it saw; exit 1 on a failure.   node scripts/capture-check.mjs <any.y4m>     (npm run build first)
@@ -121,7 +121,11 @@ for (const refuse of [false, true]) {
   page.on('pageerror', (e) => console.log('pageerror', e.message));
   await page.goto(`${server.url}index.html?test=1&synth=1&mic=1&c=skeleton`);
   await page.waitForFunction(() => window.__costuma?.started && window.__costuma.frame > 3, null, { timeout: 300000, polling: 500 });
+  const open = await page.evaluate(() => !!window.__costuma.mic?.getAudioTracks().some((t) => t.readyState === 'live'));
+  if (!refuse) check(open, 'the microphone is open from Start, before any clip');
   const clip = await recordClip(page, 3);
+  const still = await page.evaluate(() => !!window.__costuma.mic?.getAudioTracks().some((t) => t.readyState === 'live'));
+  if (!refuse) check(still, 'and stays open after the clip');
   console.log(JSON.stringify({ refuse, type: clip.type, streams: clip.streams, toast: clip.toast }));
   if (!refuse) check(clip.streams.some((x) => x.endsWith('video')) && clip.streams.some((x) => x.endsWith('audio')), `a clip carries the picture and the sound (${clip.streams.join(' + ')})`);
   else check(clip.streams.some((x) => x.endsWith('video')) && !clip.streams.some((x) => x.endsWith('audio')) && /without sound/.test(clip.toast), 'the microphone refused: the clip is made, silent, and the player is told');

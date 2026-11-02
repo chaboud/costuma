@@ -327,15 +327,17 @@ in `src/main.ts`.
   to Photos". Elsewhere the preview: Save downloads, Share is the sheet.
   `scripts/capture-check.mjs` checks both paths with the sheet stubbed; whether
   Safari honours the shutter's tap after the photo is encoded is not known.
-  A clip carries the microphone's sound (founder, 2026-11-02): the music
-  listener's microphone when it is open, else one opened for the clip (asked the
-  first time, on the shutter's tap; processing off, as the beat's, so music
-  survives) and closed when it ends. Recorded as H.264 with AAC where the
+  A clip carries the microphone's sound (founder, 2026-11-02: "We should always
+  open the mic"): it opens at Start, after the camera, for the whole session
+  (processing off, so music survives), shared by every clip and the music
+  listener (which now also comes back at the next Start when left on); refused,
+  it is asked again at the next clip. Recorded as H.264 with AAC where the
   browser has it (iOS Safari), else H.264 with Opus, else the browser's own
   types. A refused microphone, or a browser that will not record sound with the
   picture, still makes the clip, silent, and the recording's toast says why.
-  Checked headless: an H.264 + Opus mp4 read back by ffprobe with both streams;
-  refused, H.264 alone. Not checked on a phone.
+  Checked headless: the microphone open from Start and after a clip; an H.264 +
+  Opus mp4 read back by ffprobe with both streams; refused, H.264 alone. Not
+  checked on a phone.
 - **Reset to defaults** (settings, at the bottom): a first tap arms it ("Tap
   again to reset", three seconds), the second puts every setting on the panel
   back and applies each as its own control would (the detector's options, the
