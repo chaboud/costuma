@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import { guessIntrinsics } from '../src/pose/solve';
 import { synthPerson } from '../src/pose/synth';
 import { Tracker, type Detection } from '../src/pose/tracker';
-import { inFrame, inFrameShare, SEEN_TUNE } from '../src/pose/seen';
+import { inFrame, inFrameShare } from '../src/pose/seen';
+import { BODY_TUNE } from '../src/pose/body';
+import { bodyLengths } from '../src/pose/solve';
 import { Rig, poseFromLandmarks } from '../src/pose/rig';
 import { reachLimbs } from '../src/pose/reach';
 import { skeleton } from '../src/characters/build';
@@ -46,8 +48,8 @@ describe('what the frame holds', () => {
     let t = 0;
     for (let i = 0; i < 90; i++) tr.update([shot], (t += 33), K);
     const k = tr.tracks[0]!;
-    expect(k.len.thigh / k.len.torso).toBeCloseTo(SEEN_TUNE.ratio.thigh, 2);
-    expect(k.len.shin / k.len.torso).toBeCloseTo(SEEN_TUNE.ratio.shin, 2);
+    expect(k.len.thigh / k.len.torso).toBeCloseTo(BODY_TUNE.parts.thigh.share, 2);
+    expect(k.len.shin / k.len.torso).toBeCloseTo(BODY_TUNE.parts.shin.share, 2);
   });
 
   it('legs seen are learned, and kept when they leave the frame', () => {
@@ -61,7 +63,7 @@ describe('what the frame holds', () => {
     let t = 0;
     for (let i = 0; i < 120; i++) tr.update([at(0)], (t += 33), K);
     const k = tr.tracks[0]!, learned = k.len.thigh / k.len.torso;
-    expect(learned).toBeGreaterThan(SEEN_TUNE.ratio.thigh * 1.15);
+    expect(learned).toBeGreaterThan(BODY_TUNE.parts.thigh.share * 1.15);
     // the camera comes close over two seconds: the legs leave the frame (the same track throughout)
     for (let i = 0; i <= 60; i++) tr.update([at(i / 60)], (t += 33), K);
     expect(at(1).image[L.hipL]!.y).toBeGreaterThan(1);
@@ -93,5 +95,49 @@ describe('what the frame holds', () => {
     const thigh = at('shinL').sub(at('thighL')).normalize();
     // the costume's own rest: its thigh carries on the torso's line (it was 70–80° up, the model's guess believed)
     expect(deg(thigh.angleTo(down))).toBeLessThan(15);
+  });
+
+  /** a selfie: the head and shoulders in the picture, the hips 0.3 of the frame below it; the model's guess of the
+   *  hidden torso `k` of its length (its hips and legs moved toward the shoulders) */
+  function selfie(k: number, at = 0.6): Detection {
+    const d = synthPerson({ T: { x: 0, y: -0.55 * (at / 0.6), z: -at } }, K), w = d.world.map((p) => ({ ...p }));
+    const sh = { x: (w[L.shL]!.x + w[L.shR]!.x) / 2, y: (w[L.shL]!.y + w[L.shR]!.y) / 2, z: (w[L.shL]!.z + w[L.shR]!.z) / 2 };
+    const hip = { x: (w[L.hipL]!.x + w[L.hipR]!.x) / 2, y: (w[L.hipL]!.y + w[L.hipR]!.y) / 2, z: (w[L.hipL]!.z + w[L.hipR]!.z) / 2 };
+    for (const i of [L.hipL, L.hipR, L.knL, L.knR, L.anL, L.anR, L.heelL, L.heelR, L.toeL, L.toeR]) {
+      const p = w[i]!; w[i] = { ...p, x: p.x + (sh.x - hip.x) * (1 - k), y: p.y + (sh.y - hip.y) * (1 - k), z: p.z + (sh.z - hip.z) * (1 - k) };
+    }
+    return { ...d, world: w };
+  }
+
+  it('a selfie is sized by its face and shoulders, not the model\'s guess of the hidden torso', () => {
+    const tr = new Tracker();
+    // the model's guess 10 % short (recorded torso shots measured 1.36 × the shoulders against 1.43–1.57 seen whole)
+    const d = selfie(0.9), truth = bodyLengths(synthPerson({ T: { x: 0, y: -0.55, z: -0.6 } }, K).world).torso;
+    expect(d.image[L.hipL]!.y).toBeGreaterThan(1.1);
+    expect(d.image[L.earL]!.y).toBeLessThan(0.5);
+    let t = 0;
+    for (let i = 0; i < 60; i++) tr.update([d], (t += 33), K);
+    const k = tr.tracks[0]!, guess = bodyLengths(d.world).torso;
+    // from people's usual shares of the parts seen (this synthetic person's shoulders are broad: 0.73 of the torso
+    // against 0.67) and the guess, each by its spread: nearer the truth than the guess alone
+    expect(Math.abs(k.len.torso / truth - 1)).toBeLessThan(0.06);
+    expect(Math.abs(k.len.torso - truth)).toBeLessThan(Math.abs(guess - truth) * 0.7);
+  });
+
+  it('a person seen whole, then in a selfie, keeps the size the whole view gave', () => {
+    const tr = new Tracker();
+    let t = 0;
+    // the whole person (their own shares learned against the seen torso), walking up to the camera over two seconds
+    const at = (f: number) => {
+      const z = 3 - 2.4 * f, d = synthPerson({ T: { x: 0, y: -0.2 - 0.35 * f, z: -z } }, K);
+      return d.image[L.hipL]!.y > 1 ? selfie(0.8, z) : d;
+    };
+    for (let i = 0; i < 90; i++) tr.update([at(0)], (t += 33), K);
+    const k = tr.tracks[0]!, whole = k.len.torso;
+    for (let i = 0; i <= 60; i++) tr.update([at(i / 60)], (t += 33), K);
+    expect(at(1).image[L.hipL]!.y).toBeGreaterThan(1);
+    for (let i = 0; i < 90; i++) tr.update([at(1)], (t += 33), K);
+    expect(tr.tracks[0]).toBe(k);
+    expect(Math.abs(k.len.torso / whole - 1)).toBeLessThan(0.02);
   });
 });

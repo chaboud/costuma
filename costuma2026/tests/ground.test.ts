@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Ground } from '../src/pose/ground';
 import { Tracker } from '../src/pose/tracker';
 import { bodyLengths, guessIntrinsics, project } from '../src/pose/solve';
-import { SEEN_TUNE } from '../src/pose/seen';
+import { BODY_TUNE } from '../src/pose/body';
 import { synthPerson } from '../src/pose/synth';
 import type { Detection } from '../src/pose/tracker';
 
@@ -47,8 +47,8 @@ describe('ground', () => {
     settle(g, () => [d]);
     expect(g.fromFeet).toBe(false);
     // the hips stand their legs' length above the floor, wherever up leans: legs never seen are people's usual shares
-    // of the torso (pose/seen.ts), plus the ankle
-    const torso = bodyLengths(d.world).torso, legs = (SEEN_TUNE.ratio.thigh + SEEN_TUNE.ratio.shin) * torso + 0.08;
+    // of the torso (pose/body.ts), plus the ankle
+    const { parts } = BODY_TUNE, torso = bodyLengths(d.world).torso, legs = (parts.thigh.share + parts.shin.share) * torso + 0.08;
     expect(Math.abs(g.height(T) - legs)).toBeLessThan(0.03);
   });
   it('takes the phone\'s gravity when it agrees with the people, not when it does not', () => {

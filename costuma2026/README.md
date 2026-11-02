@@ -33,6 +33,7 @@ node scripts/face-probe.mjs <portrait.jpg> [profiles.jpg]   # what the face mode
 node scripts/pose-record.mjs <clip|photo> <out.json>   # every frame through the real pose model, in order (FPS= SECS= VF='ffmpeg filter' N=)
 STAB=a.json,b.json npx vitest run scripts/stability-sim.test.ts   # replay through the tracker: lean, error, jerk, jumps; INJECT=1 adds depth flips
 LEGS=a.json npx vitest run scripts/legs-sim.test.ts   # legs the frame cuts off: hips/knees/ankles in the picture, the leg raw, tracked and on the costume, its drawn lengths (C=)
+BODY=a.json,b.json npx vitest run scripts/body-sim.test.ts   # sizing by shot: the fitted torso, how much it moves, the costume's shoulders against the person's, hips seen vs out (DRIFT=)
 STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
 OCCL=people|all node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion on a frozen frame: on, off, people alone (all), the cut-outs, the depth map (MIN= people in view first)
 node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill
@@ -105,24 +106,38 @@ in `src/main.ts`.
   person can make (arms overhead included). Limbs stretch toward the wearer's
   lengths (`fit.limb`), the neck squashes so the head lands on the wearer's
   (`fit.head`).
-- **Unseen limbs** (`src/pose/seen.ts`; founder: "if body parts are off the
-  edge of the screen or obstructed, we should probably just assume a continued
-  trajectory… legs off the bottom of the screen end up crunching up top"). An
-  unseen bone eases, by a curve of how unseen, to the costume's own rest: its
-  parent's line carried on (a thigh down the torso, a straight elbow). Two
-  leaks fixed. The pose model rates guessed joints below the frame up to
-  0.5–0.7 visible at times, so a joint's visibility is now also how far inside
-  the frame it is (all of it 3 % inside the edge, none 3 % outside): a guess of
-  raised knees below a torso shot, rated 0.6–0.9, lifted the costume's thighs
-  43–85° toward the chest; now they stay at rest. And the wearer's limb lengths
-  were measured every frame from those guesses (a torso shot's thighs 0.18–0.23
-  m), so costumes that fit their legs drew them short (the kaiju's thigh at
-  75 %, the witch's at 68 %): now each is a share of the torso learned only as
-  fast as both its ends are seen, from people's usual shares (thigh 0.80, shin
-  0.75, upper arm 0.43, forearm 0.44 of the torso, measured on 28 fully seen
-  people) — 96 % and 91 % on the same clip, and legs learned while seen keep
-  their length when they leave (`scripts/legs-sim.test.ts`). In the replays smoothing was not
-  the cause: the smoothed guess stays bent, but the rig no longer believes it.
+- **What is seen, and the rest extrapolated** (`src/pose/seen.ts`,
+  `src/pose/body.ts`; founder: "like stretch Armstrong, limbs without hints
+  have a neutral to return to… We can estimate body length from other points…
+  Full body is best, but they're all priors for an estimator… It's
+  extrapolation with a partial fit"). An unseen bone eases, by a curve of how
+  unseen, to the costume's own rest: its parent's line carried on (a thigh down
+  the torso, a straight elbow). A joint's visibility is also how far inside the
+  frame it is (the model rated knees below a torso shot up to 0.5–0.7 at times;
+  a raised-knee guess there lifted the costume's thighs 43–85° toward the
+  chest; now they stay at rest). Every length comes from one fit per person:
+  their torso, a one-dimensional Kalman filter (log) read through every part
+  the picture shows — torso, neck, shoulders' and hips' width, the ears' span,
+  upper arms, forearms, thighs, shins — each by its visibility and by how much
+  that part's share of the torso varies between people (shares and spreads
+  measured on ~300 detections per part where part and torso were clearly seen,
+  ~20 people: neck 0.39 of the torso, shoulders 0.67, ears 0.31, thigh 0.80,
+  shin 0.77…), plus, while the hips are hidden and as far as the size is not
+  already known, the model's own guess of the hidden torso. A person's own
+  shares are learned only while their torso is seen (it is the reference), so a
+  full view teaches the fit their face and shoulders and a selfie afterwards
+  keeps it (synthetic: a person seen whole then in a selfie whose hidden torso
+  the model guesses 20 % short — before 17 % drift, now under 2 %); a selfie
+  from the start is sized by the usual shares and the guess. Unseen lengths are
+  the size times the shares: a torso shot's guessed thighs measured 0.18–0.23
+  m, and costumes that fit their legs to the wearer drew them at 68–75 %; now
+  89–96 % (`scripts/legs-sim.test.ts`). The size follows the model's 3D scale
+  (it moves with the framing: one man's shoulders 3 %, neck and ears 7 %
+  smaller once zoomed to a chest shot, and the depth is solved in that scale),
+  so what persists is the proportions; through that zoom the costume's
+  shoulders against his went from 1.11× to 1.15× (1.17× before), its size
+  moving 0.06 % a frame (`scripts/body-sim.test.ts`). Steadiness on five
+  recorded clips unchanged.
 - **Reach** (`src/pose/reach.ts`): after the retarget, each limb bone is aimed
   so its far end lands on the person's joint in the picture — the camera's ray
   through the joint met by a sphere of the bone's own length round where the
