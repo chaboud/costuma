@@ -407,6 +407,22 @@ that means here, and where each lives:
   (`tracker.ts shiftTogether`); the hips are re-solved from the smoothed picture, their depth smoothed along the
   same ray so the costume does not move on screen: 0.6 px, below the unsmoothed 0.7, with the limbs and head as
   steady as before. Faces do the same for googly eyes. The bones' turns glide ~25 ms on top (`rig.apply` dt).
+- **A far person's own noise** (`pose/tracker.ts measureNoise`; the first phone
+  debug recording, 2026-11-02: "a bit jiggly, but pretty good"). The phone ran
+  ~10 detections a second (full model, occlusion People + things, the kaiju,
+  faces); a woman seated ~8 m off, ~100 px tall in the frame, had 2.7 cm of 3D
+  noise at the shoulders against 0.8–2.1 cm for people near the camera, and the
+  fixed 3D bands let it through as 1–2° of turn an update. Each track now
+  measures its own 3D noise (third differences of the raw pose, the median over
+  a group's seen points, learned only as far as the raw pose is still: a
+  walker's own motion read as noise widened every band and the street's chest
+  turn went from 23–30° off to 37–46°) and its 3D bands widen to it. On her:
+  the chest's turn 1.17 → 0.85° an update, the head's 2.08 → 1.81°, the arms
+  1.21/0.71 → 1.00/0.64°, errors no worse; the street and the torso clips as
+  before. The picture's bands stay as they were: there, a hand-held phone moves
+  the person, which the costume must follow (her shoulders moved against the
+  room about as much as with it). Not yet fixed: the 10 a second itself (the
+  debug log now times every stage, every drawn frame).
 - **No jiggle.** Measured, not guessed: a noisy still replayed through the
   tracker at 30 fps (`scripts/jitter-probe.mjs` records, `scripts/jitter-sim.test.ts`
   replays). Raw: hips' depth 1.0 cm, upper arm 0.80°, head 1.19°, pelvis

@@ -681,10 +681,14 @@ function renderLens(): void {
     box.appendChild(b);
   });
 }
+/** this frame's stages (ms of the main thread), for the debug recording: where a slow phone's frame goes */
+const ms = { detect: 0, face: 0, pose: 0, render: 0 };
 function loop(now: number): void {
   requestAnimationFrame(loop);
   if (!started) return;
   frame++;
+  const tLoop = performance.now();
+  ms.detect = ms.face = ms.pose = ms.render = 0;
   const K = intrinsics();
   stage.layout(K, camera.mirrored && !SYNTH);
   let dets: Detection[] | null = null;
@@ -693,7 +697,9 @@ function loop(now: number): void {
     if (settings.scene === 'party') { const a = K.w / K.h, mw = a >= 1 ? 240 : Math.round(240 * a), mh = a >= 1 ? Math.round(240 / a) : 240; for (const d of dets) d.mask = synthMask(d, mw, mh, a); }
   } else if (detector && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
+    const tD = performance.now();
     try { dets = detector.detect(detectionInput(), now); } catch (e) { console.error(e); }
+    ms.detect = performance.now() - tD;
   }
   // up for the upright check (pose/upright.ts): the floor's, from the phone's gravity or the people (last frame's)
   // (what the tracker is handed, as the debug recording keeps it for an exact replay: last frame's up, the People count)
@@ -702,7 +708,9 @@ function loop(now: number): void {
   // faces from the full-resolution frame, each read from a crop round a person's head (pose/face.ts)
   if (dets) {
     let faces: Map<number, FaceDet> | null = null;
+    const tF = performance.now();
     if (faceTracker && settings.faces && !SYNTH) { try { faces = faceTracker.detect(video, tracker.tracks, K); } catch (e) { console.error(e); } }
+    ms.face = performance.now() - tF;
     attachFaces(tracker.tracks, faces, K, now, lastFaceNow < 0 ? 1 / 30 : Math.min(0.25, (now - lastFaceNow) / 1000));
     lastFaceNow = now;
     // headless runs set the faces by hand (?jaw=0..1, ?face=blinkL:1,smile:1,lookX:-0.5)
@@ -736,7 +744,9 @@ function loop(now: number): void {
   // picture's depth now and then (off the frame: it resolves later)
   if (settings.occlusion === 'all' && !SYNTH && stage.depth.due(now) && video.readyState >= 2) void stage.depth.read(video, tracker.tracks, K, now, { n: stage.ground.n, h: stage.ground.h });
   stage.depth.frame(settings.occlusion, tracker.tracks, stage.bgUniforms.uCrop.value, stage.bgUniforms.uMirror.value, stage.renderer.getDrawingBufferSize(new THREE.Vector2()), dt);
+  const tP = performance.now();
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
+  ms.pose = performance.now() - tP;
   // the debug recording: this camera frame's raw detections and what the tracker and the stage made of them
   if (meta && dets) meta.frame(now, video.currentTime, dets, peopleUsed, tracker.tracks, K, upUsed, stage.ground, stage.wearersOut(), castOf);
   stage.googlyOn = settings.googly && settings.faces;
@@ -749,7 +759,10 @@ function loop(now: number): void {
     party.update(tracker.tracks, dt, tSec, K.w / K.h, stage.ground, K);
     party.render(stage.renderer, K.w, K.h);
   }
+  const tR = performance.now();
   stage.render(video, K, frame);
+  ms.render = performance.now() - tR;
+  meta?.tick(now, { ...ms, total: performance.now() - tLoop, depth: stage.depth.ms, depthBusy: stage.depth.busy ? 1 : 0, pixelRatio: stage.opts.pixelRatio, shadows: stage.opts.shadows ? 1 : 0, newFrame: dets ? 1 : 0 });
   if (snapWanted) {
     snapWanted = false;
     canvas.toBlob((b) => { if (b) void captured(b, `costuma-${stamp()}.jpg`); }, 'image/jpeg', 0.92);

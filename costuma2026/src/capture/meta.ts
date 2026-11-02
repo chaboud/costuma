@@ -83,6 +83,11 @@ export class MetaLog {
     });
   }
 
+  /** every drawn frame (detection or not): when, and the main thread's ms by stage (detect, face, pose — the costumes
+   *  — and render, the WebGL calls; the GPU's own time is not seen), the last depth reading's ms, the quality ladder */
+  private ticks: { now: number; ms: Record<string, number> }[] = [];
+  tick(now: number, ms: Record<string, number>): void { this.ticks.push({ now, ms: { ...ms } }); }
+
   get frameCount(): number { return this.frames.length; }
 
   /** end: the log as JSON and the camera's own clip */
@@ -93,7 +98,7 @@ export class MetaLog {
       if (r.state !== 'inactive') await new Promise<void>((done) => { r.onstop = () => done(); r.stop(); });
       raw = new Blob(this.rawChunks, { type: this.rawMime.split(';')[0] });
     }
-    const json = JSON.stringify({ format: 'costuma-meta-1', info: this.info, frames: this.frames }, r5);
+    const json = JSON.stringify({ format: 'costuma-meta-1', info: this.info, frames: this.frames, ticks: this.ticks }, r5);
     return { json, raw };
   }
 }

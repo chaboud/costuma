@@ -39,6 +39,10 @@ export interface Track {
   len: ReturnType<typeof bodyLengths>;
   /** the person's size, fitted from whatever of them is seen; `len` is read from it (body.ts) */
   body: BodyFit;
+  /** the model's own 3D noise for this person (per axis, metres², torso and limbs), from its raw pose's second
+   *  differences, and the last two raw poses they are taken from: the hold's bands widen to it (a person far off is
+   *  noisier) */
+  noise?: { core: number; limb: number; p1: LM[] | null; p2: LM[] | null; p3: LM[] | null };
   /** 0..1, fades in when found (once confirmed) and out when lost */
   presence: number;
   /** frames this track has been found in: under TUNE.confirm it is not shown, and lost it is dropped at once */
@@ -97,7 +101,11 @@ export const TUNE = {
    * twice over for the same stillness cost far more (18 → 29°)
    */
   hold: true,
-  holdWorldCore: 0.008, holdWorldLimb: 0.013, holdZ: 1.5, holdImageCore: 0.007, holdImageLimb: 0.028, holdDepth: 0.015,
+  holdWorldCore: 0.008, holdWorldLimb: 0.013, holdZ: 1.5,
+  /** the 3D bands widen to the person's measured noise (σ a axis, from the raw pose's third differences while they
+   *  stand still: measureNoise): a band is at least `noiseBand` σ (before the smoothing setting's factor). Measured on a phone recording of a seated woman ~8 m off: 2.7 cm of 3D noise at the shoulders
+   *  against 0.8–2.1 for people near the camera, so the fixed bands let it through as 1–2° of turn a frame */
+  noiseBand: 1, tauNoise: 1.5, holdImageCore: 0.007, holdImageLimb: 0.028, holdDepth: 0.015,
   /** the motor's stiffness (rad/s) for the torso-and-face and the limbs, and its faint pull inside the band */
   motorCore: 10, motorLimb: 14, motorCreep: 2.5, motorBoost: 2,
   /** the shared shift's motor (rad/s): stiff, so a hand-held shake is followed nearly at once */
@@ -199,6 +207,38 @@ function motor(x: number, v: number, r: number, dt: number, band: number, w: num
   }
   return [x, v];
 }
+/**
+ * A person's 3D noise, per axis (m²), torso and limbs: from the raw pose's third differences (x − 3x₋₁ + 3x₋₂ − x₋₃: a
+ * steady move and a steady turn of pace both cancel, noise does not; its variance is 20σ² for white noise), the median
+ * over the group's seen points (one bad point cannot swing it), eased over TUNE.tauNoise — and learned only as far as the
+ * person stands still (a curve of how far the shown pose moved this frame against the noise): a walker's own motion
+ * read as noise and widened every band (replayed on a street: the chest's turn 23–30° off the person's, then 37–46°).
+ * Not the picture's: a hand-held camera moves the person in it, which the costume must follow; the 3D pose is the
+ * model's guess about the hips and does not see the camera move.
+ */
+function measureNoise(t: Track, world: LM[], image: LM[], dt: number): void {
+  const n = t.noise ??= { core: TUNE.holdWorldCore ** 2, limb: TUNE.holdWorldLimb ** 2, p1: null, p2: null, p3: null };
+  if (n.p1 && n.p2 && n.p3) {
+    const core: number[] = [], limb: number[] = [], moveC: number[] = [], moveL: number[] = [];
+    for (let i = 0; i < N_LANDMARKS; i++) {
+      if (image[i]!.v < 0.6 || n.p1[i]!.v < 0.6 || n.p2[i]!.v < 0.6 || n.p3[i]!.v < 0.6) continue;
+      const a = world[i]!, b = n.p1[i]!, c = n.p2[i]!, d = n.p3[i]!;
+      const e = ((a.x - 3 * b.x + 3 * c.x - d.x) ** 2 + (a.y - 3 * b.y + 3 * c.y - d.y) ** 2 + (a.z - 3 * b.z + 3 * c.z - d.z) ** 2) / 60;
+      // how far the raw point moved: the last two frames' mean against the two before (still, about the noise itself;
+      // the shown pose would not do: the bands this sets hold it still, and a walker looked still), per axis
+      const m = ((a.x + b.x - c.x - d.x) ** 2 + (a.y + b.y - c.y - d.y) ** 2 + (a.z + b.z - c.z - d.z) ** 2) / 12;
+      if (CORE.has(i)) { core.push(e); moveC.push(m); } else { limb.push(e); moveL.push(m); }
+    }
+    const med = (xs: number[]) => { xs.sort((p, q) => p - q); return xs[xs.length >> 1]!; };
+    const k = kOf(dt, TUNE.tauNoise);
+    // learned as far as the person is still: moving several times the noise, hardly at all (a curve, no threshold)
+    if (core.length >= 3) n.core += (med(core) - n.core) * k / (1 + (med(moveC) / n.core) ** 2);
+    if (limb.length >= 3) n.limb += (med(limb) - n.limb) * k / (1 + (med(moveL) / n.limb) ** 2);
+  }
+  n.p3 = n.p2; n.p2 = n.p1;
+  n.p1 = world.map((p, i) => ({ ...p, v: image[i]!.v }));
+}
+
 /** the motor for every point: `vel` its velocities (per coordinate), `band` and stiffness per point */
 function motorLM(out: LM[], inp: LM[], vel: Float64Array, dims: 2 | 3, dt: number, band: (i: number, a: number) => number): void {
   for (let i = 0; i < N_LANDMARKS; i++) {
@@ -309,6 +349,7 @@ export class Tracker {
       // the depth for "what an upright torso looks like on screen": the track's, not this detection's (a flip moves it)
       const chk = this.check(t, p.d, t.T, K, up, now);
       t.verdict = chk.verdict;
+      if (!snap) measureNoise(t, chk.world, p.d.image, dt);
       let shift = { dx: 0, dy: 0 };
       if (TUNE.filter === 'kalman') {
         const fresh = !t.kf;
@@ -344,7 +385,9 @@ export class Tracker {
           for (const o of t.image) { o.x += sdx; o.y += sdy; }
         }
         const shoulders = Math.hypot(t.ism[L.shL]!.x - t.ism[L.shR]!.x, (t.ism[L.shL]!.y - t.ism[L.shR]!.y) * K.h / K.w) || 0.05;
-        const bw = (i: number, a: number) => (CORE.has(i) ? TUNE.holdWorldCore : TUNE.holdWorldLimb) * (a === 2 ? TUNE.holdZ : 1) * TUNE.smoothBand;
+        // the 3D bands: the configured, or the person's own measured noise if it is larger (a far, small person)
+        const nz = t.noise, sc = Math.max(TUNE.holdWorldCore, TUNE.noiseBand * Math.sqrt(nz?.core ?? 0)), sl = Math.max(TUNE.holdWorldLimb, TUNE.noiseBand * Math.sqrt(nz?.limb ?? 0));
+        const bw = (i: number, a: number) => (CORE.has(i) ? sc : sl) * (a === 2 ? TUNE.holdZ : 1) * TUNE.smoothBand;
         const bi = (i: number, a: number) => (CORE.has(i) ? TUNE.holdImageCore : TUNE.holdImageLimb) * shoulders * (a === 1 ? K.w / K.h : 1) * TUNE.smoothBand;
         const vel = t.vel ??= { world: new Float64Array(N_LANDMARKS * 3), image: new Float64Array(N_LANDMARKS * 2), z: 0 };
         motorLM(t.wh, t.wsm, vel.world, 3, dt, bw);
@@ -424,6 +467,7 @@ export class Tracker {
         vel: t.vel ? { world: Array.from(t.vel.world), image: Array.from(t.vel.image), z: t.vel.z } : undefined,
         cm: t.cm ? { ...t.cm } : undefined, up: { ...t.up },
         body: { logS: t.body.logS, P: t.body.P, A: { ...t.body.A }, B: { ...t.body.B } },
+        noise: t.noise ? { core: t.noise.core, limb: t.noise.limb, p1: t.noise.p1 && lm(t.noise.p1), p2: t.noise.p2 && lm(t.noise.p2), p3: t.noise.p3 && lm(t.noise.p3) } : undefined,
         det: null, face: undefined, kf: null,
       })),
     };

@@ -16,7 +16,7 @@ const q = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b)
 
 describe.skipIf(!file)('a debug recording, replayed', () => {
   it(file, () => {
-    const { recs, info } = loadRecording(file);
+    const { recs, info, ticks } = loadRecording(file);
     const i = (info ?? {}) as Record<string, unknown> & { settings?: Record<string, unknown>; video?: { w: number; h: number } };
     const dur = recs.length > 1 ? (recs.at(-1)!.now - recs[0]!.now) / 1000 : 0;
     console.log(`\n${file.split('/').pop()}\n build ${i.build} · ${i.ua}\n camera ${i.facing} ${i.video?.w}×${i.video?.h} zoom ${i.zoom} · ${recs.length} frames over ${dur.toFixed(1)} s (${(recs.length / Math.max(dur, 1e-3)).toFixed(1)} a second)`);
@@ -30,6 +30,16 @@ describe.skipIf(!file)('a debug recording, replayed', () => {
     }
     for (const [id, e] of seen) console.log(` track ${id} (${e.costume}): ${e.frames} frames · ${Object.entries(e.verdicts).map(([k, v]) => `${k} ${v}`).join(', ')} · torso ${q(e.torso, 0.05).toFixed(3)}–${q(e.torso, 0.95).toFixed(3)} m`);
     console.log(` detections a frame: ${recs.map((r) => r.dets.length).join('')}`);
+    // where the frame went (recordings from builds with per-frame timing): drawn frames a second, the main thread's ms
+    if (ticks.length > 2) {
+      const gaps = ticks.slice(1).map((t, k) => t.now - ticks[k]!.now), keys = Object.keys(ticks[0]!.ms);
+      const fresh = ticks.filter((t) => t.ms.newFrame);
+      console.log(` drawn ${ticks.length} frames, ${(1000 / q(gaps, 0.5)).toFixed(1)} a second at the median (gap p90 ${q(gaps, 0.9).toFixed(0)} ms, worst ${Math.max(...gaps).toFixed(0)} ms); a new camera frame on ${fresh.length}`);
+      console.log(' main thread, ms (median / p90): ' + keys.filter((k) => !/newFrame|pixelRatio|shadows|depthBusy/.test(k)).map((k) => {
+        const src = /detect|face/.test(k) ? fresh : ticks;
+        return `${k} ${q(src.map((t) => t.ms[k]!), 0.5).toFixed(1)} / ${q(src.map((t) => t.ms[k]!), 0.9).toFixed(1)}`;
+      }).join(' · ') + ` · pixel ratio ${ticks.at(-1)!.ms.pixelRatio}, shadows ${ticks.at(-1)!.ms.shadows ? 'on' : 'off'}`);
+    }
     // the replay: today's tracker on the phone's inputs
     // from where the phone's tracker stood when the clip began, with its smoothing setting
     const tr = new Tracker(), dT: number[] = [], dW: number[] = [], dI: number[] = [], missing = { now: 0, then: 0 };
