@@ -244,12 +244,15 @@ function dip(fn: () => void | Promise<void>): void {
   setTimeout(async () => { try { await fn(); } finally { requestAnimationFrame(() => requestAnimationFrame(() => d.classList.remove('on'))); } }, 190);
 }
 
+/** the pose model's cut-out of each person: party mode draws with them, occlusion hides costumes behind other people */
+const masksWanted = () => settings.scene === 'party' || settings.occlusion !== 'off';
+
 /** costumes, or party mode; party asks the pose model for each person's cut-out mask */
 function setScene(scene: Settings['scene']): void {
   settings.scene = scene;
   persist();
   stage.setBackground(scene === 'party' ? party.material : null);
-  void detector?.setOptions({ masks: scene === 'party' });
+  void detector?.setOptions({ masks: masksWanted() });
   $('btn-pyramid').classList.toggle('hidden', scene !== 'party');
   for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) {
     const on = b.dataset.scene === scene;
@@ -352,7 +355,11 @@ function buildSettings(): void {
   };
   row(settings.scene === 'party' ? 'Subjects' : 'People', settings.scene === 'party' ? 'How many people to cut out (the nearest)' : 'How many to dress at once', seg<number>([[1, '1'], [2, '2'], [3, '3'], [4, '4']], () => settings.people, (v) => { settings.people = v; void detector?.setOptions({ numPoses: v }); }));
   row('Costume size', 'Bigger hides more of the person', range(0.8, 1.5, 0.01, () => settings.size, (v) => { settings.size = v; stage.opts.size = v; }));
-  row('Occlusion (experimental)', 'Things in front of a costume hide it, from a depth model: 47 MB the first time, a few readings a second', sw(() => settings.occlusion, (v) => { settings.occlusion = v; if (v) void loadDepth(); }));
+  row('Occlusion (experimental)', 'Who and what stands in front of a costume hides it. People: from the pose model, nothing more to load. Things too (tables, chairs, props): a depth model, 47 MB the first time', seg<Settings['occlusion']>([['off', 'Off'], ['people', 'People'], ['all', 'People + things']], () => settings.occlusion, (v) => {
+    settings.occlusion = v;
+    void detector?.setOptions({ masks: masksWanted() });
+    if (v === 'all') void loadDepth();
+  }));
   row('Smoothing', 'Steady holds a still pose rock-solid; snappy follows fast moves sooner', range(0, 1, 0.05, () => settings.smoothing, (v) => { settings.smoothing = v; setSmoothing(v); }));
   row('Detection threshold', 'Higher ignores what only looks like a person (coats, posters, shadows); lower finds people further off or half hidden', range(0.4, 0.9, 0.05, () => settings.poseConf, (v) => { settings.poseConf = v; void detector?.setOptions({ conf: v }); }));
   row('Pose model', 'Accurate is steadier, slower to load and run', seg<'lite' | 'full'>([['lite', 'Fast'], ['full', 'Accurate']], () => settings.model, (v) => { settings.model = v; void reloadDetector(); }));
@@ -501,11 +508,12 @@ canvas.addEventListener('click', (e) => {
 
 // ── the loop ───────────────────────────────────────────────────────────────────────────────────────────────────────
 let frame = 0, lastVideoTime = -1, lastSeen = 0, t0 = performance.now(), lastNow = performance.now();
-// party mode detects on a smaller copy of the frame: the masks come back at the input's size, one GPU→CPU copy each
+// with masks (party mode, occlusion) the pose model sees a smaller copy of the frame: the masks come back at the input's
+// size, one GPU→CPU copy each
 const detCanvas = document.createElement('canvas');
 const detCtx = detCanvas.getContext('2d')!;
 function detectionInput(): HTMLVideoElement | HTMLCanvasElement {
-  if (settings.scene !== 'party') return video;
+  if (!masksWanted()) return video;
   const vw = video.videoWidth || 720, vh = video.videoHeight || 1280, k = 480 / Math.max(vw, vh);
   const w = Math.round(vw * k), h = Math.round(vh * k);
   if (detCanvas.width !== w || detCanvas.height !== h) { detCanvas.width = w; detCanvas.height = h; }
@@ -595,10 +603,11 @@ function loop(now: number): void {
     stage.light.realism = situ;
   }
   stage.setGrain(true, tSec);
+  // occlusion (render/occlusion.ts): the people's cut-outs this frame, before the costumes take their channels; the
+  // picture's depth now and then (off the frame: it resolves later)
+  if (settings.occlusion === 'all' && !SYNTH && stage.depth.due(now) && video.readyState >= 2) void stage.depth.read(video, tracker.tracks, K, now, { n: stage.ground.n, h: stage.ground.h });
+  stage.depth.frame(settings.occlusion, tracker.tracks, stage.bgUniforms.uCrop.value, stage.bgUniforms.uMirror.value, stage.renderer.getDrawingBufferSize(new THREE.Vector2()), dt);
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
-  // the picture's depth for occlusion: a reading now and then (off the frame: it resolves later), the effect eased
-  if (settings.occlusion && !SYNTH && stage.depth.due(now) && video.readyState >= 2) void stage.depth.read(video, tracker.tracks, K, now, { n: stage.ground.n, h: stage.ground.h });
-  stage.depth.frame(settings.occlusion, stage.bgUniforms.uCrop.value, stage.bgUniforms.uMirror.value, stage.renderer.getDrawingBufferSize(new THREE.Vector2()), dt);
   stage.googlyOn = settings.googly && settings.faces;
   stage.breathOn = settings.breath && settings.faces;
   stage.faces(tracker.tracks, K, dt);
@@ -687,7 +696,7 @@ function readout(): void {
     `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'}`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `camera ${camera.describe()}`,
-    `depth ${stage.depth.ready ? `${stage.depth.engine} · ${stage.depth.ms.toFixed(0)} ms${stage.depth.cal ? ` · 1/z = ${stage.depth.cal.a.toFixed(3)}·d + ${stage.depth.cal.b.toFixed(3)} (${stage.depth.cal.n} points)` : ' · not yet calibrated'} · on ${stage.depth.u.uOcclOn.value.toFixed(2)}` : settings.occlusion ? 'loading' : 'off'}`,
+    `occlusion ${settings.occlusion} · cut-outs ${stage.depth.people} (on ${stage.depth.u.uOcclMasksOn.value.toFixed(2)}) · depth ${stage.depth.ready ? `${stage.depth.engine} · ${stage.depth.ms.toFixed(0)} ms${stage.depth.cal ? ` · 1/z = ${stage.depth.cal.a.toFixed(3)}·d + ${stage.depth.cal.b.toFixed(3)} (${stage.depth.cal.n} points)` : ' · not yet calibrated'} · on ${stage.depth.u.uOcclDepthOn.value.toFixed(2)}` : settings.occlusion === 'all' ? 'loading' : 'off'}`,
     `people ${tracker.tracks.filter((t) => !t.lost).length} · dressed ${stage.count}`,
     ...tracker.tracks.filter((t) => !t.lost && t.face).map((t) => {
       const f = t.face!, e = new THREE.Euler().setFromQuaternion(f.head, 'YXZ'), d = (r: number) => Math.round(THREE.MathUtils.radToDeg(r));
@@ -704,7 +713,7 @@ async function reloadDetector(): Promise<void> {
   if (SYNTH) return;
   const old = detector;
   const d = new Detector(settings.model, settings.people, settings.poseConf);
-  d.masks = settings.scene === 'party';
+  d.masks = masksWanted();
   await d.load((s) => toast(s, 2500));
   detector = d;
   old?.close();
@@ -717,7 +726,7 @@ async function loadDepth(): Promise<void> {
   if (stage.depth.ready || depthLoading || SYNTH) return;
   depthLoading = true;
   try { await stage.depth.load((s) => toast(s, 2500)); toast(`Occlusion on (${stage.depth.engine === 'webgpu' ? 'GPU' : 'CPU'})`, 1500); }
-  catch (e) { console.warn(e); toast('The depth model would not load on this phone'); settings.occlusion = false; persist(); }
+  catch (e) { console.warn(e); toast('The depth model would not load on this phone: people only'); settings.occlusion = 'people'; persist(); }
   finally { depthLoading = false; }
 }
 
@@ -763,7 +772,7 @@ async function start(): Promise<void> {
       renderLens();
       status.textContent = 'Loading the pose model…';
       detector = new Detector(settings.model, settings.people, settings.poseConf);
-      detector.masks = settings.scene === 'party';
+      detector.masks = masksWanted();
       await detector.load((s) => { status.textContent = s[0]!.toUpperCase() + s.slice(1) + '…'; });
     }
     stage.setVideo(video);
@@ -775,7 +784,7 @@ async function start(): Promise<void> {
     // the rest in the background, in picker order; the face model too
     for (const d of rotation()) void stage.prepare(d.id);
     void loadFaces();
-    if (settings.occlusion) void loadDepth();
+    if (settings.occlusion === 'all') void loadDepth();
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
     setScene(settings.scene);

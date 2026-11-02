@@ -9,8 +9,9 @@ export interface Settings {
   poseConf: number;
   /** how much the pose is smoothed, 0 snappy .. 1 steady (pose/tracker.ts setSmoothing) */
   smoothing: number;
-  /** hide costumes behind what the picture's depth says stands in front of them (render/occlusion.ts; a 47 MB model) */
-  occlusion: boolean;
+  /** costumes hidden behind what stands in front of them (render/occlusion.ts): off; by people (the pose model's own
+   *  cut-outs and depths, no extra model); by people and things (adds a 47 MB depth model for tables, chairs, props) */
+  occlusion: 'off' | 'people' | 'all';
   /** the camera's zoom per facing (1: its main lens; 0.5 the ultra-wide where the phone offers it) */
   zoom: { user?: number; environment?: number };
   envLight: boolean;
@@ -43,7 +44,7 @@ export interface Settings {
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, smoothing: 0.5, occlusion: false, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, smoothing: 0.5, occlusion: 'off', zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
@@ -72,6 +73,10 @@ export function loadSettings(): Settings {
     // v7 (2026-11-01): the sparks from open mouths are off unless asked for (founder: "Default the sparks to off")
     if (v < 7) s.breath = false;
     if (!s.zoom || typeof s.zoom !== 'object') s.zoom = {};
+    // occlusion was a yes/no (the depth model) before it had people alone
+    const oc = s.occlusion as unknown;
+    if (oc === true) s.occlusion = 'all';
+    else if (oc !== 'people' && oc !== 'all') s.occlusion = 'off';
     if (!(s.smoothing >= 0 && s.smoothing <= 1)) s.smoothing = DEFAULTS.smoothing;
     // Violet took the Valkyrie's place: whoever wore the Valkyrie wears Violet
     if (s.costume === 'valkyrie') s.costume = 'violet';

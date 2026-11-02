@@ -33,6 +33,12 @@ describe('settings', () => {
     store({ breath: true, v: 7 });
     expect(loadSettings().breath).toBe(true);
   });
+  it('occlusion was a yes/no: yes is people and things, anything else off', () => {
+    store({ occlusion: true, v: 7 }); expect(loadSettings().occlusion).toBe('all');
+    store({ occlusion: false, v: 7 }); expect(loadSettings().occlusion).toBe('off');
+    store({ occlusion: 'people', v: 7 }); expect(loadSettings().occlusion).toBe('people');
+    store({ v: 7 }); expect(loadSettings().occlusion).toBe('off');
+  });
   it('the pose threshold: raised for everyone once (v6), a chosen one stays after', () => {
     store({ people: 2, v: 5 });
     expect(loadSettings().poseConf).toBe(0.65);

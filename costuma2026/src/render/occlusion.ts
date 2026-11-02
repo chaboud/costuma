@@ -1,38 +1,59 @@
-// Occlusion from a picture's depth (founder, 2026-11-01: "is there a phone-friendly monocular image depth estimation
-// model that we could use to handle occlusion? Could be a fun optional setting"). Depth Anything V2 Small (Apache 2.0;
-// the onnx-community 4-bit export, 19 MB, vendored under public/models: never a CDN at run time) through
-// onnxruntime-web 1.30 (its WebGPU bundle; its 27 MB runtime is a build asset, fetched only when this is switched on):
-// WebGPU where the phone gives an adapter (iOS 26 Safari, recent Android Chrome), else the CPU in a worker.
-// It sees the frame at ~250×250 every so often (a frame takes ~1–1.6 s on this sandbox's CPU; WebGPU should be many
-// times quicker — not measured on a phone) and says how near each pixel is — relatively: an inverse depth up to an
-// unknown scale and shift.
+// Costumes hidden behind what stands in front of them, in two layers (founder, 2026-11-01: "is there a phone-friendly
+// monocular image depth estimation model that we could use to handle occlusion?"; then, after people at tables and in
+// chairs: "our move would be some form of segmentation").
 //
-// So each reading is put into metres against what the app already knows: the tracked people's points, whose distances
-// the pose solve gives (`1/z = a·d + b`, least squares, its shift held near none with one person in view, both read
-// once people stand at different distances; eased over readings). Then each pixel of a costume is hidden as far as the
-// picture says something real stands in front of it — a curve of how far in front (founder: "no booleans in motion"):
-// nothing within `near` metres (the wearer's own body, a costume's thickness), all of it `soft` further — through the
-// costume's dithered transparency. The depth map eases from one reading to the next, and the whole effect eases in once
-// calibrated and out when it is not.
+// People (`people`, every mode but off; no extra model): the pose model cuts each person out of the frame (the masks
+// party mode uses) and the pose solve says how far each stands. Up to four tracked people, nearest first, each keep a
+// channel of one RGBA texture; a costume pixel is hidden where another person's cut-out covers it and that person's
+// front stands in front of it — a curve of how far (founder: "no booleans in motion"). The wearer's own cut-out never
+// hides their costume: that is the exact self-exclusion the depth model could only guess at with a margin, which
+// stopped anything held against the body from hiding anything (teddy bear 0.00 %, cake 0.33 % of the frame changed).
+//
+// Things (`all`): Depth Anything V2 Small (Apache 2.0; the onnx-community 4-bit export, 19 MB, vendored under
+// public/models: never a CDN at run time) through onnxruntime-web 1.30 (its WebGPU bundle; its 27 MB runtime a build
+// asset, fetched only when asked for): WebGPU where the phone gives an adapter, else the CPU in a worker. It sees the
+// frame at ~250×250 every so often (~1–1.6 s a frame on this sandbox's CPU; WebGPU should be many times quicker — not
+// measured on a phone) and says how near each pixel is — relatively, an inverse depth up to an unknown scale and shift,
+// put into metres against the tracked people's points (`1/z = a·d + b`, least squares, the shift believed by how far
+// apart the people stand). It decides only where no person is (their cut-outs, widened by a block or so: its edges
+// bleed past a body), so it speaks for tables, chairs and props; the floor's pixels never hide anything.
 import * as THREE from 'three';
 import type { Track } from '../pose/tracker';
 import type { Intrinsics } from '../pose/solve';
 import { L } from '../pose/landmarks';
+
+export type OcclusionMode = 'off' | 'people' | 'all';
 
 export const OCCLUSION_TUNE = {
   /** the model's input: about this many pixels (each side a multiple of 14, keeping the frame's shape) */
   pixels: 250 * 250,
   /** seconds between readings: on WebGPU, on the CPU */
   everyGpu: 0.15, everyCpu: 0.8,
-  /** a costume pixel starts to hide when the picture is this many metres in front of it, and is gone this much further */
-  near: 0.18, soft: 0.25,
-  /** never by its own wearer: only what stands this far in front of the wearer's hips can hide their costume (a
-   *  skeleton is inside its wearer: their own front, nearer than its spine, hid it whole) */
+  /** a person hides a costume pixel this many metres behind their front, all of it `soft` further */
+  nearPeople: 0.1,
+  /** a person's front: this far before the middle of their seen nose, shoulders and hips (joints sit inside a body) */
+  bodyFront: 0.1,
+  /** a thing (the depth model) hides a costume pixel this many metres behind it, all of it `soft` further */
+  near: 0.1, soft: 0.25,
+  /** a wearer with no cut-out (a fifth person, or before the first) falls back on its front: only what stands this far
+   *  in front of its hips hides its costume (a skeleton is inside its wearer: their own front hid it whole) */
   self: 0.3,
+  /** the cut-outs: eased over this many seconds (the edge's shimmer goes, a moving arm keeps up); "someone is near" is
+   *  their maximum over blocks this many mask pixels wide, read smoothly (where the depth model is not believed) */
+  maskTau: 0.04, wideBlock: 8,
   /** a reading's share of the shown depth map (the rest the last), and of the calibration */
   mapEase: 0.6, calEase: 0.5,
 };
 
+/** a person's front, metres from the camera: the middle of their seen core points, less a body's half depth */
+function front(k: Track): number {
+  const zs: number[] = [];
+  for (const i of CORE) if (k.image[i]!.v >= 0.5) zs.push(-(k.T.z + k.world[i]!.z));
+  zs.sort((a, b) => a - b);
+  return (zs.length ? zs[zs.length >> 1]! : -k.T.z) - OCCLUSION_TUNE.bodyFront;
+}
+
+const CORE = [L.nose, L.shL, L.shR, L.hipL, L.hipR];
 const POINTS = [L.nose, L.shL, L.shR, L.hipL, L.hipR, L.elL, L.elR, L.knL, L.knR, L.earL, L.earR];
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 
@@ -53,16 +74,34 @@ export class SceneDepth {
   private map: Float32Array | null = null;
   private last = -1e9;
   readonly texture = new THREE.DataTexture(new Uint16Array(4), 2, 2, THREE.RedFormat, THREE.HalfFloatType);
+  /** the people's cut-outs, a channel each, at the pose model's mask size; and their maximum over blocks */
+  private peopleTex = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat);
+  private wideTex = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat);
+  private slots: (number | null)[] = [null, null, null, null];
+  private slotMask: (Float32Array | null)[] = [null, null, null, null];
+  private mw = 0;
+  private mh = 0;
+  private ww = 0;
   /** shared by every costume's materials (wearOcclusion) */
   readonly u = {
-    uOccl: { value: this.texture as THREE.Texture }, uOcclOn: { value: 0 }, uOcclCrop: { value: new THREE.Vector4(0, 0, 1, 1) },
-    uOcclMirror: { value: 0 }, uOcclRes: { value: new THREE.Vector2(1, 1) },
-    uOcclNear: { value: OCCLUSION_TUNE.near }, uOcclSoft: { value: OCCLUSION_TUNE.soft },
+    uOccl: { value: this.texture as THREE.Texture }, uOcclPeople: { value: this.peopleTex as THREE.Texture }, uOcclWide: { value: this.wideTex as THREE.Texture },
+    uOcclOn: { value: 0 }, uOcclMasksOn: { value: 0 }, uOcclDepthOn: { value: 0 },
+    uOcclCrop: { value: new THREE.Vector4(0, 0, 1, 1) }, uOcclMirror: { value: 0 }, uOcclRes: { value: new THREE.Vector2(1, 1) },
+    uOcclNear: { value: OCCLUSION_TUNE.near }, uOcclNearPeople: { value: OCCLUSION_TUNE.nearPeople }, uOcclSoft: { value: OCCLUSION_TUNE.soft },
+    uOcclPeopleZ: { value: new THREE.Vector4(1e3, 1e3, 1e3, 1e3) },
   };
 
   constructor() {
-    this.texture.magFilter = this.texture.minFilter = THREE.LinearFilter;
-    this.texture.flipY = false;
+    for (const t of [this.texture, this.peopleTex, this.wideTex]) { t.magFilter = t.minFilter = THREE.LinearFilter; t.flipY = false; t.needsUpdate = true; }
+  }
+
+  /** how many people have a cut-out this frame */
+  get people(): number { return this.slotMask.filter(Boolean).length; }
+
+  /** the channel of a tracked person's cut-out, or -1 */
+  slotOf(trackId: number): number {
+    const c = this.slots.indexOf(trackId);
+    return c >= 0 && this.slotMask[c] ? c : -1;
   }
 
   /** load the engine and the model (~47 MB the first time); `say` reports the steps */
@@ -178,43 +217,130 @@ export class SceneDepth {
     this.texture.needsUpdate = true;
   }
 
-  /** each frame: where the screen shows the video (the background's crop and mirror), the screen's size, and how much
-   *  of the effect is on (eased: on once calibrated and wanted) */
-  frame(on: boolean, crop: THREE.Vector4, mirror: number, res: THREE.Vector2, dt: number): void {
-    const want = on && this.ready && !!this.cal && !!this.map ? 1 : 0;
-    this.u.uOcclOn.value += (want - this.u.uOcclOn.value) * (1 - Math.exp(-dt / 0.4));
-    this.u.uOcclCrop.value.copy(crop);
-    this.u.uOcclMirror.value = mirror;
-    this.u.uOcclRes.value.copy(res);
+  /**
+   * Each frame, before the costumes are posed: the people's cut-outs and fronts, how much of each layer is on (eased:
+   * people once a cut-out has come, things once the depth model is calibrated), where the screen shows the video (the
+   * background's crop and mirror) and the screen's size.
+   */
+  frame(mode: OcclusionMode, tracks: Track[], crop: THREE.Vector4, mirror: number, res: THREE.Vector2, dt: number): void {
+    const u = this.u, k = 1 - Math.exp(-dt / 0.4);
+    const masks = this.cutOuts(mode === 'off' ? [] : tracks, dt) ? 1 : 0;
+    const depth = mode === 'all' && this.ready && !!this.cal && !!this.map ? 1 : 0;
+    u.uOcclMasksOn.value += (masks - u.uOcclMasksOn.value) * k;
+    u.uOcclDepthOn.value += (depth - u.uOcclDepthOn.value) * k;
+    // a thousandth is nothing to see: the shader's early way out takes over
+    if (u.uOcclMasksOn.value < 1e-3) u.uOcclMasksOn.value = 0;
+    if (u.uOcclDepthOn.value < 1e-3) u.uOcclDepthOn.value = 0;
+    u.uOcclOn.value = Math.max(u.uOcclMasksOn.value, u.uOcclDepthOn.value);
+    u.uOcclCrop.value.copy(crop);
+    u.uOcclMirror.value = mirror;
+    u.uOcclRes.value.copy(res);
+  }
+
+  /** a wearer's own uniforms this frame (after `frame`): its cut-out's channel, which never hides it, and its front */
+  place(o: OcclWearer, trackId: number, hipsZ: number, dt: number): void {
+    const c = this.slotOf(trackId);
+    o.ch.value.set(c === 0 ? 1 : 0, c === 1 ? 1 : 0, c === 2 ? 1 : 0, c === 3 ? 1 : 0);
+    const want = c >= 0 ? this.u.uOcclMasksOn.value : 0;
+    o.masked.value += (want - o.masked.value) * (1 - Math.exp(-dt / 0.2));
+    o.self.value = -hipsZ - OCCLUSION_TUNE.self;
+  }
+
+  /** the nearest four people's cut-outs into the texture's channels (each keeps its channel while it stays), weighted
+   *  by their presence, and their fronts; false when nobody has one */
+  private cutOuts(tracks: Track[], dt: number): boolean {
+    const live = tracks.filter((k) => k.presence > 0).sort((a, b) => b.T.z - a.T.z).slice(0, 4);
+    const ids = new Set(live.map((k) => k.id));
+    for (let c = 0; c < 4; c++) if (this.slots[c] !== null && !ids.has(this.slots[c]!)) { this.slots[c] = null; this.slotMask[c] = null; }
+    const zs = [1e3, 1e3, 1e3, 1e3], weight = [0, 0, 0, 0], ease = 1 - Math.exp(-dt / OCCLUSION_TUNE.maskTau);
+    for (const k of live) {
+      let c = this.slots.indexOf(k.id);
+      if (c < 0) { c = this.slots.indexOf(null); if (c < 0) continue; this.slots[c] = k.id; }
+      const m = k.det?.mask;
+      if (m) {
+        if (m.w !== this.mw || m.h !== this.mh) this.resizeMasks(m.w, m.h);
+        const buf = this.slotMask[c], d = m.data;
+        if (!buf) this.slotMask[c] = Float32Array.from(d);
+        else for (let i = 0; i < buf.length; i++) buf[i] = buf[i]! + (d[i]! - buf[i]!) * ease;
+      }
+      if (!this.slotMask[c]) continue;
+      zs[c] = front(k);
+      weight[c] = k.presence;
+    }
+    this.u.uOcclPeopleZ.value.set(zs[0]!, zs[1]!, zs[2]!, zs[3]!);
+    if (!this.mw || !weight.some((w) => w > 0)) return false;
+    const B = OCCLUSION_TUNE.wideBlock, ww = this.ww, src = this.slotMask, w255 = weight.map((w) => w * 255);
+    const md = this.peopleTex.image.data as Uint8Array, wd = this.wideTex.image.data as Uint8Array;
+    wd.fill(0);
+    for (let y = 0, i = 0; y < this.mh; y++) {
+      const row = Math.floor(y / B) * ww;
+      for (let x = 0; x < this.mw; x++, i++) {
+        const j = (row + Math.floor(x / B)) * 4;
+        for (let c = 0; c < 4; c++) {
+          const sc = src[c], v = sc ? sc[i]! * w255[c]! : 0;
+          md[i * 4 + c] = v;
+          if (v > wd[j + c]!) wd[j + c] = v;
+        }
+      }
+    }
+    this.peopleTex.needsUpdate = this.wideTex.needsUpdate = true;
+    return true;
+  }
+
+  private resizeMasks(w: number, h: number): void {
+    const B = OCCLUSION_TUNE.wideBlock;
+    this.mw = w; this.mh = h; this.ww = Math.ceil(w / B);
+    this.slotMask = [null, null, null, null];
+    const set = (t: THREE.DataTexture, tw: number, th: number) => { t.dispose(); t.image = { data: new Uint8Array(tw * th * 4), width: tw, height: th }; t.needsUpdate = true; };
+    set(this.peopleTex, w, h);
+    set(this.wideTex, this.ww, Math.ceil(h / B));
   }
 }
 
 const DECL = /* glsl */ `
-uniform sampler2D uOccl; uniform float uOcclOn; uniform vec4 uOcclCrop; uniform float uOcclMirror; uniform vec2 uOcclRes;
-uniform float uOcclNear; uniform float uOcclSoft; uniform float uOcclSelf;
-// how much of this costume pixel the picture leaves showing: the scene's depth where it lands (the background's own
-// crop and mirror), against the pixel's own; a curve of how far the scene stands in front
+uniform sampler2D uOccl; uniform sampler2D uOcclPeople; uniform sampler2D uOcclWide;
+uniform float uOcclOn; uniform float uOcclMasksOn; uniform float uOcclDepthOn;
+uniform vec4 uOcclCrop; uniform float uOcclMirror; uniform vec2 uOcclRes;
+uniform float uOcclNear; uniform float uOcclNearPeople; uniform float uOcclSoft; uniform vec4 uOcclPeopleZ;
+uniform float uOcclSelf; uniform vec4 uOcclSelfCh; uniform float uOcclMasked;
+// how much of this costume pixel is left showing: where it lands in the video (the background's own crop and mirror),
+// hidden by another person's cut-out whose front stands before it, and, where nobody is, by what the depth model says
+// stands before it; each a curve of how far in front
 float occlVisible() {
   if (uOcclOn <= 0.0) return 1.0;
   vec2 s = gl_FragCoord.xy / uOcclRes;
   s.x = mix(s.x, 1.0 - s.x, uOcclMirror);
   vec2 v = uOcclCrop.xy + s * uOcclCrop.zw;
-  float scene = texture2D(uOccl, vec2(v.x, 1.0 - v.y)).r;
-  // measured from the nearer of this pixel and the wearer's front: the wearer's own body, its arms, the floor at its
-  // feet are never in front of it
-  float hidden = smoothstep(uOcclNear, uOcclNear + uOcclSoft, min(vViewPosition.z, uOcclSelf) - scene);
-  return 1.0 - hidden * uOcclOn;
+  vec2 iv = vec2(v.x, 1.0 - v.y);
+  float z = vViewPosition.z;
+  // people: every cut-out but the wearer's own
+  vec4 m = texture2D(uOcclPeople, iv) * (1.0 - uOcclSelfCh);
+  vec4 hp = m * smoothstep(vec4(uOcclNearPeople), vec4(uOcclNearPeople + uOcclSoft), z - uOcclPeopleZ);
+  float hidden = max(max(hp.x, hp.y), max(hp.z, hp.w)) * uOcclMasksOn;
+  if (uOcclDepthOn > 0.0) {
+    // things: only where no one is (the cut-outs widened: the model's edges bleed past a body); a wearer with no
+    // cut-out of its own measures from the nearer of the pixel and its front
+    vec4 w = texture2D(uOcclWide, iv);
+    float someone = min(1.0, w.x + w.y + w.z + w.w) * uOcclMasksOn;
+    float scene = texture2D(uOccl, iv).r;
+    float zRef = mix(min(z, uOcclSelf), z, uOcclMasked);
+    hidden = max(hidden, uOcclDepthOn * (1.0 - someone) * smoothstep(uOcclNear, uOcclNear + uOcclSoft, zRef - scene));
+  }
+  return 1.0 - hidden;
 }`;
 
+/** a worn costume's own occlusion uniforms: its wearer's front (metres), its cut-out's channel, how far it is masked */
+export interface OcclWearer { self: { value: number }; ch: { value: THREE.Vector4 }; masked: { value: number } }
+
 /**
- * Give a worn costume's materials the occlusion: each multiplies its alpha by what the picture leaves showing (the
- * worn copies fade by dithered transparency, so a hidden pixel dithers away; a glow by its blending). Chains after the
- * materials' own hooks, keyed by them. Returns the costume's own uniform for its wearer's front.
+ * Give a worn costume's materials the occlusion: each multiplies its alpha by what is left showing (the worn copies
+ * fade by dithered transparency, so a hidden pixel dithers away; a glow by its blending). Chains after the materials'
+ * own hooks, keyed by them. Returns the costume's own uniforms, set each frame (SceneDepth.place; a pyramid's clone
+ * keeps the defaults: no cut-out of its own, so the people in front hide it).
  */
-export function wearOcclusion(root: THREE.Object3D, shared: SceneDepth['u']): { value: number } {
-  // the wearer's front (metres from the camera), this costume's own: set each frame (stage.ts pose)
-  const self = { value: 1e3 };
-  const u = { ...shared, uOcclSelf: self };
+export function wearOcclusion(root: THREE.Object3D, shared: SceneDepth['u']): OcclWearer {
+  const own: OcclWearer = { self: { value: 1e3 }, ch: { value: new THREE.Vector4() }, masked: { value: 0 } };
+  const u = { ...shared, uOcclSelf: own.self, uOcclSelfCh: own.ch, uOcclMasked: own.masked };
   const done = new Set<THREE.Material>();
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -222,9 +348,9 @@ export function wearOcclusion(root: THREE.Object3D, shared: SceneDepth['u']): { 
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
       if (done.has(mat) || (mat as THREE.ShaderMaterial).isShaderMaterial) continue;
       done.add(mat);
-      const own = mat.onBeforeCompile, key = mat.customProgramCacheKey.call(mat);
+      const hook = mat.onBeforeCompile, key = mat.customProgramCacheKey.call(mat);
       mat.onBeforeCompile = function (this: THREE.Material, shader, renderer) {
-        own.call(this, shader, renderer);
+        hook.call(this, shader, renderer);
         // the standard materials carry vViewPosition; a material without it is left alone
         if (!shader.fragmentShader.includes('vViewPosition')) return;
         Object.assign(shader.uniforms, u);
@@ -232,9 +358,9 @@ export function wearOcclusion(root: THREE.Object3D, shared: SceneDepth['u']): { 
           .replace('#include <common>', `#include <common>\n${DECL}`)
           .replace('#include <alphamap_fragment>', '#include <alphamap_fragment>\n diffuseColor.a *= occlVisible();');
       };
-      mat.customProgramCacheKey = () => `${key}|occl`;
+      mat.customProgramCacheKey = () => `${key}|occl2`;
       mat.needsUpdate = true;
     }
   });
-  return self;
+  return own;
 }
