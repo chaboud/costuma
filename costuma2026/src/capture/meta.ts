@@ -87,6 +87,9 @@ export class MetaLog {
    *  — and render, the WebGL calls; the GPU's own time is not seen), the last depth reading's ms, the quality ladder */
   private ticks: { now: number; ms: Record<string, number> }[] = [];
   tick(now: number, ms: Record<string, number>): void { this.ticks.push({ now, ms: { ...ms } }); }
+  /** what happened besides (a costume made or warmed: its ms), when */
+  private events: { now: number; what: string; data: Record<string, unknown> }[] = [];
+  event(now: number, what: string, data: Record<string, unknown>): void { this.events.push({ now, what, data }); }
 
   get frameCount(): number { return this.frames.length; }
 
@@ -98,7 +101,7 @@ export class MetaLog {
       if (r.state !== 'inactive') await new Promise<void>((done) => { r.onstop = () => done(); r.stop(); });
       raw = new Blob(this.rawChunks, { type: this.rawMime.split(';')[0] });
     }
-    const json = JSON.stringify({ format: 'costuma-meta-1', info: this.info, frames: this.frames, ticks: this.ticks }, r5);
+    const json = JSON.stringify({ format: 'costuma-meta-1', info: this.info, frames: this.frames, ticks: this.ticks, events: this.events }, r5);
     return { json, raw };
   }
 }

@@ -492,6 +492,8 @@ let recorder: MediaRecorder | null = null;
 /** the debug recording under way (capture/meta.ts), and the last one's zip */
 let meta: MetaLog | null = null;
 let debugBundle: { blob: Blob; name: string } | null = null;
+// a costume made or warmed during a debug recording goes into its log (where the picture stopped for it)
+stage.onBuilt = (id, what, ms) => meta?.event(performance.now(), `costume ${what}`, { id, ...ms });
 /** what a debug recording says once: the build, the device, the camera, the settings */
 function metaInfo(): Record<string, unknown> {
   const tr = (video.srcObject as MediaStream | null)?.getVideoTracks()[0];
@@ -564,6 +566,7 @@ async function toggleRecording(): Promise<void> {
   r.onstop = async () => {
     clearTimeout(recTimer);
     recorder = null;
+    stage.recording = false;
     btn.classList.remove('on'); btn.innerHTML = ICONS.rec;
     const type = mime.split(';')[0]!, ext = type.includes('mp4') ? 'mp4' : 'webm', name = `costuma-${stamp()}`;
     const clip = new Blob(chunks, { type });
@@ -578,6 +581,7 @@ async function toggleRecording(): Promise<void> {
   };
   r.start(250);
   recorder = r;
+  stage.recording = true;
   recStarting = false;
   recTimer = window.setTimeout(() => r.state === 'recording' && r.stop(), 20000);
   toast(note, note.includes('without') ? 2600 : 1200);
@@ -837,6 +841,7 @@ function readout(): void {
   const K = intrinsics();
   el.textContent = [
     `build ${__BUILD__}`,
+    `costumes ${stage.made} made (${stage.fromCache.size} from the phone's copy) · ${stage.building} to make · shaders ${stage.parallel ? 'compile in the background' : 'compile when first worn'}`,
     `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'}`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `camera ${camera.describe()}`,
@@ -930,14 +935,16 @@ async function start(): Promise<void> {
     await new Promise((r) => setTimeout(r, 30));
     const first = settings.mode === 'one' ? settings.costume : ROSTER[0]!.id;
     await stage.prepare(first, true);
-    // the rest in the background, in picker order; the face model too
+    // the rest in the background, in picker order (already under way unless headless), then the others; the face model
     for (const d of rotation()) void stage.prepare(d.id);
+    if (!TEST) for (const d of ROSTER) void stage.prepare(d.id);
     void loadFaces();
     if (settings.occlusion === 'all') void loadDepth();
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
     setScene(settings.scene);
     started = true;
+    stage.live = true;
     t0 = performance.now();
     lastSeen = performance.now();
     markPicker();
@@ -970,6 +977,20 @@ function boot(): void {
   $('btn-qr').innerHTML = ICONS.qr; $('btn-flip').innerHTML = ICONS.flip; $('btn-gear').innerHTML = ICONS.gear;
   $('btn-snap').innerHTML = ICONS.camera; $('btn-rec').innerHTML = ICONS.rec;
   $('btn-start').onclick = () => void start();
+  // the app kept on the phone (sw/sw.template.js): fast and available on a slow or absent connection, a changed file
+  // fetched anew (not in the dev server, nor headless tests, which want the network's every byte)
+  if (import.meta.env.PROD && 'serviceWorker' in navigator && !TEST && !q.get('nosw')) {
+    navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('no service worker', e));
+  }
+  // the costumes are made from now, while the start screen is up and the camera and the models load (on a slow
+  // connection that is seconds): the chosen one first, then the rotation, then every other character — a pick, later,
+  // finds its costume made and its shaders compiled (a costume made when first picked stalled the picture)
+  if (!TEST) {
+    const first = settings.mode === 'one' ? settings.costume : ROSTER[0]!.id;
+    void stage.prepare(first, true);
+    for (const d of rotation()) void stage.prepare(d.id);
+    for (const d of ROSTER) void stage.prepare(d.id);
+  }
   $('btn-start-qr').onclick = showQR;
   $('btn-qr').onclick = showQR;
   $('btn-gear').onclick = () => { buildSettings(); openModal('settings'); readout(); };

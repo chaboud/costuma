@@ -10,6 +10,7 @@ import { reachLimbs, REACH_TUNE } from '../pose/reach';
 import { driveFaceField, wearFaceField, type FaceField } from './facemap';
 import { SceneDepth, wearOcclusion, type OcclWearer } from './occlusion';
 import { ClothSway } from '../characters/cloth';
+import { CostumeCache, type Kept } from '../characters/cache';
 import type { Track } from '../pose/tracker';
 import { project, type Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
@@ -197,60 +198,133 @@ export class Stage {
   }
   hasTemplate(id: string): boolean { return this.templates.has(id); }
 
-  // costumes made in a worker, one at a time, in the order asked (a re-ask moves one to the front)
-  private worker: Worker | null = null;
+  // costumes made in workers (two where the phone has the cores), in the order asked (a re-ask moves one to the front)
+  private pool: { w: Worker; busy: string | null }[] = [];
+  private poolSize = typeof navigator !== 'undefined' && (navigator.hardwareConcurrency ?? 2) >= 4 ? 2 : 1;
   private queue: string[] = [];
+  /** the costume being made on the main thread (no workers), if any */
   private busy: string | null = null;
   private waiting = new Map<string, ((b: Built) => void)[]>();
   workerMs = new Map<string, number>();
+  /** the main thread's part of each costume (meshes from the worker's arrays, the props): the picture stops for it */
+  mainMs = new Map<string, number>();
+  /** each costume's spare worn copy made and its shaders compiled ahead (ms of the main thread; compile time is the
+   *  GPU driver's, partly in parallel where it can) */
+  spareMs = new Map<string, number>();
+  /** heard by the debug recording: a costume made (worker, main thread) or warmed */
+  onBuilt: ((id: string, what: 'built' | 'warmed', ms: Record<string, number>) => void) | null = null;
 
   /** a costume ready to wear, made off the main thread; `urgent` puts it at the head of the queue */
   prepare(id: string, urgent = false): Promise<Built> {
     const have = this.templates.get(id);
     if (have) return Promise.resolve(have);
     const p = new Promise<Built>((r) => { const l = this.waiting.get(id) ?? []; l.push(r); this.waiting.set(id, l); });
-    if (this.busy !== id) {
+    if (!this.isMaking(id)) {
       this.queue = this.queue.filter((q) => q !== id);
       if (urgent) this.queue.unshift(id); else this.queue.push(id);
     }
     this.pump();
     return p;
   }
-  isPreparing(id: string): boolean { return this.busy === id || this.queue.includes(id); }
+  private isMaking(id: string): boolean { return this.busy === id || this.pool.some((p) => p.busy === id); }
+  isPreparing(id: string): boolean { return this.isMaking(id) || this.queue.includes(id); }
+  /** costumes still to make (queued or being made): the readout, and checks that want a quiet machine */
+  get building(): number { return this.queue.length + this.pool.filter((p) => p.busy).length + (this.busy ? 1 : 0); }
+
+  /** costumes kept on the phone from an earlier visit (characters/cache.ts), per build; not in the dev server */
+  private cache = import.meta.env.PROD && typeof indexedDB !== 'undefined' ? new CostumeCache(__BUILD__) : null;
+  private pruned = false;
+  /** where each costume came from: the phone's copy or a worker */
+  fromCache = new Set<string>();
+  /** a costume's arrays (from a worker or the phone's copy) assembled into meshes on the main thread */
+  private assemble(id: string, k: Kept): void {
+    const t0 = performance.now();
+    const b = buildCharacter(byId(id), undefined, k.body ? { body: k.body, fur: k.fur } : undefined);
+    this.mainMs.set(id, performance.now() - t0);
+    this.finish(id, b);
+  }
 
   private pump(): void {
-    if (this.busy || !this.queue.length) return;
-    if (!this.worker) {
-      try {
-        this.worker = new Worker(new URL('../characters/build.worker.ts', import.meta.url), { type: 'module' });
-        this.worker.onmessage = (e: MessageEvent<{ id: string; body: SurfaceArrays | null; fur: SurfaceArrays | null; ms: number }>) => {
-          const { id, body, fur, ms } = e.data;
-          this.workerMs.set(id, ms);
-          const b = buildCharacter(byId(id), undefined, body ? { body, fur } : undefined);
-          this.finish(id, b);
-        };
-        this.worker.onerror = (e) => { console.warn('costume worker failed; building on the main thread', e); this.worker = null; this.workerDead = true; this.fallback(); };
-      } catch { this.workerDead = true; }
-    }
+    if (this.cache && !this.pruned) { this.pruned = true; void this.cache.prune(); }
     if (this.workerDead) { this.fallback(); return; }
-    this.busy = this.queue.shift()!;
-    this.worker!.postMessage({ id: this.busy });
+    while (this.queue.length) {
+      let slot = this.pool.find((p) => !p.busy);
+      if (!slot && this.pool.length < this.poolSize) {
+        try {
+          const w = new Worker(new URL('../characters/build.worker.ts', import.meta.url), { type: 'module' });
+          slot = { w, busy: null };
+          const me = slot;
+          w.onmessage = (e: MessageEvent<{ id: string; body: SurfaceArrays | null; fur: SurfaceArrays | null; ms: number }>) => {
+            const { id, body, fur, ms } = e.data;
+            this.workerMs.set(id, ms);
+            // kept for the next visit (copied now, before the meshes take the arrays)
+            void this.cache?.put(id, { body, fur });
+            me.busy = null;
+            this.assemble(id, { body, fur });
+          };
+          w.onerror = (e) => {
+            console.warn('costume worker failed; building on the main thread', e);
+            if (me.busy) this.queue.unshift(me.busy);
+            this.pool = []; this.workerDead = true; this.fallback();
+          };
+          this.pool.push(slot);
+        } catch { this.workerDead = true; this.fallback(); return; }
+      }
+      if (!slot) return;
+      const id = slot.busy = this.queue.shift()!, me = slot;
+      if (!this.cache) { slot.w.postMessage({ id }); continue; }
+      // the phone's copy first; made by the worker only if there is none
+      void this.cache.get(id).then((k) => {
+        if (k && !this.templates.has(id)) { this.fromCache.add(id); this.workerMs.set(id, 0); me.busy = null; this.assemble(id, k); }
+        else me.w.postMessage({ id });
+      });
+    }
   }
   private workerDead = false;
   /** no worker (an old browser): build on the main thread, one a frame */
   private fallback(): void {
-    const id = this.busy ?? this.queue.shift();
+    if (this.busy) return;
+    const id = this.queue.shift();
     if (!id) return;
     this.busy = id;
-    setTimeout(() => this.finish(id, buildCharacter(byId(id))), 16);
+    setTimeout(() => { this.busy = null; this.finish(id, buildCharacter(byId(id))); }, 16);
   }
   private finish(id: string, b: Built): void {
     if (!this.templates.has(id)) this.templates.set(id, b);
     const done = this.templates.get(id)!;
     for (const r of this.waiting.get(id) ?? []) r(done);
     this.waiting.delete(id);
-    this.busy = null;
+    this.onBuilt?.(id, 'built', { worker: this.workerMs.get(id) ?? 0, main: this.mainMs.get(id) ?? 0 });
+    // its first worn copy made now, its shaders compiled while nobody wears it (a costume's first wearing stalled the
+    // picture for its programs' compile); the next frame, so this frame's work is not doubled
+    setTimeout(() => this.warm(id), 0);
     this.pump();
+  }
+
+  /** spare worn copies, made and compiled ahead: the next wearer takes one at once */
+  private spares = new Map<string, ReturnType<Stage['instance']>>();
+  /** whether this GPU compiles shaders in the background (KHR_parallel_shader_compile): without it a compile blocks
+   *  the page until it is done (headless, seconds a costume: a 3 s clip came out with no picture at all) */
+  get parallel(): boolean { return this.renderer.extensions.has('KHR_parallel_shader_compile'); }
+  /** costumes made so far */
+  get made(): number { return this.templates.size; }
+  /** set by the app: the picture is live (after Start), and a clip is being recorded */
+  live = false;
+  recording = false;
+  private warm(id: string): void {
+    if (this.spares.has(id) || !this.templates.has(id)) return;
+    // never while a clip records: after it
+    if (this.recording) { setTimeout(() => this.warm(id), 1000); return; }
+    const t0 = performance.now();
+    const inst = this.instance(id);
+    this.spares.set(id, inst);
+    // compiled against the scene's own lights, where a compile does not stop the picture: in the background on a GPU
+    // that compiles in parallel, or anywhere before Start; else its first wearing compiles it, as it always did
+    const compile = this.parallel || !this.live;
+    if (compile) void this.renderer.compileAsync(inst.root, this.camera, this.scene).catch(() => undefined);
+    const ms = performance.now() - t0;
+    this.spareMs.set(id, ms);
+    this.onBuilt?.(id, 'warmed', { main: ms, compiled: compile ? 1 : 0, parallel: this.parallel ? 1 : 0 });
   }
 
   /** fit the camera and the background to the canvas and the video (cover), with the solve's intrinsics */
@@ -316,7 +390,10 @@ export class Stage {
   }
 
   private dress(trackId: number, id: string): Wearer {
-    const { def, root, rig, mats, field, occl, cloth } = this.instance(id);
+    // a spare made ahead if there is one (its shaders compiled), and another made for the next wearer later
+    const spare = this.spares.get(id);
+    if (spare) { this.spares.delete(id); setTimeout(() => this.warm(id), 400); }
+    const { def, root, rig, mats, field, occl, cloth } = spare ?? this.instance(id);
     const w: Wearer = { trackId, def, root, rig, mats, field, occl, cloth, fade: 0, life: 0, leaving: false, poses: [], head: 0, len: null, clones: [] };
     this.world.add(root);
     this.wearers.set(trackId, w);

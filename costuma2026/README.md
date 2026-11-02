@@ -37,6 +37,7 @@ CLOTH=a.json,b.json npx vitest run scripts/cloth-sim.test.ts   # the ghost's and
 node scripts/cloth-shots.mjs <dir>   # the cloth held at rest, swung and twisted, in the built app (C=ghost,witch)
 BODY=a.json,b.json npx vitest run scripts/body-sim.test.ts   # sizing by shot: the fitted torso, how much it moves, the costume's shoulders against the person's, hips seen vs out (DRIFT=)
 STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
+node scripts/offline-check.mjs   # the service worker: the shell kept by content hash; offline, the page loads, starts and dresses someone
 OCCL=people|all node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion on a frozen frame: on, off, people alone (all), the cut-outs, the depth map (MIN= people in view first)
 node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill; a clip's sound (ffprobe), refused; reset to defaults; a debug recording, unzipped and replayed
 META=<…-debug.zip> npx vitest run scripts/meta-replay.test.ts   # a phone's debug recording: what it holds, and its raw detections replayed through today's tracker against the phone's
@@ -407,6 +408,36 @@ that means here, and where each lives:
   (`tracker.ts shiftTogether`); the hips are re-solved from the smoothed picture, their depth smoothed along the
   same ray so the costume does not move on screen: 0.6 px, below the unsmoothed 0.7, with the limbs and head as
   steady as before. Faces do the same for googly eyes. The bones' turns glide ~25 ms on top (`rig.apply` dt).
+- **Costumes ready before they are picked** (founder, 2026-11-02: "When we
+  select and then detect a new character, there's generally a stall,
+  particularly on a slow connection"). Measured: a costume is 0.5–1.9 s of a
+  worker's time (headless desktop core) and 50–690 ms of the main thread's
+  (meshes and props from the worker's arrays; the vampire and witch the worst),
+  and its first wearing compiled its shaders (4–8 programs). They were made from
+  Start, one worker, the rotation only: a pick of any other costume was made
+  then (5.5 s headless). Now (`render/stage.ts`) every character is made from the
+  page's load, while the start screen is up and the camera and models load —
+  the chosen one, then the rotation, then the rest — on two workers where the
+  phone has the cores; each gets a spare worn copy made ahead, and its shaders
+  compiled where that cannot stop the picture (in the background on a GPU with
+  `KHR_parallel_shader_compile`, or before Start; never while a clip records:
+  headless, without the extension, a background compile froze the page for
+  seconds and a clip came out with no picture). The worker's arrays are kept in
+  IndexedDB per build (`characters/cache.ts`): headless, all 17 costumes made
+  14.2 s after load on a first visit, 3.7 s on the next (none by a worker;
+  1.9 s of main-thread assembly, the worst 0.37 s). The settings readout says how
+  many are made, from the phone's copy, still to make, and whether this GPU
+  compiles in the background (not known for iPhones; the debug log records it).
+- **Kept on the phone** (`sw/sw.template.js`, written by the build with a
+  manifest of every file and its content's hash): the page network-first (a new
+  version at once; the phone's copy offline), every other file from the phone if
+  it holds that content, else fetched once and kept — a changed file is fetched
+  anew, an unchanged 9 MB model survives an update; the shell (page, code,
+  costume worker, thumbnails) fetched at install, models kept on first use (on a
+  slow connection two copies of a download would only fight); what neither this
+  version nor the last needs is dropped. `scripts/offline-check.mjs`: with the
+  network gone the page loads, starts and dresses someone. ~32 MB stored after
+  a visit (headless; the depth model's 46 MB only if used).
 - **A far person's own noise** (`pose/tracker.ts measureNoise`; the first phone
   debug recording, 2026-11-02: "a bit jiggly, but pretty good"). The phone ran
   ~10 detections a second (full model, occlusion People + things, the kaiju,

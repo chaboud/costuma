@@ -95,6 +95,8 @@ const wake = (page) => page.evaluate(() => document.body.dispatchEvent(new Point
 // ── clips carry sound ──
 /** record a clip of about `secs` seconds with the shutter (desktop: it opens in the preview); its streams by ffprobe */
 async function recordClip(page, secs) {
+  // the costumes made first (headless, the workers starve the frames: a 3 s clip came out empty)
+  await page.waitForFunction(() => window.__costuma.stage.building === 0, null, { timeout: 300000, polling: 500 });
   await wake(page); await page.waitForTimeout(200);
   await page.evaluate(() => document.getElementById('btn-rec').click());
   await page.waitForTimeout(secs * 1000);
