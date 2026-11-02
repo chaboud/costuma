@@ -8,7 +8,10 @@ export const N_LANDMARKS = 33;
 
 /** A landmark: for world landmarks metres in the camera's axes (three's: x right, y up, z toward the camera); for image
  *  landmarks x, y in 0..1 of the frame (y down). `v` is MediaPipe's visibility (0..1). */
-export interface LM { x: number; y: number; z: number; v: number }
+/** a point: where, and how visible the picture says it is (`v`); `b`, set on a pose the tracker filled in where the
+ *  picture was unsure (limbs.ts), how sure that filled-in point is — read by the costume's rig alone (the floor, the
+ *  occlusion and the size ask the picture, `v`) */
+export interface LM { x: number; y: number; z: number; v: number; b?: number }
 
 /** MediaPipe world landmarks are x right, y down, z away from the camera; three's camera space is y up, z toward it. */
 export function worldToThree(p: { x: number; y: number; z: number; visibility?: number }): LM {

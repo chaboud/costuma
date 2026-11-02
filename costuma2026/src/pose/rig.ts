@@ -49,7 +49,8 @@ function basisXZ(xAxis: THREE.Vector3, zHint: THREE.Vector3): THREE.Quaternion {
 
 export function poseFromLandmarks(w: LM[]): BodyPose {
   const p = (i: number) => V(w[i]!);
-  const vis = (...ids: number[]) => Math.min(...ids.map((i) => w[i]!.v));
+  // how sure each point is: the tracker's belief where it filled a limb in (limbs.ts), else the picture's visibility
+  const vis = (...ids: number[]) => Math.min(...ids.map((i) => w[i]!.b ?? w[i]!.v));
   const hipL = p(L.hipL), hipR = p(L.hipR), shL = p(L.shL), shR = p(L.shR);
   const hipMid = hipL.clone().add(hipR).multiplyScalar(0.5), shMid = shL.clone().add(shR).multiplyScalar(0.5);
   const up = shMid.clone().sub(hipMid);

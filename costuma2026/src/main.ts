@@ -246,7 +246,7 @@ function dip(fn: () => void | Promise<void>): void {
 }
 
 /** the pose model's cut-out of each person: party mode draws with them, occlusion hides costumes behind other people */
-const masksWanted = () => settings.scene === 'party' || settings.occlusion !== 'off';
+const masksWanted = () => settings.scene === 'party' || settings.occlusion !== 'off' || settings.showCutouts;
 
 /** costumes, or party mode; party asks the pose model for each person's cut-out mask */
 function setScene(scene: Settings['scene']): void {
@@ -399,6 +399,8 @@ function buildSettings(): void {
   row('Detection threshold', 'Higher ignores what only looks like a person (coats, posters, shadows); lower finds people further off or half hidden', range(0.4, 0.9, 0.05, () => settings.poseConf, (v) => { settings.poseConf = v; void detector?.setOptions({ conf: v }); }));
   row('Lens', 'If costumes look too flat or too deep', range(0.55, 1.3, 0.01, () => settings.lens, (v) => { settings.lens = v; }));
   row('Show the skeleton', 'What the pose tracker sees', sw(() => settings.debug, (v) => { settings.debug = v; }));
+  row('Show depth map', 'The depth model’s picture over the camera’s: near red, far blue (in metres once people calibrate it; grey before). Runs the depth model (47 MB the first time)', sw(() => settings.showDepth, (v) => { settings.showDepth = v; if (v) void loadDepth(); }));
+  row('Show cut-outs', 'Each tracked person’s cut-out from the pose model, a colour each, with the front the occlusion uses', sw(() => settings.showCutouts, (v) => { settings.showCutouts = v; void detector?.setOptions({ masks: masksWanted() }); }));
   row('Video metadata', 'A clip also records the camera’s own picture and a log of what was detected and tracked, every frame — for debugging. The preview then offers “Save debug data” (one zip)', sw(() => settings.videoMeta, (v) => { settings.videoMeta = v; }));
   into = body;
   // everything above back to its default; a second tap within three seconds does it (one stray tap must not)
@@ -421,7 +423,7 @@ function buildSettings(): void {
 
 /** the settings panel's own settings (the costume, the mode, the rotation, the effect and the lens's zoom are chosen
  *  elsewhere and stay) */
-const PANEL = ['people', 'size', 'occlusion', 'smoothing', 'poseConf', 'model', 'envLight', 'shadows', 'lens', 'music', 'partyCast', 'partyCostumes', 'faces', 'breath', 'debug', 'videoMeta'] as const satisfies readonly (keyof Settings)[];
+const PANEL = ['people', 'size', 'occlusion', 'smoothing', 'poseConf', 'model', 'envLight', 'shadows', 'lens', 'music', 'partyCast', 'partyCostumes', 'faces', 'breath', 'debug', 'videoMeta', 'showDepth', 'showCutouts'] as const satisfies readonly (keyof Settings)[];
 /** every panel setting back to its default, each applied as its own control would apply it */
 function resetSettings(): void {
   const was = { ...settings };
@@ -746,8 +748,8 @@ function loop(now: number): void {
   stage.setGrain(true, tSec);
   // occlusion (render/occlusion.ts): the people's cut-outs this frame, before the costumes take their channels; the
   // picture's depth now and then (off the frame: it resolves later)
-  if (settings.occlusion === 'all' && !SYNTH && stage.depth.due(now) && video.readyState >= 2) void stage.depth.read(video, tracker.tracks, K, now, { n: stage.ground.n, h: stage.ground.h });
-  stage.depth.frame(settings.occlusion, tracker.tracks, stage.bgUniforms.uCrop.value, stage.bgUniforms.uMirror.value, stage.renderer.getDrawingBufferSize(new THREE.Vector2()), dt);
+  if ((settings.occlusion === 'all' || settings.showDepth) && !SYNTH && stage.depth.due(now) && video.readyState >= 2) void stage.depth.read(video, tracker.tracks, K, now, { n: stage.ground.n, h: stage.ground.h });
+  stage.depth.frame(settings.occlusion, tracker.tracks, stage.bgUniforms.uCrop.value, stage.bgUniforms.uMirror.value, stage.renderer.getDrawingBufferSize(new THREE.Vector2()), dt, settings.showCutouts);
   const tP = performance.now();
   stage.sync(dressing ? tracker.tracks : [], castOf, tSec);
   ms.pose = performance.now() - tP;
@@ -792,11 +794,75 @@ function autoQuality(): void {
   if (!stepped) { stepped = true; toast('Lowering quality to keep up', 1500); }
 }
 
+// the pipeline's own pictures over the camera's (settings → Advanced): the depth map and the cut-outs, each drawn over
+// the video's frame as the screen shows it (its crop and mirror), from small offscreen canvases
+const viewCanvas = document.createElement('canvas'), viewCtx = viewCanvas.getContext('2d')!;
+/** a colour from near (0) to far (1): red, yellow, green, cyan, blue */
+const ramp = (t: number): [number, number, number] => {
+  const x = Math.min(1, Math.max(0, t)) * 4, i = Math.min(3, Math.floor(x)), f = x - i;
+  const stops: [number, number, number][] = [[230, 40, 40], [240, 220, 40], [60, 200, 80], [40, 200, 230], [40, 70, 220]];
+  const a = stops[i]!, b = stops[i + 1]!;
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+};
+function blit(w: number, h: number, fill: (px: Uint8ClampedArray) => void, alpha: number): void {
+  if (viewCanvas.width !== w || viewCanvas.height !== h) { viewCanvas.width = w; viewCanvas.height = h; }
+  const img = viewCtx.createImageData(w, h);
+  fill(img.data);
+  viewCtx.putImageData(img, 0, 0);
+  const c = stage.cover;
+  octx.save();
+  octx.globalAlpha = alpha;
+  if (c.mirror) { octx.translate(c.cw, 0); octx.scale(-1, 1); }
+  octx.imageSmoothingEnabled = true;
+  octx.drawImage(viewCanvas, -c.ox * c.s, -c.oy * c.s, c.vw * c.s, c.vh * c.s);
+  octx.restore();
+}
+function drawPipeline(): void {
+  const c = stage.cover;
+  octx.font = '600 12px system-ui';
+  if (settings.showDepth) {
+    const v = stage.depth.depthView();
+    if (!v) { octx.fillStyle = '#7dfcff'; octx.fillText(stage.depth.ready ? 'depth: no reading yet' : 'depth: loading the model…', 12, c.ch - 236); }
+    else {
+      // metres on a log scale 0.5–10 m; a relative reading by its own range
+      let lo = Infinity, hi = -Infinity;
+      if (!v.metres) for (let i = 0; i < v.data.length; i++) { const d = v.data[i]!; if (d < lo) lo = d; if (d > hi) hi = d; }
+      blit(v.w, v.h, (px) => {
+        for (let i = 0; i < v.w * v.h; i++) {
+          const d = v.data[i]!;
+          if (v.metres) { const [r, g, b] = ramp(Math.log(Math.max(0.5, d) / 0.5) / Math.log(20)); px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; }
+          else { const k = (255 * (d - lo)) / Math.max(1e-6, hi - lo); px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = k; } // (inverse depth: near is large)
+          px[i * 4 + 3] = 255;
+        }
+      }, 0.55);
+      octx.fillStyle = '#7dfcff';
+      octx.fillText(v.metres ? `depth in metres: red 0.5 · yellow 1 · green 2.2 · cyan 4.7 · blue 10+ (${stage.depth.engine}, ${stage.depth.ms.toFixed(0)} ms)` : 'depth: relative (no one to calibrate it yet): near light', 12, c.ch - 236);
+    }
+  }
+  if (settings.showCutouts) {
+    const v = stage.depth.cutoutView();
+    if (!v) { octx.fillStyle = '#ffd36b'; octx.fillText('cut-outs: none yet', 12, c.ch - 218); }
+    else {
+      const col: [number, number, number][] = [[255, 70, 70], [70, 255, 90], [80, 140, 255], [255, 220, 50]];
+      blit(v.w, v.h, (px) => {
+        for (let i = 0; i < v.w * v.h; i++) {
+          let r = 0, g = 0, b = 0, a = 0;
+          for (let k = 0; k < 4; k++) { const m = v.data[i * 4 + k]! / 255; if (m > 0) { r = Math.max(r, col[k]![0] * m); g = Math.max(g, col[k]![1] * m); b = Math.max(b, col[k]![2] * m); a = Math.max(a, m); } }
+          px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; px[i * 4 + 3] = a * 255;
+        }
+      }, 0.5);
+      octx.fillStyle = '#ffd36b';
+      octx.fillText('cut-outs: ' + v.slots.map((id, k) => (id === null ? null : `${['red', 'green', 'blue', 'yellow'][k]} #${id} front ${v.fronts[k]! < 100 ? v.fronts[k]!.toFixed(2) + ' m' : '—'}`)).filter(Boolean).join(' · '), 12, c.ch - 218);
+    }
+  }
+}
+
 function drawOverlay(): void {
   const w = overlay.clientWidth, h = overlay.clientHeight, dpr = Math.min(devicePixelRatio || 1, 2);
   if (overlay.width !== Math.round(w * dpr)) { overlay.width = Math.round(w * dpr); overlay.height = Math.round(h * dpr); }
   octx.setTransform(dpr, 0, 0, dpr, 0, 0);
   octx.clearRect(0, 0, w, h);
+  if (settings.showDepth || settings.showCutouts) drawPipeline();
   if (!settings.debug) return;
   const c = stage.cover;
   const P = (p: { x: number; y: number }) => { let x = (p.x * c.vw - c.ox) * c.s; if (c.mirror) x = c.cw - x; return [x, (p.y * c.vh - c.oy) * c.s] as const; };
@@ -939,7 +1005,7 @@ async function start(): Promise<void> {
     for (const d of rotation()) void stage.prepare(d.id);
     if (!TEST) for (const d of ROSTER) void stage.prepare(d.id);
     void loadFaces();
-    if (settings.occlusion === 'all') void loadDepth();
+    if (settings.occlusion === 'all' || settings.showDepth) void loadDepth();
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
     setScene(settings.scene);

@@ -28,9 +28,12 @@ function legOf(hip: THREE.Vector3, knee: THREE.Vector3, ankle: THREE.Vector3, do
   const th = knee.clone().sub(hip).normalize(), sh = ankle.clone().sub(knee).normalize();
   return { thigh: deg(th.angleTo(down)), knee: deg(th.angleTo(sh)) };
 }
+// SIDE=R for the right leg
+const R = process.env.SIDE === 'R';
+const HIP = R ? L.hipR : L.hipL, KN = R ? L.knR : L.knL, AN = R ? L.anR : L.anL;
 function legW(w: LM[]) {
   const down = mid(w[L.hipL]!, w[L.hipR]!).sub(mid(w[L.shL]!, w[L.shR]!)).normalize();
-  return legOf(V(w[L.hipL]!), V(w[L.knL]!), V(w[L.anL]!), down);
+  return legOf(V(w[HIP]!), V(w[KN]!), V(w[AN]!), down);
 }
 
 describe.skipIf(!file)('legs off the frame (replay)', () => {
@@ -58,9 +61,9 @@ describe.skipIf(!file)('legs off the frame (replay)', () => {
       root.updateMatrixWorld(true);
       const down = g('pelvis').sub(g('spine2')).normalize();
       // the shin's start is the knee, the foot's the ankle
-      const cos = legOf(g('thighL'), g('shinL'), g('footL'), down);
+      const cos = R ? legOf(g('thighR'), g('shinR'), g('footR'), down) : legOf(g('thighL'), g('shinL'), g('footL'), down);
       const im = t.det.image, f = (i: number) => `${im[i]!.y.toFixed(2)} ${im[i]!.v.toFixed(2)}`;
-      if (r.i % Number(process.env.EVERY ?? 3) === 0) rows.push(` ${String(r.i).padStart(5)} | ${f(L.hipL)} | ${f(L.knL)} | ${f(L.anL)} | ${raw.thigh.toFixed(0).padStart(4)}/${raw.knee.toFixed(0).padStart(4)} | ${out.thigh.toFixed(0).padStart(4)}/${out.knee.toFixed(0).padStart(4)} | ${cos.thigh.toFixed(0).padStart(4)}/${cos.knee.toFixed(0).padStart(4)} | ${t.len.thigh.toFixed(2)}/${t.len.shin.toFixed(2)}`);
+      if (r.i % Number(process.env.EVERY ?? 3) === 0) rows.push(` ${String(r.i).padStart(5)} | ${f(HIP)} | ${f(KN)} | ${f(AN)} | ${raw.thigh.toFixed(0).padStart(4)}/${raw.knee.toFixed(0).padStart(4)} | ${out.thigh.toFixed(0).padStart(4)}/${out.knee.toFixed(0).padStart(4)} | ${cos.thigh.toFixed(0).padStart(4)}/${cos.knee.toFixed(0).padStart(4)} | ${t.len.thigh.toFixed(2)}/${t.len.shin.toFixed(2)}`);
     }
     // the costume's legs as the stage fits them (stage.ts fit): each bone's length against the costume's own, at the end
     const last = tr.tracks.filter((k) => !k.lost)[0];

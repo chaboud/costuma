@@ -110,6 +110,29 @@ in `src/main.ts`.
   person can make (arms overhead included). Limbs stretch toward the wearer's
   lengths (`fit.limb`), the neck squashes so the head lands on the wearer's
   (`fit.head`).
+- **Limbs held, mirrored and hung** (`src/pose/limbs.ts`; the second phone
+  debug recording, a woman seated at a patio table, her legs behind its chairs;
+  founder: "higher confidence matches should have stronger spatio-temporal pose
+  influence… If we only see one leg it's a good prior for the other… A raised
+  thigh with no visible calf should assume a bent knee"). While her knees read
+  0.8–0.9 visible the model had her seated (thighs 45–70° forward); when they
+  fell to ~0.3 the costume's legs went straight down, standing (the rest pose).
+  Now each limb bone keeps a memory of its direction in its parent's frame,
+  taken in as fast as the picture is sure of it (counting from 0.15 visible,
+  fully from 0.7: the model keeps a hidden seated leg seated at 0.3–0.4) and
+  forgotten over ~6 s; under it a prior: a hidden leg takes the seen leg's,
+  mirrored; a shin whose ankle is unseen hangs toward the ground within the
+  knee's hinge (a thigh forward, the knee bent; a thigh down, straight). How
+  sure that is reaches the rig alone (`LM.b`: the picture's visibility stays,
+  or the floor stood on guessed feet). On the recording: her left leg stays
+  seated throughout (thigh 48–77°, knee 26–84°, where it went to 5°/7°), her
+  mostly hidden right leg sits too (27–55°, where it stood all along); a
+  standing person whose legs leave the frame keeps them straight. And a
+  reading under 0.3 visible moves the smoothed pose at down to a fifth of the
+  rate (`TUNE.rateFrom`); applied up to 0.85 it slowed the street's swinging
+  arms (wrists read ~0.6) by 5–11°, so it acts on near-lost points only.
+  `tests/limbs.test.ts`: seated, mirrored, hung, standing (the first three fail
+  on the build before).
 - **What is seen, and the rest extrapolated** (`src/pose/seen.ts`,
   `src/pose/body.ts`; founder: "like stretch Armstrong, limbs without hints
   have a neutral to return to… We can estimate body length from other points…
@@ -360,6 +383,13 @@ in `src/main.ts`.
   Checked headless: the microphone open from Start and after a clip; an H.264 +
   Opus mp4 read back by ffprobe with both streams; refused, H.264 alone. Not
   checked on a phone.
+- **Pipeline views** (settings → Advanced → Show depth map / Show cut-outs):
+  the depth model's map over the camera's picture (metres once people calibrate
+  it, near red to far blue on a log scale; the model's relative reading in grey
+  before), and each tracked person's cut-out from the pose model in its channel's
+  colour with the front the occlusion uses. Each runs its part of the pipeline
+  (the depth model; the masks) whatever the occlusion setting, shown and not
+  applied. Drawn on the overlay through the background's own crop and mirror.
 - **Video metadata** (settings → Advanced; `src/capture/meta.ts`; founder:
   "a way to record a video with the right metadata to reconstruct what was raw
   and what was tracked/generated. It's the only way you're going to be able to

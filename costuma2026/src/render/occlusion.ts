@@ -99,6 +99,20 @@ export class SceneDepth {
     for (const t of [this.texture, this.peopleTex, this.wideTex]) { t.magFilter = t.minFilter = THREE.LinearFilter; t.flipY = false; t.unpackAlignment = 1; t.needsUpdate = true; }
   }
 
+  /** the last reading as the model gave it (relative inverse depth), for the debug view */
+  private raw: { d: Float32Array; w: number; h: number } | null = null;
+  /** the debug view's depth: metres once calibrated against the people, else the model's relative reading */
+  depthView(): { data: Float32Array; w: number; h: number; metres: boolean } | null {
+    if (this.map && this.cal) return { data: this.map, w: this.w, h: this.h, metres: true };
+    return this.raw ? { data: this.raw.d, w: this.raw.w, h: this.raw.h, metres: false } : null;
+  }
+  /** the debug view's cut-outs: the packed texture (a channel a person), and each channel's person and front */
+  cutoutView(): { data: Uint8Array; w: number; h: number; slots: (number | null)[]; fronts: number[] } | null {
+    if (!this.mw) return null;
+    const img = this.peopleTex.image as { data: Uint8Array; width: number; height: number };
+    return { data: img.data, w: img.width, h: img.height, slots: [...this.slots], fronts: this.u.uOcclPeopleZ.value.toArray() };
+  }
+
   /** how many people have a cut-out this frame */
   get people(): number { return this.slotMask.filter(Boolean).length; }
 
@@ -153,6 +167,7 @@ export class SceneDepth {
       this.ms = performance.now() - t0;
       const t = out[this.session.outputNames[0]!]!;
       const d = t.data as Float32Array, oh = t.dims.at(-2)!, ow = t.dims.at(-1)!;
+      this.raw = { d: Float32Array.from(d), w: ow, h: oh };
       this.calibrate(d, ow, oh, tracks);
       if (this.cal) this.toMetres(d, ow, oh, K, floor);
     } catch (e) { console.warn('depth reading failed', e); } finally { this.busy = false; }
@@ -226,9 +241,11 @@ export class SceneDepth {
    * people once a cut-out has come, things once the depth model is calibrated), where the screen shows the video (the
    * background's crop and mirror) and the screen's size.
    */
-  frame(mode: OcclusionMode, tracks: Track[], crop: THREE.Vector4, mirror: number, res: THREE.Vector2, dt: number): void {
+  frame(mode: OcclusionMode, tracks: Track[], crop: THREE.Vector4, mirror: number, res: THREE.Vector2, dt: number, view = false): void {
     const u = this.u, k = 1 - Math.exp(-dt / 0.4);
-    const masks = this.cutOuts(mode === 'off' ? [] : tracks, dt) ? 1 : 0;
+    // the cut-outs packed for occlusion, or only for the debug view (`view`: shown, not applied)
+    const packed = this.cutOuts(mode === 'off' && !view ? [] : tracks, dt);
+    const masks = packed && mode !== 'off' ? 1 : 0;
     const depth = mode === 'all' && this.ready && !!this.cal && !!this.map ? 1 : 0;
     u.uOcclMasksOn.value += (masks - u.uOcclMasksOn.value) * k;
     u.uOcclDepthOn.value += (depth - u.uOcclDepthOn.value) * k;

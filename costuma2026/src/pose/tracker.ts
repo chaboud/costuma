@@ -8,6 +8,7 @@ import { L, N_LANDMARKS } from './landmarks';
 import * as THREE from 'three';
 import { bodyLengths, solveTranslation, type Intrinsics } from './solve';
 import { inFrame } from './seen';
+import { fillLimbs, type LimbState } from './limbs';
 import { bodyFromFit, fitBody, newBodyFit, type BodyFit } from './body';
 import type { FaceTrack } from './face';
 import { CVBank } from './kalman';
@@ -43,6 +44,8 @@ export interface Track {
    *  differences, and the last two raw poses they are taken from: the hold's bands widen to it (a person far off is
    *  noisier) */
   noise?: { core: number; limb: number; p1: LM[] | null; p2: LM[] | null; p3: LM[] | null };
+  /** each limb bone's remembered direction and how sure it is (limbs.ts): what the shown pose falls back on */
+  limbs?: LimbState;
   /** 0..1, fades in when found (once confirmed) and out when lost */
   presence: number;
   /** frames this track has been found in: under TUNE.confirm it is not shown, and lost it is dropped at once */
@@ -105,7 +108,9 @@ export const TUNE = {
   /** the 3D bands widen to the person's measured noise (σ a axis, from the raw pose's third differences while they
    *  stand still: measureNoise): a band is at least `noiseBand` σ (before the smoothing setting's factor). Measured on a phone recording of a seated woman ~8 m off: 2.7 cm of 3D noise at the shoulders
    *  against 0.8–2.1 for people near the camera, so the fixed bands let it through as 1–2° of turn a frame */
-  noiseBand: 1, tauNoise: 1.5, holdImageCore: 0.007, holdImageLimb: 0.028, holdDepth: 0.015,
+  noiseBand: 1, tauNoise: 1.5,
+  /** a reading moves the smoothed pose at its full rate from `rateTo` visible, at `rateFloor` of it below `rateFrom` */
+  rateFrom: 0.05, rateTo: 0.3, rateFloor: 0.2, holdImageCore: 0.007, holdImageLimb: 0.028, holdDepth: 0.015,
   /** the motor's stiffness (rad/s) for the torso-and-face and the limbs, and its faint pull inside the band */
   motorCore: 10, motorLimb: 14, motorCreep: 2.5, motorBoost: 2,
   /** the shared shift's motor (rad/s): stiff, so a hand-held shake is followed nearly at once */
@@ -143,9 +148,15 @@ const ema = (a: number, b: number, k: number) => a + (b - a) * k;
 const kOf = (dt: number, tau: number) => 1 - Math.exp(-dt / Math.max(tau, 1e-4));
 
 const CORE = new Set<number>([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, L.shL, L.shR, L.hipL, L.hipR]);
+/**
+ * The smoothing's step toward a reading, as far as the model is sure of it (founder: "higher confidence matches should
+ * have stronger spatio-temporal pose influence"): a point read at 0.9 visible moves the smoothed pose at the full rate,
+ * one at 0.3 at a fifth of it (a curve; never none, so a point out of sight a long while still follows what it is).
+ */
+const sureRate = (v: number) => { const t = Math.min(1, Math.max(0, (v - TUNE.rateFrom) / (TUNE.rateTo - TUNE.rateFrom))); return TUNE.rateFloor + (1 - TUNE.rateFloor) * t * t * (3 - 2 * t); };
 function blendLM(out: LM[], inp: LM[], k: number, kv: number, kCore = k): void {
   for (let i = 0; i < N_LANDMARKS; i++) {
-    const o = out[i]!, p = inp[i]!, kk = CORE.has(i) ? kCore : k;
+    const o = out[i]!, p = inp[i]!, kk = (CORE.has(i) ? kCore : k) * sureRate(p.v);
     o.x = ema(o.x, p.x, kk); o.y = ema(o.y, p.y, kk); o.z = ema(o.z, p.z, kk); o.v = ema(o.v, p.v, kv);
   }
 }
@@ -393,7 +404,8 @@ export class Tracker {
         motorLM(t.wh, t.wsm, vel.world, 3, dt, bw);
         motorLM(t.image, t.ism, vel.image, 2, dt, bi);
       } else { copyInto(t.wh, t.wsm); copyInto(t.image, t.ism); if (t.vel) { t.vel.world.fill(0); t.vel.image.fill(0); t.vel.z = 0; } }
-      t.world = this.shaped(t.wh, t.image, t.len.torso, up);
+      // the limbs the picture is unsure of, from memory and priors (limbs.ts)
+      t.world = fillLimbs(this.shaped(t.wh, t.image, t.len.torso, up), t.image, up, t.limbs ??= {}, dt);
       if (TUNE.upright && Math.min(t.image[L.hipL]!.v, t.image[L.hipR]!.v) < 0.7 && t.verdict === 'kept') t.verdict = 'torso shot';
       // the hips from the smoothed shape and the smoothed (shake-following) picture; their depth smoothed again on its
       // own, keeping where they land on screen (x and y scale with depth along the same ray)
@@ -432,14 +444,15 @@ export class Tracker {
       // nothing seen to size them by (a detection whose every part is below visibility): the model's own torso
       const len = Number.isFinite(body.logS) ? bodyFromFit(body) : bodyLengths(wsm);
       if (!Number.isFinite(body.logS)) { body.logS = Math.log(len.torso); body.P = 1; }
-      const world = this.shaped(wsm, image, len.torso, up);
+      const limbs: LimbState = {};
+      const world = fillLimbs(this.shaped(wsm, image, len.torso, up), image, up, limbs, 1 / 30);
       const T0 = solveTranslation(world, image, K) ?? p.T!;
       let kf: Track['kf'] = null;
       if (TUNE.filter === 'kalman') {
         kf = { image: new CVBank(N_LANDMARKS * 2), world: new CVBank(N_LANDMARKS * 3), z: new CVBank(1) };
         resetBank(kf.world, wsm, 3); resetBank(kf.image, image, 2); kf.z.reset(0, T0.z, TUNE.rDepth ** 2);
       }
-      this.all.push({ id: this.nextId++, born: now, seen: now, image, world, wsm, wh, ism, T: { ...T0 }, len, body, presence: 0, hits: 1, lost: false, det: p.d, up: state, verdict: chk.verdict, kf });
+      this.all.push({ id: this.nextId++, born: now, seen: now, image, world, wsm, wh, ism, T: { ...T0 }, len, body, limbs, presence: 0, hits: 1, lost: false, det: p.d, up: state, verdict: chk.verdict, kf });
     });
     for (const t of this.all) {
       if (t.seen !== now) { t.lost = true; t.det = null; }
@@ -468,6 +481,7 @@ export class Tracker {
         cm: t.cm ? { ...t.cm } : undefined, up: { ...t.up },
         body: { logS: t.body.logS, P: t.body.P, A: { ...t.body.A }, B: { ...t.body.B } },
         noise: t.noise ? { core: t.noise.core, limb: t.noise.limb, p1: t.noise.p1 && lm(t.noise.p1), p2: t.noise.p2 && lm(t.noise.p2), p3: t.noise.p3 && lm(t.noise.p3) } : undefined,
+        limbs: t.limbs ? Object.fromEntries(Object.entries(t.limbs).map(([k, v]) => [k, { ...v }])) : undefined,
         det: null, face: undefined, kf: null,
       })),
     };

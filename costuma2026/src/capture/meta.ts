@@ -51,7 +51,9 @@ export class MetaLog {
     this.t0 = now;
     // the page's own clock throughout (ms, performance.now): the tracker's times stay as they were (moved to start at
     // zero, its last update came out negative, which it reads as "never", and the replay stepped 1/30 s for 0.25)
-    this.info = { ...info, started: new Date().toISOString(), t0: now, tracker };
+    // the tracker's state unrounded (a string: the log rounds every number to 1e-5, and a size filter's variance or a
+    // motor's velocity rounded so made a replay differ by 0.05 cm)
+    this.info = { ...info, started: new Date().toISOString(), t0: now, trackerJSON: JSON.stringify(tracker) };
     if (track && mime && typeof MediaRecorder !== 'undefined') {
       try {
         // 4 Mbit/s: the models' picture is ~480 px; the bundle stays near a phone's upload limits (a 20 s clip ~30 MB)

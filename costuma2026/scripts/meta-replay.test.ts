@@ -43,7 +43,8 @@ describe.skipIf(!file)('a debug recording, replayed', () => {
     // the replay: today's tracker on the phone's inputs
     // from where the phone's tracker stood when the clip began, with its smoothing setting
     const tr = new Tracker(), dT: number[] = [], dW: number[] = [], dI: number[] = [], missing = { now: 0, then: 0 };
-    if (i.tracker) tr.restore(i.tracker as never);
+    if (typeof i.trackerJSON === 'string') tr.restore(JSON.parse(i.trackerJSON));
+    else if (i.tracker) tr.restore(i.tracker as never);
     if (typeof i.settings?.smoothing === 'number') setSmoothing(i.settings.smoothing);
     let firstDiff = -1;
     for (const r of recs) {
