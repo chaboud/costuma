@@ -267,6 +267,9 @@ export const GHOST: CharacterDef = {
     breath: { colors: [0xeaf6ff, 0xa8dcff, 0xc8bcff, 0xffffff], rate: 0.7, speed: 0.55, size: 1.5 },
   },
   res: 90,
+  // the sheet's hem swings with the body (cloth.ts): it lags a turn and trails a walk; slow and loose, a bedsheet
+  // (the sheet is the costume's body mesh, which the build names after the costume: 'ghost')
+  cloth: [{ meshes: ['ghost'], bone: 'pelvis', cx: 0, cz: CZ, top: 11.0, hem: 4.9, rx: 3.75, rz: 2.34, hz: 1.1, damping: 0.22, drag: 0.8, max: 1.4, lift: 0.35 }],
   tick(root, t, face) {
     let e = PARTS.get(root);
     if (!e) {

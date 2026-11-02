@@ -5,6 +5,7 @@
 //
 // Frame: metres for a 20-unit-tall figure standing on y = 0, x to its left, y up, +z forward (its nose) — the
 // Strollzilla frame. The stage scales the whole thing down to the wearer.
+import type { ClothPart } from './cloth';
 import * as THREE from 'three';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import type { Seg } from './sdf';
@@ -58,6 +59,8 @@ export interface CharacterDef {
   fit?: { size?: number; limb?: number; head?: number };
   /** procedural motion the camera cannot see: a tail's sway (radians) */
   idle?: { tail?: number };
+  /** cloth that swings with the body's motion: hems, shawls, hair (cloth.ts) */
+  cloth?: ClothPart[];
   /** marching-cubes grid; more is finer and slower to build */
   res?: number;
   /** strands of fur layers (when body.fur) */

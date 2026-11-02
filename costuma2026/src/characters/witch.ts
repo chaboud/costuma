@@ -513,6 +513,12 @@ export const WITCH: CharacterDef = {
   face: { jaw: 0.45, eyes: [[EYE[0], EYE[1], EYE[2] + 0.12, 0.16], [-EYE[0], EYE[1], EYE[2] + 0.12, 0.16]],
     breath: { colors: [0x7cff4a, 0xb060ff, 0xd8ff8a, 0x8a2cff], rate: 1.2, speed: 0.8 } },
   res: 84,
+  // the skirt swings from the hips, the shawl's points from the chest, the hair's tips from the chest (cloth.ts)
+  cloth: [
+    { meshes: ['witch-skirt'], bone: 'pelvis', cx: 0, cz: -0.1, top: 10.0, hem: HEM, rx: 2.42, rz: 2.09, hz: 1.3, damping: 0.25, drag: 0.8, max: 1.0, lift: 0.3 },
+    { meshes: ['witch-shawl'], bone: 'spine2', cx: 0, cz: -0.08, top: 14.2, hem: 11.2, rx: 3.2, rz: 1.6, hz: 1.6, damping: 0.3, drag: 0.6, max: 0.45, lift: 0.3 },
+    { meshes: ['witch-hair'], bone: 'spine2', cx: 0, cz: 0, top: 15.6, hem: 12.6, rx: 1.4, rz: 1.3, hz: 1.8, damping: 0.25, drag: 0.6, max: 0.5, lift: 0.25 },
+  ],
   tick(root, t, face) {
     let e = FOUND.get(root);
     if (!e) { e = findFace(root, 'witch-eye', 'witch-brow', ['witch-eye-iris']); FOUND.set(root, e); }

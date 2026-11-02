@@ -33,6 +33,8 @@ node scripts/face-probe.mjs <portrait.jpg> [profiles.jpg]   # what the face mode
 node scripts/pose-record.mjs <clip|photo> <out.json>   # every frame through the real pose model, in order (FPS= SECS= VF='ffmpeg filter' N=)
 STAB=a.json,b.json npx vitest run scripts/stability-sim.test.ts   # replay through the tracker: lean, error, jerk, jumps; INJECT=1 adds depth flips
 LEGS=a.json npx vitest run scripts/legs-sim.test.ts   # legs the frame cuts off: hips/knees/ankles in the picture, the leg raw, tracked and on the costume, its drawn lengths (C=)
+CLOTH=a.json,b.json npx vitest run scripts/cloth-sim.test.ts   # the ghost's and witch's hems on recorded people: swing still and walking
+node scripts/cloth-shots.mjs <dir>   # the cloth held at rest, swung and twisted, in the built app (C=ghost,witch)
 BODY=a.json,b.json npx vitest run scripts/body-sim.test.ts   # sizing by shot: the fitted torso, how much it moves, the costume's shoulders against the person's, hips seen vs out (DRIFT=)
 STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
 OCCL=people|all node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion on a frozen frame: on, off, people alone (all), the cut-outs, the depth map (MIN= people in view first)
@@ -185,6 +187,24 @@ in `src/main.ts`.
   bones. A character is a `CharacterDef` (data, D-7): add a file, list it in
   `roster.ts` and `ids.ts`. Built in a worker on first use (≈0.3–1.5 s
   headless), cloned per person.
+- **Cloth that moves** (`src/characters/cloth.ts`, `CharacterDef.cloth`;
+  founder: "The ghost and witch should have fabric motion, right?"). The ghost's
+  sheet and the witch's skirt, shawl and hair were skinned rigidly to their
+  bones. Now each has secondary motion: a ring of eight spring particles round
+  its hem, each tied to where its hem point would be if rigid on its bone (the
+  pelvis; the chest for the shawl and the hair's tips), lagging, overshooting
+  and settling (a damped spring of its own frequency, 1.1–1.8 Hz, damping
+  0.22–0.3) with air drag trailing a walk; how far each lies off its place,
+  carried into the bone's bind frame, displaces the cloth in the vertex shader
+  before skinning, none at its top, all at the hem, softly saturated at a
+  maximum (5–7 % of the costume's height). Per wearer (each costume's own
+  uniforms), and the pyramid's clones swing too. Replayed on recorded people
+  (`scripts/cloth-sim.test.ts`): standing still, the hem moves 0.1–0.7 % of the
+  costume's height (the tracker's tremble and a hand-held phone: under a
+  centimetre), changing under 0.1 % a frame; walking, 1.8–3.9 % at the median
+  and 4.8–6.7 % at the 95th percentile. Held shapes (rest, swung, twisted:
+  `scripts/cloth-shots.mjs`) show no seam or tear. How it reads in motion on a
+  phone is not yet seen.
 - **The rotation** (`settings.cast`): the characters the picker, the party's
   dancers and Mix draw from. Default (founder, 2026-10-31): Jimothy, the
   builder, Skelly, Jack, Howler, Violet, Plume. The rest — the kaiju, a

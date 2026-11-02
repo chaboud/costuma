@@ -9,6 +9,7 @@ import { Rig, poseFromLandmarks, type BodyPose } from '../pose/rig';
 import { reachLimbs, REACH_TUNE } from '../pose/reach';
 import { driveFaceField, wearFaceField, type FaceField } from './facemap';
 import { SceneDepth, wearOcclusion, type OcclWearer } from './occlusion';
+import { ClothSway } from '../characters/cloth';
 import type { Track } from '../pose/tracker';
 import { project, type Intrinsics } from '../pose/solve';
 import { CameraLight } from './envlight';
@@ -27,6 +28,8 @@ interface Wearer {
   field: FaceField | null;
   /** the costume's own occlusion uniforms: its wearer's cut-out, which never hides it, and front (render/occlusion.ts) */
   occl: OcclWearer;
+  /** the costume's swinging cloth (characters/cloth.ts), if it has any */
+  cloth: ClothSway | null;
   fade: number;
   /** 0..1: how far this costume has faded in (new) or, leaving, how much is left */
   life: number;
@@ -39,7 +42,7 @@ interface Wearer {
 }
 
 /** a dancer in the pyramid: its own character (the wearer's, or another in a mix), its own rig and fading materials */
-interface Clone { id: string; def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[]; row: number; col: number; shadow: THREE.Mesh }
+interface Clone { id: string; def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[]; cloth: ClothSway | null; row: number; col: number; shadow: THREE.Mesh }
 
 // a soft dark patch where a clone meets the floor: what makes something inserted look like it stands there
 const SHADOW_MAT = new THREE.ShaderMaterial({
@@ -308,15 +311,15 @@ export class Stage {
   }
 
   private dress(trackId: number, id: string): Wearer {
-    const { def, root, rig, mats, field, occl } = this.instance(id);
-    const w: Wearer = { trackId, def, root, rig, mats, field, occl, fade: 0, life: 0, leaving: false, poses: [], head: 0, len: null, clones: [] };
+    const { def, root, rig, mats, field, occl, cloth } = this.instance(id);
+    const w: Wearer = { trackId, def, root, rig, mats, field, occl, cloth, fade: 0, life: 0, leaving: false, poses: [], head: 0, len: null, clones: [] };
     this.world.add(root);
     this.wearers.set(trackId, w);
     return w;
   }
 
   /** a worn copy of a character: its own bones, rig and material copies (each fades on its own) */
-  private instance(id: string): { def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[]; field: FaceField | null; occl: OcclWearer } {
+  private instance(id: string): { def: CharacterDef; root: THREE.Object3D; rig: Rig; mats: THREE.Material[]; field: FaceField | null; occl: OcclWearer; cloth: ClothSway | null } {
     const tpl = this.template(id);
     const root = SkeletonUtils.clone(tpl.root);
     const bones = new Map<string, THREE.Bone>();
@@ -344,7 +347,9 @@ export class Stage {
     const field = wearFaceField(root, tpl.def);
     // and hidden where a person or a thing stands in front (render/occlusion.ts; off until asked for)
     const occl = wearOcclusion(root, this.depth.u);
-    return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], field, occl };
+    // and its cloth swings with its own motion (its own particles and uniforms)
+    const cloth = tpl.def.cloth ? new ClothSway(root, tpl.def.cloth) : null;
+    return { def: tpl.def, root, rig: new Rig(tpl.def.segs, bones), mats: [...copies.values()], field, occl, cloth: cloth?.active ? cloth : null };
   }
 
   private drop(w: Wearer): void {
@@ -373,6 +378,8 @@ export class Stage {
     if (fade !== w.fade) { for (const m of w.mats) m.opacity = fade * ((m.userData.baseOpacity as number | undefined) ?? 1); w.fade = fade; }
     w.root.visible = fade > 0.01 && !this.hideWearers;
     def.tick?.(w.root, t, tr.face ?? null);
+    // its cloth swings with how the costume moved this frame
+    w.cloth?.update(w.root, this.frameDt);
     // the wearer's face movement on the costume's face, through its head bone as it stands now
     if (w.field) {
       w.root.updateMatrixWorld(true);
@@ -449,16 +456,17 @@ export class Stage {
       c.shadow.scale.set(height * 0.42, height * 0.26, 1);
       c.shadow.visible = c.root.visible;
       c.def.tick?.(c.root, t - delay / 30, null);
+      c.cloth?.update(c.root, this.frameDt);
     }
   }
 
   private makeClone(w: { row: number; col: number; id: string }): Clone {
-    const { def, root, rig, mats } = this.instance(w.id);
+    const { def, root, rig, mats, cloth } = this.instance(w.id);
     root.traverse((o) => { o.castShadow = false; });
     const shadow = new THREE.Mesh(SHADOW_GEO, SHADOW_MAT);
     shadow.renderOrder = 1;
     this.world.add(root, shadow);
-    return { id: w.id, def, root, rig, mats, row: w.row, col: w.col, shadow };
+    return { id: w.id, def, root, rig, mats, cloth, row: w.row, col: w.col, shadow };
   }
 
   /**
