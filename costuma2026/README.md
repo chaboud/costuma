@@ -32,6 +32,7 @@ node scripts/camera-e2e.mjs <clip.y4m> <dir>   # the built app on Chromium's fak
 node scripts/face-probe.mjs <portrait.jpg> [profiles.jpg]   # what the face model finds: full frame vs head crops, head turn vs the truth
 node scripts/pose-record.mjs <clip|photo> <out.json>   # every frame through the real pose model, in order (FPS= SECS= VF='ffmpeg filter' N=)
 STAB=a.json,b.json npx vitest run scripts/stability-sim.test.ts   # replay through the tracker: lean, error, jerk, jumps; INJECT=1 adds depth flips
+LEGS=a.json npx vitest run scripts/legs-sim.test.ts   # legs the frame cuts off: hips/knees/ankles in the picture, the leg raw, tracked and on the costume, its drawn lengths (C=)
 STAB=... npx vitest run scripts/kalman-tune.test.ts          # the smoothing's settings swept, against the EMA (FULL=1 the Kalman grid)
 OCCL=people|all node scripts/occlusion-check.mjs <clip.y4m> <dir>   # occlusion on a frozen frame: on, off, people alone (all), the cut-outs, the depth map (MIN= people in view first)
 node scripts/capture-check.mjs <clip.y4m>     # as an iPhone: a photo to the share sheet (file alone), the preview on a refusal; a 0.5–10× camera: the lens pill
@@ -101,9 +102,27 @@ in `src/main.ts`.
   sideways, a thigh straight down, a shin along its thigh) to the person's
   segment, after a fixed rotation from its own rest direction — so any rest
   pose works and the shortest arc never meets its singularity in a pose a
-  person can make (arms overhead included). Limbs out of view fall back to
-  rest. Limbs stretch toward the wearer's lengths (`fit.limb`), the neck
-  squashes so the head lands on the wearer's (`fit.head`).
+  person can make (arms overhead included). Limbs stretch toward the wearer's
+  lengths (`fit.limb`), the neck squashes so the head lands on the wearer's
+  (`fit.head`).
+- **Unseen limbs** (`src/pose/seen.ts`; founder: "if body parts are off the
+  edge of the screen or obstructed, we should probably just assume a continued
+  trajectory… legs off the bottom of the screen end up crunching up top"). An
+  unseen bone eases, by a curve of how unseen, to the costume's own rest: its
+  parent's line carried on (a thigh down the torso, a straight elbow). Two
+  leaks fixed. The pose model rates guessed joints below the frame up to
+  0.5–0.7 visible at times, so a joint's visibility is now also how far inside
+  the frame it is (all of it 3 % inside the edge, none 3 % outside): a guess of
+  raised knees below a torso shot, rated 0.6–0.9, lifted the costume's thighs
+  43–85° toward the chest; now they stay at rest. And the wearer's limb lengths
+  were measured every frame from those guesses (a torso shot's thighs 0.18–0.23
+  m), so costumes that fit their legs drew them short (the kaiju's thigh at
+  75 %, the witch's at 68 %): now each is a share of the torso learned only as
+  fast as both its ends are seen, from people's usual shares (thigh 0.80, shin
+  0.75, upper arm 0.43, forearm 0.44 of the torso, measured on 28 fully seen
+  people) — 96 % and 91 % on the same clip, and legs learned while seen keep
+  their length when they leave (`scripts/legs-sim.test.ts`). In the replays smoothing was not
+  the cause: the smoothed guess stays bent, but the rig no longer believes it.
 - **Reach** (`src/pose/reach.ts`): after the retarget, each limb bone is aimed
   so its far end lands on the person's joint in the picture — the camera's ray
   through the joint met by a sphere of the bone's own length round where the
