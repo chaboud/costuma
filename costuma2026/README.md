@@ -114,21 +114,37 @@ in `src/main.ts`.
   forward: elbows, wrists, knees and ankles that were 9–493 px off the person's
   (Howler's forearm the worst) land on them wherever the bone reaches.
 - **Occlusion** (`src/render/occlusion.ts`, settings → Occlusion
-  (experimental), off by default): Depth Anything V2 Small (Apache 2.0, the
+  (experimental): Off (the default) / People / People + things). Two layers.
+  *People*, no extra model: the pose model's cut-out of each person (the masks
+  party mode uses; with them on, it reads a 480-px copy of the frame — tracked
+  people on OpenPose's street clip, 45 s headless: 1.04 on average without the
+  copy, 1.11 with it) and each person's front from the pose solve (the middle
+  of their seen nose, shoulders and hips, less 0.1 m). The nearest four keep a
+  channel each of one texture; a costume pixel fades by a curve of how far
+  behind another person's front it lies wherever that person's cut-out covers
+  it, and never by its own wearer's cut-out. Packed only when a new mask comes
+  (1.7–3.2 ms a pack for one to four people on this sandbox's CPU; not measured
+  on a phone). Only tracked people count: someone the app is not tracking (past
+  the People count, or missed) hides nothing in this layer.
+  *Things*, People + things: Depth Anything V2 Small (Apache 2.0, the
   onnx-community 4-bit export, 19 MB, vendored) through onnxruntime-web 1.30
-  (its WebGPU bundle; its 27 MB runtime a build asset fetched only when this is
-  on), WebGPU where the phone gives an adapter, else the CPU in a worker,
-  reading the frame now and then (headless CPU: 1.5–2.9 s a reading; WebGPU on
-  a phone not measured). Its relative depth is put in metres against the tracked
+  (its WebGPU bundle; its 27 MB runtime a build asset fetched only when asked
+  for), WebGPU where the phone gives an adapter, else the CPU in a worker,
+  reading the frame now and then (headless CPU: 1.5–3.6 s a reading; WebGPU on a
+  phone not measured). Its relative depth is put in metres against the tracked
   people (`1/z = a·d + b`, the shift believed only as far as the people stand
-  apart: one person, a scale), and each costume pixel fades by a curve of how
-  far the picture stands in front of it — never by its own wearer (only what
-  stands 0.3 m before the wearer's hips counts: a skeleton is inside its wearer,
-  whose own front hid it whole) and never by the floor (a pixel as far as the
-  floor's plane counts as floor: read from the body alone, the ground at the
-  feet cut the legs off). Checked headless on OpenPose's street clip: a costume
-  on a woman behind her friend is hidden where the friend stands, its arms
-  showing past her (`scripts/occlusion-check.mjs`).
+  apart), and it decides only where no one is: outside the people's cut-outs,
+  widened by a block of 8 mask pixels (its edges bleed past a body). The floor
+  never hides anything (a pixel as far as the floor's plane counts as floor).
+  The first version had only the depth model and kept a wearer's own body from
+  hiding their costume by a 0.3 m margin before their hips, which also stopped
+  anything held against the body: frozen-frame A/B on COCO scenes (share of the
+  frame changed with occlusion on), before → now: a person holding a big teddy
+  bear 0.00 → 0.61 % (the bear hides the arm over it); three people on a couch,
+  0.26 % by the people alone (the seated pair's arms that cross behind the
+  standing man), 0.11 % more by things (by eye, mostly the couch's arm over a leg); a baby with
+  a cake 0.33 → 0.01 % and a woman in a chair 0.46 → 0.03 %, where nothing
+  stands in front of the costume in view (`scripts/occlusion-check.mjs`).
 - **Characters** (`src/characters/`): code, no model files. An SDF body
   polygonised by marching cubes, coloured by region, skinned by distance to
   its segments (Strollzilla's `build.ts`, generalised), plus rigid meshes on
