@@ -469,6 +469,13 @@ in `src/main.ts`.
 Founder: "everything should be smooth and pro. No jumpies, no jiggles." What
 that means here, and where each lives:
 
+- **Nothing runs under a sheet** (founder, 2026-11-03: "Menu performance sucks... No need to actively run the
+  detectors when the menu is up, since it's obstructing the view"). With settings, more characters, the QR code or a
+  preview open, the frame loop returns at once (`main.ts sheetUp`): no pose, face, hand or depth model, no tracker, no
+  render; the last frame stays behind the sheet, the readout still ticks once a second. A clip, a debug recording or
+  a photo keeps it all running. Back from a sheet, the frame-rate clock restarts, so the quality ladder does not read
+  the time under it as a slow phone. `scripts/menu-check.mjs` checks it headless (and that the person keeps their
+  track across it).
 - **No freezes.** Costumes are made in a Web Worker
   (`characters/build.worker.ts`), all of them in the background from Start;
   the main thread only assembles meshes. A costume asked for before it is

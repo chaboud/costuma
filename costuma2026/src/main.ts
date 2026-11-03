@@ -693,9 +693,28 @@ function renderLens(): void {
 }
 /** this frame's stages (ms of the main thread), for the debug recording: where a slow phone's frame goes */
 const ms = { detect: 0, face: 0, hand: 0, pose: 0, render: 0 };
+/**
+ * A sheet is up (settings, more characters, the QR code, a photo's or clip's preview): it covers the picture, so nothing
+ * runs under it — no models, no tracker, no render; the last frame stays on screen (founder, 2026-11-03: "Menu
+ * performance sucks... No need to actively run the detectors when the menu is up, since it's obstructing the view").
+ * A clip or a debug recording keeps everything running; so does a photo asked for.
+ */
+const sheetUp = (): boolean => [...document.querySelectorAll('.modal')].some((m) => !m.classList.contains('hidden'));
+let resting = false, restReadout = 0;
 function loop(now: number): void {
   requestAnimationFrame(loop);
   if (!started) return;
+  if (sheetUp() && !stage.recording && !meta && !snapWanted) {
+    // (the settings readout still says how the costumes are coming along, once a second)
+    if (!resting || now - restReadout > 1000) { restReadout = now; readout(); }
+    resting = true;
+    return;
+  }
+  if (resting) {
+    // back from under a sheet: its time is not the frame rate's (the quality ladder would read it as a slow phone)
+    resting = false;
+    fpsT = now; fpsN = 0; slowSecs = 0;
+  }
   frame++;
   const tLoop = performance.now();
   ms.detect = ms.face = ms.hand = ms.pose = ms.render = 0;
