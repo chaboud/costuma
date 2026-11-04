@@ -426,7 +426,17 @@ in `src/main.ts`.
   picture, still makes the clip, silent, and the recording's toast says why.
   Checked headless: the microphone open from Start and after a clip; an H.264 +
   Opus mp4 read back by ffprobe with both streams; refused, H.264 alone. Not
-  checked on a phone.
+  checked on a phone. A clip runs up to five minutes (founder, 2026-11-04: "I'd
+  like it to be possible to do several minutes"; it stopped at 20 s), a debug
+  recording (Video metadata) two (it also keeps the camera's own recording and
+  a log, zipped at the end); 6 Mbit/s, so five minutes is ~225 MB held in the
+  phone's memory until saved (assumed from the asked bitrate; the browser's
+  encoder decides). The record button shows the clip's time and stays in sight
+  when the rest of the controls fade (they are not in the clip); 30 s before
+  the end the player is told, and at the end the clip stops and is saved. The
+  debug zip joins the Blobs as they are and reads each in 8 MB slices for its
+  checksum, so a long recording is never held twice. `scripts/clip-length-check.mjs`
+  checks it headless with the limit shortened (`?clipmax=45`).
 - **Pipeline views** (settings → Advanced → Show depth map / Show cut-outs):
   the depth model's map over the camera's picture (metres once people calibrate
   it, near red to far blue on a log scale; the model's relative reading in grey
@@ -452,8 +462,9 @@ in `src/main.ts`.
   log's rounding); every replay script (`stability-sim`, `legs-sim`, `body-sim`,
   `cloth-sim`…) takes the zip or its log too (`scripts/recs.ts`). Not in it: the
   cut-out masks and the face model's raw points (too big; their effects are in
-  the tracks and faces logged). A 20 s clip's zip is ~30 MB; the log alone (a few
-  MB) is what replays.
+  the tracks and faces logged). A 20 s clip's zip is ~30 MB (at the 8 Mbit/s of
+  then); the log alone (a few MB) is what replays. A debug recording stops at two
+  minutes.
 - **Reset to defaults** (settings, at the bottom): a first tap arms it ("Tap
   again to reset", three seconds), the second puts every setting on the panel
   back and applies each as its own control would (the detector's options, the

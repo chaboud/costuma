@@ -44,6 +44,9 @@ button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 .round.rec { background: rgba(255, 255, 255, 0.92); color: #e0233a; }
 .round.rec.on { background: #e0233a; color: #fff; animation: pulse 1s infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 9px rgba(224, 35, 58, 0.35); } }
+.round.rec.on { grid-template-rows: auto auto; align-content: center; gap: 1px; }
+.round.rec.on svg { width: 14px; height: 14px; }
+.round.rec .rec-t { font: 700 13px/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
 .picker { display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; padding: 4px 14px 6px; scrollbar-width: none;
   touch-action: pan-x; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; cursor: grab;
   /* the ends fade: there is more to either side */
@@ -136,7 +139,11 @@ h1 { font-size: 46px; margin: 0 0 8px; letter-spacing: -0.01em; }
 
 /* left alone a while, the controls fade and the picture is the whole screen; a touch brings them back */
 #hud .top, #hud .bottom, #hud .modes { transition: opacity 0.35s ease; }
-#hud.idle .top, #hud.idle .bottom, #hud.idle .modes { opacity: 0; pointer-events: none; transition: opacity 0.9s ease; }
+#hud.idle .top, #hud.idle .bottom > *, #hud.idle .modes { opacity: 0; pointer-events: none; transition: opacity 0.9s ease; }
+/* while a clip records, its button (and the time on it) stays in sight: the controls are not in the clip */
+#hud.idle.recording .bottom > .shutter { opacity: 1; }
+#hud.idle.recording .bottom > .shutter > .rec { pointer-events: auto; }
+#hud.idle.recording .bottom > .shutter > :not(.rec) { opacity: 0; pointer-events: none; }
 #hud.idle .picker { pointer-events: none; }
 
 .card.more .thumb { font-size: 34px; color: var(--ink); background: rgba(255,255,255,0.08); }

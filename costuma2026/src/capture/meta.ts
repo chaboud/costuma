@@ -61,7 +61,8 @@ export class MetaLog {
     this.info = { ...info, started: new Date().toISOString(), t0: now, trackerJSON: JSON.stringify(tracker) };
     if (track && mime && typeof MediaRecorder !== 'undefined') {
       try {
-        // 4 Mbit/s: the models' picture is ~480 px; the bundle stays near a phone's upload limits (a 20 s clip ~30 MB)
+        // 4 Mbit/s: the models' picture is ~480 px; the bundle stays near a phone's upload limits (~30 MB for 20 s; a
+        // debug recording stops at two minutes: main.ts DEBUG_MAX_S)
         this.raw = new MediaRecorder(new MediaStream([track]), { mimeType: mime, videoBitsPerSecond: 4_000_000 });
         this.rawMime = mime;
         this.raw.ondataavailable = (e) => { if (e.data.size) this.rawChunks.push(e.data); };
@@ -128,23 +129,33 @@ function faceOut(f: Record<string, unknown>): Record<string, unknown> {
 
 // ── a zip, stored (no compression): local headers, the data, a central directory ──────────────────────────────────────
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
-function crc32(b: Uint8Array): number { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]!) & 0xff]! ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
 
+/** a Blob's CRC-32, read a slice at a time: a minutes-long clip is never held twice */
+async function crcOf(b: Blob): Promise<number> {
+  let c = 0xffffffff;
+  for (let o = 0; o < b.size; o += 8 << 20) {
+    const s = new Uint8Array(await b.slice(o, o + (8 << 20)).arrayBuffer());
+    for (let i = 0; i < s.length; i++) c = CRC[(c ^ s[i]!) & 0xff]! ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** the files as one zip: the Blobs go in as they are (the browser joins them; nothing is copied into the page) */
 export async function zip(files: { name: string; data: Blob | string }[]): Promise<Blob> {
   const enc = new TextEncoder(), parts: BlobPart[] = [], dir: Uint8Array[] = [];
   let off = 0;
   for (const f of files) {
-    const data = typeof f.data === 'string' ? enc.encode(f.data) : new Uint8Array(await f.data.arrayBuffer());
-    const name = enc.encode(f.name), crc = crc32(data);
+    const data = typeof f.data === 'string' ? new Blob([enc.encode(f.data)]) : f.data;
+    const name = enc.encode(f.name), crc = await crcOf(data), size = data.size;
     const h = new DataView(new ArrayBuffer(30));
     h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
-    h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true);
+    h.setUint32(14, crc, true); h.setUint32(18, size, true); h.setUint32(22, size, true); h.setUint16(26, name.length, true);
     const c = new DataView(new ArrayBuffer(46));
     c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
-    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true); c.setUint32(42, off, true);
+    c.setUint32(16, crc, true); c.setUint32(20, size, true); c.setUint32(24, size, true); c.setUint16(28, name.length, true); c.setUint32(42, off, true);
     parts.push(new Uint8Array(h.buffer), name, data);
     const cd = new Uint8Array(46 + name.length); cd.set(new Uint8Array(c.buffer)); cd.set(name, 46); dir.push(cd);
-    off += 30 + name.length + data.length;
+    off += 30 + name.length + size;
   }
   const size = dir.reduce((a, d) => a + d.length, 0), e = new DataView(new ArrayBuffer(22));
   e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, size, true); e.setUint32(16, off, true);

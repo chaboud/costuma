@@ -47,4 +47,19 @@ describe('the debug recording', () => {
     expect(v.getUint32(b.length - 22, true)).toBe(0x06054b50);
     expect(v.getUint16(b.length - 22 + 10, true)).toBe(2);
   });
+
+  it('the zip\'s checksums are CRC-32, a long clip read slice by slice (never held twice)', async () => {
+    const crcAt = async (z: Blob, k: number) => { const v = new DataView(await z.slice(0, 30).arrayBuffer()); return [v.getUint32(14, true), v.getUint32(18, true), k]; };
+    // the check value of CRC-32 over "123456789"
+    expect((await crcAt(await zip([{ name: 'c.txt', data: '123456789' }]), 0))[0]).toBe(0xcbf43926);
+    // past the 8 MB slice: against a CRC taken in one pass
+    const big = new Uint8Array(9 * 1024 * 1024 + 123);
+    for (let i = 0; i < big.length; i++) big[i] = (i * 2654435761) >>> 24;
+    let c = 0xffffffff;
+    const T = Array.from({ length: 256 }, (_, n) => { let x = n; for (let k = 0; k < 8; k++) x = x & 1 ? 0xedb88320 ^ (x >>> 1) : x >>> 1; return x >>> 0; });
+    for (let i = 0; i < big.length; i++) c = T[(c ^ big[i]!) & 0xff]! ^ (c >>> 8);
+    const [crc, size] = await crcAt(await zip([{ name: 'clip.mp4', data: new Blob([big]) }]), 0);
+    expect(crc).toBe((c ^ 0xffffffff) >>> 0);
+    expect(size).toBe(big.length);
+  });
 });

@@ -510,7 +510,14 @@ function metaInfo(): Record<string, unknown> {
   };
 }
 let recStarting = false;
-let recTimer = 0;
+let recTimer = 0, recTick = 0;
+/**
+ * How long a clip may run (founder, 2026-11-04: "I'd like it to be possible to do several minutes"; it was 20 s): five
+ * minutes, ~225 MB at 6 Mbit/s, held in the phone's memory until saved. A debug recording (Video metadata) also keeps
+ * the camera's own recording and a log of every frame, and packs all three into a zip at the end: two minutes.
+ */
+const CLIP_MAX_S = 300, DEBUG_MAX_S = 120;
+const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 let micRefusedSaid = false; // the first silent clip of a session says why; the rest just record
 /** the microphone, opened at Start for the whole session (founder: "We should always open the mic"): every clip
  *  records it, the music listener reads it. Processing off, so music survives (echo cancellation and noise suppression
@@ -552,12 +559,12 @@ async function toggleRecording(): Promise<void> {
   const stream = cs.call(canvas, 30);
   for (const t of sound) stream.addTrack(t);
   let mime = recorderMime(sound.length > 0)!, r: MediaRecorder;
-  try { r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 }); } catch (e) {
+  try { r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6_000_000 }); } catch (e) {
     // a browser that will not record this sound: the picture alone, said so
     console.warn('recording with sound refused', e);
     for (const t of stream.getAudioTracks()) stream.removeTrack(t);
     mime = recorderMime(false)!;
-    r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6_000_000 });
     note = 'Recording without sound (this browser) — tap to stop';
   }
   const chunks: Blob[] = [];
@@ -570,9 +577,10 @@ async function toggleRecording(): Promise<void> {
   }
   r.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   r.onstop = async () => {
-    clearTimeout(recTimer);
+    clearTimeout(recTimer); clearInterval(recTick);
     recorder = null;
     stage.recording = false;
+    hud().classList.remove('recording');
     btn.classList.remove('on'); btn.innerHTML = ICONS.rec;
     const type = mime.split(';')[0]!, ext = type.includes('mp4') ? 'mp4' : 'webm', name = `costuma-${stamp()}`;
     const clip = new Blob(chunks, { type });
@@ -589,7 +597,20 @@ async function toggleRecording(): Promise<void> {
   recorder = r;
   stage.recording = true;
   recStarting = false;
-  recTimer = window.setTimeout(() => r.state === 'recording' && r.stop(), 20000);
+  // the clip's time on the button (it stays in sight while the rest of the controls fade: they are not in the clip),
+  // a word 30 s before the end, and the end itself said
+  // (?clipmax=<s>: a shorter limit, for the headless check of the end)
+  const max = Number(q.get('clipmax')) || (log ? DEBUG_MAX_S : CLIP_MAX_S), t0r = performance.now();
+  let warned = false;
+  hud().classList.add('recording');
+  const tick = () => {
+    const sec = (performance.now() - t0r) / 1000;
+    btn.innerHTML = `${ICONS.stop}<span class="rec-t">${clock(sec)}</span>`;
+    if (!warned && sec > max - 30) { warned = true; toast(`${clock(Math.ceil(max - sec))} left (clips stop at ${clock(max)})`, 2000); }
+  };
+  tick();
+  recTick = window.setInterval(tick, 500);
+  recTimer = window.setTimeout(() => { if (r.state === 'recording') { r.stop(); toast(`Clips stop at ${clock(max)} — saved`, 2200); } }, max * 1000);
   toast(note, note.includes('without') ? 2600 : 1200);
 }
 
