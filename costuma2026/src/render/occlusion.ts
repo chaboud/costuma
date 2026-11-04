@@ -57,7 +57,9 @@ const CORE = [L.nose, L.shL, L.shR, L.hipL, L.hipR];
 const POINTS = [L.nose, L.shL, L.shR, L.hipL, L.hipR, L.elL, L.elR, L.knL, L.knR, L.earL, L.earR];
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 
-type Ort = typeof import('onnxruntime-web/webgpu');
+type Ort = typeof import('onnxruntime-web/webgpu') | typeof import('onnxruntime-web/wasm');
+/** an error's own words, short enough for a toast */
+const why = (e: unknown) => (typeof e === 'number' ? `the runtime stopped (code ${e})` : String((e as Error)?.message ?? e)).replace(/\s+/g, ' ').slice(0, 140);
 
 export class SceneDepth {
   ready = false;
@@ -65,6 +67,10 @@ export class SceneDepth {
   /** the last reading's milliseconds, which engine ran it, the calibration */
   ms = 0;
   engine = '';
+  /** why it would not load (each engine tried, in its own words), or why the GPU would not take it before the CPU did */
+  failed = '';
+  /** what the phone's GPU offers, for the readout (the model's weights are half floats: `shader-f16`) */
+  gpuInfo = '';
   cal: { a: number; b: number; n: number } | null = null;
   private ort: Ort | null = null;
   private session: import('onnxruntime-web').InferenceSession | null = null;
@@ -122,24 +128,46 @@ export class SceneDepth {
     return c >= 0 && this.slotMask[c] ? c : -1;
   }
 
-  /** load the engine and the model (~47 MB the first time); `say` reports the steps */
+  /**
+   * Load the engine and the model (~47 MB the first time); `say` reports the steps. The GPU (WebGPU) where the phone
+   * gives an adapter; where it has none, or the GPU will not take the model (an iPhone said only "would not load",
+   * 2026-11-04, and the reason was thrown away), the CPU in a worker, from a runtime of its own (one started on the
+   * page for the GPU cannot move to a worker, and a failed start leaves a runtime refusing every later one). Each
+   * engine's failure is kept in its own words (`failed`), for the toast and the readout.
+   */
   async load(say?: (s: string) => void): Promise<void> {
-    const base = import.meta.env.BASE_URL;
+    const url = `${import.meta.env.BASE_URL}models/depth-anything-v2-small-q4f16.onnx`;
+    const tried: string[] = [];
     say?.('Loading the depth engine…');
-    // the bundled build carries its own loader; its one runtime file is the build's own asset (no wasmPaths: set, it
-    // looked for a separate loader relative to the wrong folder)
-    const ort = this.ort = await import('onnxruntime-web/webgpu');
-    ort.env.wasm.numThreads = 1; // GitHub Pages cannot send the headers threads need
-    // a GPU only if it gives an adapter (headless Chromium has navigator.gpu and none); decided before the first
-    // start, because a failed start leaves the runtime refusing every later one
-    const nav = navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } };
-    const gpu = !!(await nav.gpu?.requestAdapter().catch(() => null));
-    if (!gpu) ort.env.wasm.proxy = true; // the CPU's work in a worker: the frames go on
-    say?.('Loading the depth model…');
-    const url = `${base}models/depth-anything-v2-small-q4f16.onnx`;
-    const ep = gpu ? 'webgpu' : 'wasm';
-    try { this.session = await ort.InferenceSession.create(url, { executionProviders: [ep] }); this.engine = ep; } catch (e) { console.warn('depth: no', ep, e); }
-    if (!this.session) throw new Error('the depth model would not load');
+    // (headless Chromium has navigator.gpu and no adapter)
+    type Adapter = { features?: Set<string>; info?: { vendor?: string; architecture?: string } };
+    const nav = navigator as Navigator & { gpu?: { requestAdapter(): Promise<Adapter | null> } };
+    const adapter = await nav.gpu?.requestAdapter().catch(() => null) ?? null, gpu = !!adapter;
+    this.gpuInfo = !nav.gpu ? 'no WebGPU' : !adapter ? 'WebGPU, no adapter'
+      : `WebGPU ${[adapter.info?.vendor, adapter.info?.architecture].filter(Boolean).join(' ') || 'adapter'}, f16 ${adapter.features?.has('shader-f16') ? 'yes' : 'no'}`;
+    if (gpu) {
+      try {
+        // the bundled build carries its own loader; its one runtime file is the build's own asset (no wasmPaths: set,
+        // it looked for a separate loader relative to the wrong folder)
+        const ort = await import('onnxruntime-web/webgpu');
+        ort.env.wasm.numThreads = 1; // GitHub Pages cannot send the headers threads need
+        say?.('Loading the depth model…');
+        this.session = await ort.InferenceSession.create(url, { executionProviders: ['webgpu'] });
+        this.ort = ort; this.engine = 'webgpu';
+      } catch (e) { console.warn('depth: the GPU would not take it', e); tried.push(`GPU: ${why(e)}`); this.session = null; }
+    }
+    if (!this.session) {
+      try {
+        const ort = await import('onnxruntime-web/wasm');
+        ort.env.wasm.numThreads = 1;
+        ort.env.wasm.proxy = true; // the CPU's work in a worker: the frames go on
+        say?.(gpu ? 'The GPU would not take the depth model: trying the CPU…' : 'Loading the depth model…');
+        this.session = await ort.InferenceSession.create(url, { executionProviders: ['wasm'] });
+        this.ort = ort; this.engine = 'wasm';
+      } catch (e) { console.warn('depth: the CPU would not take it either', e); tried.push(`CPU: ${why(e)}`); this.session = null; }
+    }
+    this.failed = tried.join(' · ');
+    if (!this.session) throw new Error(this.failed || 'the depth model would not load');
     this.ready = true;
   }
 

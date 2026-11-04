@@ -972,7 +972,7 @@ function readout(): void {
     `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'} · hands ${handTracker ? handTracker.inferMs.toFixed(1) + ' ms' : settings.hands ? 'loading' : 'off'}`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `camera ${camera.describe()}`,
-    `occlusion ${settings.occlusion} · cut-outs ${stage.depth.people} (on ${stage.depth.u.uOcclMasksOn.value.toFixed(2)}) · depth ${stage.depth.ready ? `${stage.depth.engine} · ${stage.depth.ms.toFixed(0)} ms${stage.depth.cal ? ` · 1/z = ${stage.depth.cal.a.toFixed(3)}·d + ${stage.depth.cal.b.toFixed(3)} (${stage.depth.cal.n} points)` : ' · not yet calibrated'} · on ${stage.depth.u.uOcclDepthOn.value.toFixed(2)}` : settings.occlusion === 'all' ? 'loading' : 'off'}`,
+    `occlusion ${settings.occlusion} · cut-outs ${stage.depth.people} (on ${stage.depth.u.uOcclMasksOn.value.toFixed(2)}) · depth ${stage.depth.gpuInfo ? `[${stage.depth.gpuInfo}] ` : ''}${stage.depth.failed ? `(${stage.depth.failed}) ` : ''}${stage.depth.ready ? `${stage.depth.engine} · ${stage.depth.ms.toFixed(0)} ms${stage.depth.cal ? ` · 1/z = ${stage.depth.cal.a.toFixed(3)}·d + ${stage.depth.cal.b.toFixed(3)} (${stage.depth.cal.n} points)` : ' · not yet calibrated'} · on ${stage.depth.u.uOcclDepthOn.value.toFixed(2)}` : settings.occlusion === 'all' ? 'loading' : 'off'}`,
     `people ${tracker.tracks.filter((t) => !t.lost).length} · dressed ${stage.count}`,
     ...tracker.tracks.filter((t) => !t.lost && t.face).map((t) => {
       const f = t.face!, e = new THREE.Euler().setFromQuaternion(f.head, 'YXZ'), d = (r: number) => Math.round(THREE.MathUtils.radToDeg(r));
@@ -1005,9 +1005,18 @@ let depthLoading = false;
 async function loadDepth(): Promise<void> {
   if (stage.depth.ready || depthLoading || SYNTH) return;
   depthLoading = true;
-  try { await stage.depth.load((s) => toast(s, 2500)); toast(`Occlusion on (${stage.depth.engine === 'webgpu' ? 'GPU' : 'CPU'})`, 1500); }
-  catch (e) { console.warn(e); toast('The depth model would not load on this phone: people only'); settings.occlusion = 'people'; persist(); }
-  finally { depthLoading = false; }
+  try {
+    await stage.depth.load((s) => toast(s, 2500));
+    toast(stage.depth.engine === 'webgpu' ? 'Depth on (GPU)' : stage.depth.failed ? 'Depth on (CPU: the GPU would not take it)' : 'Depth on (CPU)', 1800);
+  } catch (e) {
+    // said in its own words (the readout keeps them), and nothing left on that needs it: people only, no depth view
+    console.warn(e);
+    toast(`The depth model would not load on this phone (${stage.depth.failed || String(e)}): people only`, 6000);
+    if (settings.occlusion === 'all') settings.occlusion = 'people';
+    settings.showDepth = false;
+    persist();
+    if (!$('settings').classList.contains('hidden')) buildSettings();
+  } finally { depthLoading = false; }
 }
 
 /** the face model, in the background after Start: faces join in when it is ready, the start waits for nothing */

@@ -192,7 +192,16 @@ in `src/main.ts`.
   (its WebGPU bundle; its 27 MB runtime a build asset fetched only when asked
   for), WebGPU where the phone gives an adapter, else the CPU in a worker,
   reading the frame now and then (headless CPU: 1.5–3.6 s a reading; WebGPU on a
-  phone not measured). Its relative depth is put in metres against the tracked
+  phone not measured). Where the GPU will not take the model, the CPU does, in a
+  worker, from a runtime of its own (`onnxruntime-web/wasm`): the founder's
+  iPhone said only "would not load" (2026-11-04), the reason thrown away. Now
+  each engine's failure is kept in its own words (the runtime can throw a bare
+  number: "code N") in the toast and the readout, with what the GPU offers
+  (`[WebGPU vendor architecture, f16 yes/no]`: the model's weights are half
+  floats); nothing loading, occlusion falls back to people and Show depth map
+  switches off. `scripts/depth-load-check.mjs` checks both (a stand-in GPU that
+  makes no device; the model's file refused). Why the iPhone's GPU refused it
+  is not known yet. Its relative depth is put in metres against the tracked
   people (`1/z = a·d + b`, the shift believed only as far as the people stand
   apart), and it decides only where no one is: outside the people's cut-outs,
   widened by a block of 8 mask pixels (its edges bleed past a body). The floor
