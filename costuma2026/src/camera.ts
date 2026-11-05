@@ -35,7 +35,7 @@ export class Camera {
     video.setAttribute('muted', '');
   }
 
-  /** open a camera by facing (or, off iOS, a device facing that way), at a zoom if it can */
+  /** open a camera by facing (or, off iOS, a device by its id), at a zoom if it can */
   async open(facing = this.facing, zoom = 1, deviceId?: string): Promise<void> {
     const had = !!this.stream;
     this.stop();
@@ -44,7 +44,9 @@ export class Camera {
     if (deviceId && !isIOS()) video.deviceId = { exact: deviceId };
     else video.facingMode = facing;
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
-    this.facing = facing;
+    // a device opened by id faces the way it says (a webcam says nothing: it faces the person, mirrored like a selfie)
+    const said = deviceId ? (this.track?.getSettings().facingMode as string | undefined) : undefined;
+    this.facing = said === 'environment' ? 'environment' : said === 'user' ? 'user' : deviceId && !isMobile() ? 'user' : facing;
     this.video.srcObject = this.stream;
     await this.video.play().catch(() => undefined);
     if (this.video.readyState < 2) await new Promise<void>((r) => this.video.addEventListener('loadeddata', () => r(), { once: true }));
@@ -64,7 +66,8 @@ export class Camera {
       this.zoom = (t.getSettings() as { zoom?: number }).zoom ?? 1;
       return;
     }
-    if (isIOS()) return;
+    // (a computer's cameras are chosen by name instead: the caret's list, `cameras`)
+    if (isIOS() || !isMobile()) return;
     try {
       const want = this.facing === 'environment' ? /back|rear|environment/i : /front|user|face/i;
       const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput' && want.test(d.label));
@@ -107,6 +110,24 @@ export class Camera {
     await this.open(this.facing, 1, l.id);
     this.lenses = list; this.lens = i;
   }
+
+  /**
+   * Every camera, by id and name (founder, 2026-11-05: a laptop with several cameras had no good way to pick one; the
+   * flip between front and back means nothing to webcams). Never on iOS, whose ids change between enumerations; names
+   * only once the camera has been allowed (before, empty: "Camera N").
+   */
+  async cameras(): Promise<{ id: string; label: string }[]> {
+    if (isIOS() || !navigator.mediaDevices?.enumerateDevices) return [];
+    try {
+      const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput' && d.deviceId);
+      return all.map((d, i) => ({ id: d.deviceId, label: d.label || `Camera ${i + 1}` }));
+    } catch { return []; }
+  }
+
+  /** the open camera's device id ('' if it does not say) */
+  get deviceId(): string { return this.track?.getSettings().deviceId ?? ''; }
+  /** the open camera's name */
+  get label(): string { return this.track?.label ?? ''; }
 
   async flip(zoom = 1): Promise<void> {
     await this.open(this.facing === 'user' ? 'environment' : 'user', zoom);

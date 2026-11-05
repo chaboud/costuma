@@ -1,7 +1,7 @@
 // costuma 2026: the boot, the frame loop and the HUD. Camera → MediaPipe pose (several people, 3D) → tracker (stable
 // ids) → each person's costume posed and placed in camera space → drawn over the camera frame, lit by it.
 import './style.css';
-import { Camera, isIOS } from './camera';
+import { Camera, isIOS, isMobile } from './camera';
 import { Detector } from './pose/detector';
 import { Tracker, setSmoothing, type Detection, type Track } from './pose/tracker';
 import { guessIntrinsics, project, type Intrinsics } from './pose/solve';
@@ -627,7 +627,7 @@ function wake(): void {
 }
 for (const ev of ['pointerdown', 'keydown', 'wheel'] as const) window.addEventListener(ev, wake, { capture: true, passive: true });
 setInterval(() => {
-  const modal = [...document.querySelectorAll('.modal')].some((m) => !m.classList.contains('hidden'));
+  const modal = [...document.querySelectorAll('.modal, #cam-menu')].some((m) => !m.classList.contains('hidden'));
   const idle = started && !modal && performance.now() - lastTouch > IDLE_MS;
   if (idle !== hud().classList.contains('idle')) hud().classList.toggle('idle', idle);
 }, 300);
@@ -1000,6 +1000,72 @@ async function reloadDetector(): Promise<void> {
   toast(settings.model === 'full' ? 'Accurate pose model' : 'Fast pose model', 1000);
 }
 
+// ── a computer's cameras ─────────────────────────────────────────────────────────────────────────────────────────────
+// (founder, 2026-11-05: "On a desktop/laptop with multiple cameras, we don't have a good way to select the right camera…
+// a dropdown arrow/carat next to the camera selector"): beside the flip, a caret whose list names every camera, the open
+// one ticked; the flip itself steps to the next and says its name. The choice is kept (by id, and by name should the id
+// change). Phones keep front and back and their lens pill.
+let cams: { id: string; label: string }[] = [];
+/** the camera at Start: on a computer, the one chosen last time if it is still there; else the browser's own */
+async function openCamera(): Promise<void> {
+  const saved = !isMobile() && !isIOS() ? settings.camera : null;
+  if (saved) {
+    try { await camera.open(camera.facing, 1, saved.id); await refreshCams(); return; } catch { /* its id changed, or it is gone */ }
+  }
+  await camera.open(camera.facing, settings.zoom[camera.facing] ?? 1);
+  await refreshCams();
+  // the same camera under a new id: found by its name
+  const again = saved && cams.find((c) => c.label === saved.label && c.id !== camera.deviceId);
+  if (again) { await camera.open(camera.facing, 1, again.id); settings.camera = { id: again.id, label: again.label }; persist(); }
+}
+/** the cameras, now (names come once the camera is allowed): the caret only where there is a choice */
+async function refreshCams(): Promise<void> {
+  if (SYNTH || isMobile()) return;
+  cams = await camera.cameras();
+  $('btn-cams').classList.toggle('hidden', cams.length < 2);
+  if (cams.length < 2) closeCamMenu();
+  else if (!$('cam-menu').classList.contains('hidden')) renderCamMenu();
+}
+function renderCamMenu(): void {
+  const m = $('cam-menu'), cur = camera.deviceId;
+  m.innerHTML = '';
+  for (const c of cams) {
+    const b = document.createElement('button');
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-selected', String(c.id === cur));
+    b.classList.toggle('on', c.id === cur);
+    b.textContent = c.label;
+    b.title = c.label;
+    b.onclick = () => { closeCamMenu(); if (c.id !== camera.deviceId) useCamera(c, false); };
+    m.appendChild(b);
+  }
+}
+function openCamMenu(): void {
+  void refreshCams().then(() => {
+    if (cams.length < 2) return;
+    renderCamMenu();
+    $('cam-menu').classList.remove('hidden');
+    $('btn-cams').setAttribute('aria-expanded', 'true');
+  });
+}
+function closeCamMenu(): void {
+  $('cam-menu').classList.add('hidden');
+  $('btn-cams').setAttribute('aria-expanded', 'false');
+}
+/** switch to camera `c` (kept for next time); `say`: its name in a toast */
+function useCamera(c: { id: string; label: string }, say: boolean): void {
+  dip(async () => {
+    try {
+      await camera.open(camera.facing, 1, c.id);
+      settings.camera = { id: c.id, label: camera.label || c.label };
+      persist();
+      stage.setVideo(video); tracker.clear(); overrides.clear(); mixed.clear();
+      if (say) toast(camera.label || c.label, 1400);
+    } catch (e) { toast(`Camera: ${(e as Error).message || 'would not open'}`); }
+    renderLens();
+  });
+}
+
 /** the depth model, when occlusion is asked for (render/occlusion.ts): loaded once, in the background */
 let depthLoading = false;
 async function loadDepth(): Promise<void> {
@@ -1065,7 +1131,7 @@ async function start(): Promise<void> {
     } else {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error(location.protocol !== 'https:' ? 'The camera needs an https:// page.' : 'This browser has no camera access.');
       status.textContent = 'Asking for the camera…';
-      await camera.open(camera.facing, settings.zoom[camera.facing] ?? 1);
+      await openCamera();
       renderLens();
       // the microphone for the session: clips record it, the music listener reads it (refused, clips are silent)
       status.textContent = 'Asking for the microphone…';
@@ -1144,8 +1210,23 @@ function boot(): void {
   $('btn-gear').onclick = () => { buildSettings(); openModal('settings'); readout(); };
   $('btn-flip').onclick = async () => {
     if (SYNTH) return;
+    // a computer with several cameras: the next one, named (front and back mean nothing to a webcam)
+    if (!isMobile() && cams.length > 1) {
+      const i = cams.findIndex((c) => c.id === camera.deviceId);
+      useCamera(cams[(i + 1) % cams.length]!, true);
+      return;
+    }
     dip(async () => { try { await camera.flip(settings.zoom[camera.facing === 'user' ? 'environment' : 'user'] ?? 1); stage.setVideo(video); tracker.clear(); overrides.clear(); mixed.clear(); } catch (e) { toast(`Camera: ${(e as Error).message}`); } renderLens(); });
   };
+  $('btn-cams').innerHTML = ICONS.caret;
+  $('btn-cams').onclick = () => { if ($('cam-menu').classList.contains('hidden')) openCamMenu(); else closeCamMenu(); };
+  // a tap anywhere else closes the list
+  window.addEventListener('pointerdown', (e) => {
+    const t = e.target as HTMLElement;
+    if (!$('cam-menu').classList.contains('hidden') && !t.closest('#cam-menu, #btn-cams')) closeCamMenu();
+  }, { capture: true });
+  // a camera plugged in or out: the list (and whether to offer it) follows
+  navigator.mediaDevices?.addEventListener?.('devicechange', () => { if (started) void refreshCams(); });
   $('btn-snap').onclick = () => { snapWanted = true; const f = $('stage'); f.style.filter = 'brightness(1.8)'; setTimeout(() => (f.style.filter = ''), 120); };
   $('btn-rec').onclick = toggleRecording;
   for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) b.onclick = () => { if (b.dataset.scene !== settings.scene) dip(() => setScene(b.dataset.scene as Settings['scene'])); };

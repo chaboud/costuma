@@ -418,6 +418,17 @@ in `src/main.ts`.
   length guess, so costumes keep their depth. Kept per facing in settings. What
   a phone offers shows in the settings readout (`camera …`). Not yet seen on a
   phone.
+- **A computer's cameras** (`camera.ts cameras`, `main.ts openCamera`; founder,
+  2026-11-05: "On a desktop/laptop with multiple cameras, we don't have a good
+  way to select the right camera… a dropdown arrow/carat next to the camera
+  selector"). With more than one camera, a caret beside the flip opens a list of
+  them by name, the open one ticked; the flip itself steps to the next and says
+  its name (front and back mean nothing to a webcam). The choice is kept
+  (`settings.camera`, by id and by name: headless Chromium gives its fake cameras
+  new ids on every load, and the app found the camera by name then). Plugging a
+  camera in or out updates the list. Not on phones: they keep front and back and
+  the lens pill (iOS changes its ids; Android lists its lenses there).
+  `scripts/camera-pick-check.mjs` checks it with three fake cameras and one.
 - **Capture**: on an iPhone a photo or clip goes straight to the share sheet,
   the file alone ("Save Image" / "Save Video" put it in Photos; a download lands
   in Files), the shutter's tap standing as the gesture the sheet needs; if

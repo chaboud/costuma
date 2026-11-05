@@ -24,6 +24,17 @@ button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 .icon svg { width: 22px; height: 22px; }
 .icon:active, .round:active { transform: scale(0.94); }
 .icon[aria-pressed="true"] { background: var(--pumpkin); color: #1b0d02; }
+/* a computer's camera list: a narrow caret beside the flip, its list dropping under the bar */
+.icon.caret { width: 26px; margin-left: -6px; border-radius: 13px; }
+.icon.caret svg { width: 16px; height: 16px; }
+.icon.caret[aria-expanded="true"] { background: var(--glass-hi); }
+.cam-menu { position: fixed; top: calc(var(--safe-t) + 62px); right: 12px; z-index: 24; min-width: 220px; max-width: min(360px, 86vw);
+  background: #1b1626; border: 1px solid var(--line); border-radius: 16px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); }
+.cam-menu button { text-align: left; padding: 10px 12px 10px 32px; border-radius: 10px; color: inherit; background: none; font-size: 15px;
+  position: relative; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cam-menu button:hover { background: rgba(255, 255, 255, 0.06); }
+.cam-menu button.on::before { content: '✓'; position: absolute; left: 11px; color: var(--pumpkin); font-weight: 700; }
 
 .modes { position: fixed; left: 50%; top: calc(var(--safe-t) + 64px); transform: translateX(-50%); display: flex; gap: 3px; padding: 3px; border-radius: 999px; background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .modes button { padding: 7px 16px; border-radius: 999px; background: transparent; font-weight: 700; font-size: 14px; color: var(--dim); }

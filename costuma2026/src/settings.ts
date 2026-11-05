@@ -19,6 +19,9 @@ export interface Settings {
   videoMeta: boolean;
   /** the camera's zoom per facing (1: its main lens; 0.5 the ultra-wide where the phone offers it) */
   zoom: { user?: number; environment?: number };
+  /** on a computer, the camera chosen from the caret's list (by id, and by name should its id change); null: the
+   *  browser's own choice */
+  camera: { id: string; label: string } | null;
   envLight: boolean;
   shadows: boolean;
   debug: boolean;
@@ -51,7 +54,7 @@ export interface Settings {
   /** the settings' own version: a new default that must reach people who already have settings bumps it */
   v: number;
 }
-export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, smoothing: 0.5, occlusion: 'off', videoMeta: false, showDepth: false, showCutouts: false, zoom: {}, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, hands: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
+export const DEFAULTS: Settings = { people: 2, model: 'full', size: 1, lens: 0.85, poseConf: 0.65, smoothing: 0.5, occlusion: 'off', videoMeta: false, showDepth: false, showCutouts: false, zoom: {}, camera: null, envLight: true, shadows: true, debug: false, mode: 'one', costume: 'jimothy', scene: 'costume', effect: 'insitu', partyCostumes: 'behind', music: false, faces: true, hands: true, googly: false, breath: false, partyCast: 'skeleton', pyramid: true, cast: ['jimothy', 'builder', 'skeleton', 'pumpkin', 'howler', 'violet', 'plume'], v: 7 };
 const KEY = 'costuma26.settings';
 
 export function loadSettings(): Settings {
@@ -80,6 +83,7 @@ export function loadSettings(): Settings {
     // v7 (2026-11-01): the sparks from open mouths are off unless asked for (founder: "Default the sparks to off")
     if (v < 7) s.breath = false;
     if (!s.zoom || typeof s.zoom !== 'object') s.zoom = {};
+    if (!s.camera || typeof s.camera !== 'object' || typeof s.camera.id !== 'string') s.camera = null;
     // occlusion was a yes/no (the depth model) before it had people alone
     const oc = s.occlusion as unknown;
     if (oc === true) s.occlusion = 'all';
