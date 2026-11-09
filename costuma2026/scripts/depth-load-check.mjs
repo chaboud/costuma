@@ -3,7 +3,9 @@
 //  - a GPU that will not take the model (a stand-in adapter that cannot make a device): the CPU takes it, in a worker,
 //    and reads; the toast says so and the readout keeps the GPU's own words;
 //  - the model not to be had at all (its file refused): the toast and the readout say why in the engine's own words,
-//    occlusion falls back to people only, and Show depth map is switched off with it.
+//    occlusion falls back to people only, and Show depth map is switched off with it;
+//  - a tab with no room for the runtime's 4 GB memory reservation (stand-in: ?depthstrict=1, any maximum over 1 GB
+//    refused; founder's iPhone, 2026-11-09: out of memory): capped, the model loads and reads; uncapped, it fails.
 // Exit 1 on a failure.   npm run build && node scripts/depth-load-check.mjs <any.y4m>
 import { createRequire } from 'node:module';
 import { serveBuild } from './serve.mjs';
@@ -28,14 +30,35 @@ async function run(kind) {
       new MutationObserver(() => { if (t.textContent) window.__toasts.push(t.textContent); }).observe(t, { childList: true, characterData: true, subtree: true });
     });
   });
+  // died: the last page was killed loading the depth model (its mark left behind)
+  if (kind === 'died') await ctx.addInitScript(() => { if (!sessionStorage.getItem('marked')) { sessionStorage.setItem('marked', '1'); localStorage.setItem('costuma26.depthLoading', '1'); } });
   if (kind === 'none') await ctx.route('**/models/depth-anything-*.onnx', (r) => r.fulfill({ status: 404, body: 'no' }));
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.log('pageerror', e.message));
-  await page.goto(`${server.url}index.html?c=skeleton&facing=environment&nosw=1`);
+  // tight: a stand-in for an iPhone tab with no room for a 4 GB reservation (the worker refuses any maximum over 1 GB);
+  // loose: the same with the cap lifted, which must fail as the iPhone did (the check has teeth)
+  const extra = kind === 'tight' ? '&depthstrict=1' : kind === 'loose' ? '&depthstrict=1&depthcap=0' : '';
+  await page.goto(`${server.url}index.html?c=skeleton&facing=environment&nosw=1${extra}`);
   await page.click('#btn-start');
   await page.waitForFunction(() => window.__costuma?.started, null, { timeout: 240000 });
+  if (kind === 'died') {
+    await page.waitForTimeout(8000);
+    const s = await page.evaluate(() => ({ occ: window.__costuma.settings.occlusion, show: window.__costuma.settings.showDepth, ready: window.__costuma.stage.depth.ready, toasts: window.__toasts, mark: localStorage.getItem('costuma26.depthLoading') }));
+    ok(s.occ === 'people' && !s.show && !s.ready, `after a page died loading it, depth is not loaded again by itself (occlusion ${s.occ}, depth view ${s.show})`);
+    ok(s.toasts.some((t) => /stopped this page last time/.test(t)), 'and the player is told');
+    ok(s.mark === null, 'the mark is cleared');
+    await browser.close();
+    return;
+  }
   await page.waitForFunction(() => { const d = window.__costuma.stage.depth; return d.ready || (d.failed && window.__costuma.settings.occlusion !== 'all'); }, null, { timeout: 600000, polling: 1000 });
-  if (kind === 'gpu') {
+  if (kind === 'tight' || kind === 'loose') {
+    if (kind === 'tight') await page.waitForFunction(() => window.__costuma.stage.depth.ms > 0, null, { timeout: 600000, polling: 1000 }).catch(() => {});
+    const s = await page.evaluate(() => ({ ready: window.__costuma.stage.depth.ready, engine: window.__costuma.stage.depth.engine, failed: window.__costuma.stage.depth.failed, memory: window.__costuma.stage.depth.memory, ms: window.__costuma.stage.depth.ms }));
+    if (kind === 'tight') {
+      ok(s.ready && s.ms > 0, `a tight tab: the depth model loads and reads, its memory capped (${s.engine}; ${s.memory}; ${s.ms.toFixed(0)} ms a reading)`);
+      ok(/4096 → 1024 MB/.test(s.memory), 'the runtime asked for 4 GB and was given 1 GB');
+    } else ok(!s.ready && /Out of memory/.test(s.failed), `the same tab without the cap fails as the iPhone did (${s.failed})`);
+  } else if (kind === 'gpu') {
     await page.waitForFunction(() => window.__costuma.stage.depth.ms > 0, null, { timeout: 600000, polling: 1000 }).catch(() => {});
     const s = await page.evaluate(() => ({ engine: window.__costuma.stage.depth.engine, failed: window.__costuma.stage.depth.failed, ms: window.__costuma.stage.depth.ms, toasts: window.__toasts }));
     ok(s.engine === 'wasm', `the GPU refused: the CPU took it (${s.engine})`);
@@ -57,6 +80,9 @@ async function run(kind) {
 }
 await run('gpu');
 await run('none');
+await run('tight');
+await run('loose');
+await run('died');
 console.log(fails ? `${fails} failed` : 'all ok');
 await server.close();
 process.exit(fails ? 1 : 0);

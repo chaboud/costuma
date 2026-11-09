@@ -21,6 +21,7 @@ import * as THREE from 'three';
 import type { Track } from '../pose/tracker';
 import type { Intrinsics } from '../pose/solve';
 import { L } from '../pose/landmarks';
+import { isIOS } from '../camera';
 
 export type OcclusionMode = 'off' | 'people' | 'all';
 
@@ -55,11 +56,9 @@ function front(k: Track): number {
 
 const CORE = [L.nose, L.shL, L.shR, L.hipL, L.hipR];
 const POINTS = [L.nose, L.shL, L.shR, L.hipL, L.hipR, L.elL, L.elR, L.knL, L.knR, L.earL, L.earR];
-const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
-
-type Ort = typeof import('onnxruntime-web/webgpu') | typeof import('onnxruntime-web/wasm');
-/** an error's own words, short enough for a toast */
-const why = (e: unknown) => (typeof e === 'number' ? `the runtime stopped (code ${e})` : String((e as Error)?.message ?? e)).replace(/\s+/g, ' ').slice(0, 140);
+/** what the depth worker says (render/depth.worker.ts) */
+type FromWorker = { kind: 'loaded' | 'failed'; why?: string; memory: { asked: number; gave: number }[] }
+  | { kind: 'read'; error?: string; d?: Float32Array; w?: number; h?: number; ms?: number };
 
 export class SceneDepth {
   ready = false;
@@ -71,9 +70,11 @@ export class SceneDepth {
   failed = '';
   /** what the phone's GPU offers, for the readout (the model's weights are half floats: `shader-f16`) */
   gpuInfo = '';
+  /** what the depth runtime asked of WebAssembly memory and was given (the worker caps it), for the readout */
+  memory = '';
   cal: { a: number; b: number; n: number } | null = null;
-  private ort: Ort | null = null;
-  private session: import('onnxruntime-web').InferenceSession | null = null;
+  /** the worker the model runs in (render/depth.worker.ts) */
+  private worker: Worker | null = null;
   private canvas = document.createElement('canvas');
   private w = 0;
   private h = 0;
@@ -129,45 +130,45 @@ export class SceneDepth {
   }
 
   /**
-   * Load the engine and the model (~47 MB the first time); `say` reports the steps. The GPU (WebGPU) where the phone
-   * gives an adapter; where it has none, or the GPU will not take the model (an iPhone said only "would not load",
-   * 2026-11-04, and the reason was thrown away), the CPU in a worker, from a runtime of its own (one started on the
-   * page for the GPU cannot move to a worker, and a failed start leaves a runtime refusing every later one). Each
-   * engine's failure is kept in its own words (`failed`), for the toast and the readout.
+   * Load the engine and the model (~47 MB the first time); `say` reports the steps. Each engine in a worker of its own
+   * (render/depth.worker.ts, where the reasons are): the GPU (WebGPU) where the phone gives an adapter, else, or where
+   * the GPU will not take the model, the CPU. The runtime's memory is capped there (an iPhone ran out of memory loading
+   * it, 2026-11-09); a failed engine's worker is ended, its memory with it. Each engine's failure is kept in its own
+   * words (`failed`), for the toast and the readout. `?depthcap=0` lifts the cap and `?depthstrict=1` stands in for a
+   * tight phone tab (a maximum over 1 GB refused), for the headless check.
    */
   async load(say?: (s: string) => void): Promise<void> {
-    const url = `${import.meta.env.BASE_URL}models/depth-anything-v2-small-q4f16.onnx`;
+    const url = new URL(`${import.meta.env.BASE_URL}models/depth-anything-v2-small-q4f16.onnx`, document.baseURI).href;
+    const q = new URLSearchParams(location.search), cap = q.get('depthcap') !== '0', strict = q.get('depthstrict') === '1';
     const tried: string[] = [];
     say?.('Loading the depth engine…');
     // (headless Chromium has navigator.gpu and no adapter)
     type Adapter = { features?: Set<string>; info?: { vendor?: string; architecture?: string } };
     const nav = navigator as Navigator & { gpu?: { requestAdapter(): Promise<Adapter | null> } };
-    const adapter = await nav.gpu?.requestAdapter().catch(() => null) ?? null, gpu = !!adapter;
+    const adapter = await nav.gpu?.requestAdapter().catch(() => null) ?? null;
     this.gpuInfo = !nav.gpu ? 'no WebGPU' : !adapter ? 'WebGPU, no adapter'
       : `WebGPU ${[adapter.info?.vendor, adapter.info?.architecture].filter(Boolean).join(' ') || 'adapter'}, f16 ${adapter.features?.has('shader-f16') ? 'yes' : 'no'}`;
-    if (gpu) {
-      try {
-        // the bundled build carries its own loader; its one runtime file is the build's own asset (no wasmPaths: set,
-        // it looked for a separate loader relative to the wrong folder)
-        const ort = await import('onnxruntime-web/webgpu');
-        ort.env.wasm.numThreads = 1; // GitHub Pages cannot send the headers threads need
-        say?.('Loading the depth model…');
-        this.session = await ort.InferenceSession.create(url, { executionProviders: ['webgpu'] });
-        this.ort = ort; this.engine = 'webgpu';
-      } catch (e) { console.warn('depth: the GPU would not take it', e); tried.push(`GPU: ${why(e)}`); this.session = null; }
-    }
-    if (!this.session) {
-      try {
-        const ort = await import('onnxruntime-web/wasm');
-        ort.env.wasm.numThreads = 1;
-        ort.env.wasm.proxy = true; // the CPU's work in a worker: the frames go on
-        say?.(gpu ? 'The GPU would not take the depth model: trying the CPU…' : 'Loading the depth model…');
-        this.session = await ort.InferenceSession.create(url, { executionProviders: ['wasm'] });
-        this.ort = ort; this.engine = 'wasm';
-      } catch (e) { console.warn('depth: the CPU would not take it either', e); tried.push(`CPU: ${why(e)}`); this.session = null; }
+    // (an iPhone: the CPU alone unless asked, ?depthgpu=1 — the GPU's runtime is the asyncify build, reported to cost
+    // WebKit hundreds of MB, and a tab killed for memory leaves no error to fall back from)
+    const gpuToo = !!adapter && (!isIOS() || q.get('depthgpu') === '1');
+    for (const engine of gpuToo ? ['webgpu', 'wasm'] as const : ['wasm'] as const) {
+      say?.(engine === 'wasm' && tried.length ? 'The GPU would not take the depth model: trying the CPU…' : 'Loading the depth model…');
+      const w = new Worker(new URL('./depth.worker.ts', import.meta.url), { type: 'module' });
+      const r = await new Promise<FromWorker & { kind: 'loaded' | 'failed' }>((done) => {
+        const t = setTimeout(() => done({ kind: 'failed', why: 'no answer in two minutes', memory: [] }), 120000);
+        w.onmessage = (e: MessageEvent<FromWorker>) => { if (e.data.kind !== 'read') { clearTimeout(t); done(e.data); } };
+        w.onerror = (e) => { clearTimeout(t); done({ kind: 'failed', why: e.message || 'the worker would not start', memory: [] }); };
+        w.postMessage({ kind: 'load', url, engine, cap, strict });
+      });
+      const mem = r.memory.filter((m) => m.asked > 64);
+      if (mem.length) this.memory = mem.map((m) => (m.asked !== m.gave ? `${m.asked.toFixed(0)} → ${m.gave.toFixed(0)} MB` : `${m.gave.toFixed(0)} MB`)).join(', ');
+      if (r.kind === 'loaded') { this.worker = w; this.engine = engine; break; }
+      console.warn(`depth: ${engine} would not take it`, r.why);
+      w.terminate();
+      tried.push(`${engine === 'webgpu' ? 'GPU' : 'CPU'}: ${r.why}`);
     }
     this.failed = tried.join(' · ');
-    if (!this.session) throw new Error(this.failed || 'the depth model would not load');
+    if (!this.worker) throw new Error(this.failed || 'the depth model would not load');
     this.ready = true;
   }
 
@@ -179,7 +180,8 @@ export class SceneDepth {
   /** read the frame's depth and put it in metres against the people in it; `floor`: the floor's plane (n·p = h, camera
    *  space), whose pixels never hide a costume */
   async read(src: HTMLVideoElement | HTMLCanvasElement, tracks: Track[], K: Intrinsics, now: number, floor?: { n: THREE.Vector3; h: number }): Promise<void> {
-    if (!this.session || !this.ort || this.busy) return;
+    const worker = this.worker;
+    if (!worker || this.busy) return;
     this.busy = true;
     this.last = now;
     try {
@@ -188,13 +190,15 @@ export class SceneDepth {
       this.canvas.width = w; this.canvas.height = h;
       const g = this.canvas.getContext('2d', { willReadFrequently: true })!;
       g.drawImage(src, 0, 0, w, h);
-      const px = g.getImageData(0, 0, w, h).data, n = w * h, data = new Float32Array(3 * n);
-      for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) data[k * n + i] = (px[i * 4 + k]! / 255 - MEAN[k]!) / STD[k]!;
-      const t0 = performance.now();
-      const out = await this.session.run({ [this.session.inputNames[0]!]: new this.ort.Tensor('float32', data, [1, 3, h, w]) });
-      this.ms = performance.now() - t0;
-      const t = out[this.session.outputNames[0]!]!;
-      const d = t.data as Float32Array, oh = t.dims.at(-2)!, ow = t.dims.at(-1)!;
+      // the picture to the worker (handed over, not copied), its depth back
+      const px = g.getImageData(0, 0, w, h).data;
+      const r = await new Promise<FromWorker & { kind: 'read' }>((done) => {
+        worker.onmessage = (e: MessageEvent<FromWorker>) => { if (e.data.kind === 'read') done(e.data); };
+        worker.postMessage({ kind: 'run', px, w, h }, [px.buffer]);
+      });
+      if (r.error || !r.d) throw new Error(r.error ?? 'no depth');
+      this.ms = r.ms ?? 0;
+      const d = r.d, ow = r.w!, oh = r.h!;
       this.raw = { d: Float32Array.from(d), w: ow, h: oh };
       this.calibrate(d, ow, oh, tracks);
       if (this.cal) this.toMetres(d, ow, oh, K, floor);

@@ -30,6 +30,15 @@ const TEST = q.get('test') === '1';
 const SYNTH = Number(q.get('synth') ?? 0);
 
 const settings: Settings = loadSettings();
+// a page that died loading the depth model (an iPhone out of memory) does not load it again by itself
+const DEPTH_MARK = 'costuma26.depthLoading';
+const depthDied = (() => { try { const m = localStorage.getItem(DEPTH_MARK); localStorage.removeItem(DEPTH_MARK); return !!m; } catch { return false; } })();
+const depthRetired = depthDied && (settings.occlusion === 'all' || settings.showDepth);
+if (depthRetired) {
+  if (settings.occlusion === 'all') settings.occlusion = 'people';
+  settings.showDepth = false;
+  saveSettings(settings);
+}
 setSmoothing(settings.smoothing);
 if (q.get('c')) settings.costume = q.get('c')!;
 if (!ROSTER.some((d) => d.id === settings.costume)) settings.costume = ROSTER[0]!.id;
@@ -972,7 +981,7 @@ function readout(): void {
     `${fps.toFixed(0)} fps · pose ${detector?.inferMs.toFixed(1) ?? '–'} ms (${detector?.delegate ?? '–'}, ${settings.model}) · face ${faceTracker ? faceTracker.inferMs.toFixed(1) + ' ms' : settings.faces ? 'loading' : 'off'} · hands ${handTracker ? handTracker.inferMs.toFixed(1) + ' ms' : settings.hands ? 'loading' : 'off'}`,
     `video ${video.videoWidth}×${video.videoHeight} · f ${K.f.toFixed(0)} px · ${camera.facing}`,
     `camera ${camera.describe()}`,
-    `occlusion ${settings.occlusion} · cut-outs ${stage.depth.people} (on ${stage.depth.u.uOcclMasksOn.value.toFixed(2)}) · depth ${stage.depth.gpuInfo ? `[${stage.depth.gpuInfo}] ` : ''}${stage.depth.failed ? `(${stage.depth.failed}) ` : ''}${stage.depth.ready ? `${stage.depth.engine} · ${stage.depth.ms.toFixed(0)} ms${stage.depth.cal ? ` · 1/z = ${stage.depth.cal.a.toFixed(3)}·d + ${stage.depth.cal.b.toFixed(3)} (${stage.depth.cal.n} points)` : ' · not yet calibrated'} · on ${stage.depth.u.uOcclDepthOn.value.toFixed(2)}` : settings.occlusion === 'all' ? 'loading' : 'off'}`,
+    `occlusion ${settings.occlusion} · cut-outs ${stage.depth.people} (on ${stage.depth.u.uOcclMasksOn.value.toFixed(2)}) · depth ${stage.depth.gpuInfo ? `[${stage.depth.gpuInfo}] ` : ''}${stage.depth.memory ? `{memory ${stage.depth.memory}} ` : ''}${stage.depth.failed ? `(${stage.depth.failed}) ` : ''}${stage.depth.ready ? `${stage.depth.engine} · ${stage.depth.ms.toFixed(0)} ms${stage.depth.cal ? ` · 1/z = ${stage.depth.cal.a.toFixed(3)}·d + ${stage.depth.cal.b.toFixed(3)} (${stage.depth.cal.n} points)` : ' · not yet calibrated'} · on ${stage.depth.u.uOcclDepthOn.value.toFixed(2)}` : settings.occlusion === 'all' ? 'loading' : 'off'}`,
     `people ${tracker.tracks.filter((t) => !t.lost).length} · dressed ${stage.count}`,
     ...tracker.tracks.filter((t) => !t.lost && t.face).map((t) => {
       const f = t.face!, e = new THREE.Euler().setFromQuaternion(f.head, 'YXZ'), d = (r: number) => Math.round(THREE.MathUtils.radToDeg(r));
@@ -1071,6 +1080,8 @@ let depthLoading = false;
 async function loadDepth(): Promise<void> {
   if (stage.depth.ready || depthLoading || SYNTH) return;
   depthLoading = true;
+  // (marked while it loads: a page killed meanwhile finds the mark at its next start, depthDied)
+  try { localStorage.setItem(DEPTH_MARK, String(Date.now())); } catch { /* private mode */ }
   try {
     await stage.depth.load((s) => toast(s, 2500));
     toast(stage.depth.engine === 'webgpu' ? 'Depth on (GPU)' : stage.depth.failed ? 'Depth on (CPU: the GPU would not take it)' : 'Depth on (CPU)', 1800);
@@ -1082,7 +1093,10 @@ async function loadDepth(): Promise<void> {
     settings.showDepth = false;
     persist();
     if (!$('settings').classList.contains('hidden')) buildSettings();
-  } finally { depthLoading = false; }
+  } finally {
+    depthLoading = false;
+    try { localStorage.removeItem(DEPTH_MARK); } catch { /* private mode */ }
+  }
 }
 
 /** the face model, in the background after Start: faces join in when it is ready, the start waits for nothing */
@@ -1158,6 +1172,7 @@ async function start(): Promise<void> {
     $('hud').classList.remove('hidden');
     setScene(settings.scene);
     started = true;
+    if (depthRetired) toast('The depth model stopped this page last time: occlusion is people only (Settings to try again)', 5000);
     stage.live = true;
     t0 = performance.now();
     lastSeen = performance.now();

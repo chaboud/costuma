@@ -199,9 +199,28 @@ in `src/main.ts`.
   number: "code N") in the toast and the readout, with what the GPU offers
   (`[WebGPU vendor architecture, f16 yes/no]`: the model's weights are half
   floats); nothing loading, occlusion falls back to people and Show depth map
-  switches off. `scripts/depth-load-check.mjs` checks both (a stand-in GPU that
-  makes no device; the model's file refused). Why the iPhone's GPU refused it
-  is not known yet. Its relative depth is put in metres against the tracked
+  switches off. Then the iPhone ran out of memory loading it (2026-11-09). Known
+  from others' reports, not measured here: onnxruntime-web's loader always asks
+  for a shared WebAssembly memory that may grow to 4 GB (whatever the thread
+  count), which Safari reserves up front and an iPhone tab already holding other
+  WebAssembly (the pose, face and hand models, each its own) may refuse with
+  "RangeError: Out of memory" (0g-drive #47 capped it at 1 GB); the WebGPU path
+  runs on the asyncify build, which costs WebKit far more than the plain one
+  (twolay #20); and constant folding grows the WebAssembly heap for good on
+  WebGPU (onnxruntime #33793). So the depth model runs in a worker of its own
+  (`render/depth.worker.ts`), one engine a worker, its memory's maximum capped at
+  1 GB, constant folding off; a failed engine's worker is ended, its memory with
+  it. On an iPhone, the CPU alone (`?depthgpu=1` tries the GPU first): a tab
+  killed for memory leaves no error to fall back from. A page that dies while
+  the model loads leaves a mark, and the next start does not load it again by
+  itself (occlusion people only, said). The readout shows what the runtime asked
+  and was given (`{memory 4096 → 1024 MB}`). `scripts/depth-load-check.mjs`
+  checks it all headless: a stand-in GPU that cannot make a device; the model's
+  file refused; a stand-in tight tab (`?depthstrict=1`, any maximum over 1 GB
+  refused) where the capped runtime loads and reads (1.1 s a reading headless)
+  and the uncapped one fails as the iPhone did ("no available backend found.
+  ERR: [wasm] RangeError: Out of memory"); a page that died loading it. Whether
+  the iPhone now loads it is not known until it is tried there. Its relative depth is put in metres against the tracked
   people (`1/z = a·d + b`, the shift believed only as far as the people stand
   apart), and it decides only where no one is: outside the people's cut-outs,
   widened by a block of 8 mask pixels (its edges bleed past a body). The floor
