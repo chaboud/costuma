@@ -219,8 +219,13 @@ in `src/main.ts`.
   file refused; a stand-in tight tab (`?depthstrict=1`, any maximum over 1 GB
   refused) where the capped runtime loads and reads (1.1 s a reading headless)
   and the uncapped one fails as the iPhone did ("no available backend found.
-  ERR: [wasm] RangeError: Out of memory"); a page that died loading it. Whether
-  the iPhone now loads it is not known until it is tried there. Its relative depth is put in metres against the tracked
+  ERR: [wasm] RangeError: Out of memory"); a page that died loading it. The
+  founder's iPhone (Chrome for iOS, the build before the cap) then said the same
+  of both engines: "GPU: no available backend found. ERR: [webgpu] RangeError:
+  Out of memory · CPU: no available backend found. ERR: [wasm] RangeError: Out of
+  memory" — the runtime's start, not the model, so the reservation (inferred: the
+  same words as the stand-in's). Whether the capped build loads there is not
+  known until it is tried. Its relative depth is put in metres against the tracked
   people (`1/z = a·d + b`, the shift believed only as far as the people stand
   apart), and it decides only where no one is: outside the people's cut-outs,
   widened by a block of 8 mask pixels (its edges bleed past a body). The floor
